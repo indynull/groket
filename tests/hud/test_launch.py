@@ -230,6 +230,7 @@ def test_launch_hud_passes_debug_to_ensure(tmp_path: Path) -> None:
     with (
         patch.object(launch_mod, "ensure_hud_binary", return_value=binary) as mock_ensure,
         patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=False),
         patch.object(launch_mod.subprocess, "Popen") as mock_popen,
     ):
         mock_popen.return_value.pid = 1
@@ -251,6 +252,7 @@ def test_launch_hud_detaches_by_default(tmp_path: Path) -> None:
     with (
         patch.object(launch_mod, "ensure_hud_binary", return_value=binary),
         patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=False),
         patch.object(launch_mod.subprocess, "Popen") as mock_popen,
     ):
         mock_popen.return_value.pid = 4242
@@ -259,6 +261,23 @@ def test_launch_hud_detaches_by_default(tmp_path: Path) -> None:
     mock_popen.assert_called_once()
     kwargs = mock_popen.call_args.kwargs
     assert kwargs.get("start_new_session") is True
+
+
+def test_launch_hud_skips_when_summon_socket_live(tmp_path: Path) -> None:
+    binary = tmp_path / "groket-hud"
+    binary.write_text("x", encoding="utf-8")
+    binary.chmod(0o755)
+    with (
+        patch.object(launch_mod, "ensure_hud_binary", return_value=binary),
+        patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=True),
+        patch.object(launch_mod.subprocess, "Popen") as mock_popen,
+        patch.object(launch_mod.subprocess, "run") as mock_run,
+    ):
+        code = launch_mod.launch_hud(socket_path=tmp_path / "c.sock")
+    assert code == 0
+    mock_popen.assert_not_called()
+    mock_run.assert_not_called()
 
 
 def test_launch_hud_skips_when_already_running(tmp_path: Path) -> None:
@@ -302,6 +321,8 @@ def test_launch_hud_foreground_waits(tmp_path: Path) -> None:
     binary.chmod(0o755)
     with (
         patch.object(launch_mod, "ensure_hud_binary", return_value=binary),
+        patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=False),
         patch.object(
             launch_mod.subprocess, "run", return_value=type("R", (), {"returncode": 0})()
         ) as mock_run,
@@ -322,6 +343,7 @@ def test_launch_hud_restart_stops_then_spawns(tmp_path: Path) -> None:
         patch.object(launch_mod, "ensure_hud_binary", return_value=binary),
         patch.object(launch_mod, "stop_hud_processes", return_value=1) as mock_stop,
         patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=False),
         patch.object(launch_mod.subprocess, "Popen") as mock_popen,
     ):
         mock_popen.return_value.pid = 99
@@ -344,6 +366,8 @@ def test_launch_hud_dev_runs_cargo(tmp_path: Path) -> None:
     with (
         patch.object(launch_mod, "hud_checkout_dir", return_value=checkout),
         patch.object(launch_mod, "_hud_shortcut_env", return_value={}),
+        patch.object(launch_mod, "hud_process_running", return_value=False),
+        patch.object(launch_mod, "summon_socket_accepts", return_value=False),
         patch.object(launch_mod.shutil, "which", return_value="/usr/bin/cargo"),
         patch.object(launch_mod.subprocess, "run", return_value=_Proc(0)) as mock_run,
     ):

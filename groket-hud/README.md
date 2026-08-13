@@ -75,7 +75,8 @@ Sol-style session **command palette** for the local groket control plane
   Tray **Show HUD** still works. Prefer a compositor bind to
   ``groket hud --toggle`` (``app_id`` ``dev.indynull.groket-hud``). A second
   ``groket hud`` does not steal a live summon socket.
-- ``groket hud`` detaches; ``groket hud --restart`` replaces a running agent
+- One HUD process, one tray tile. A second ``groket hud`` is a no-op
+  (summon the running one). ``groket hud --restart`` replaces it.
 - ``groket hud --install-desktop`` (or ``groket-hud --install-desktop``) writes
   **user-local** icons and a launcher — not a system package, DMG, or MSI:
   - **Linux:** ``~/.local/share/applications/dev.indynull.groket-hud.desktop``

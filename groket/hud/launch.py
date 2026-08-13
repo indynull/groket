@@ -201,6 +201,11 @@ def launch_hud_dev(
     env.update(_hud_shortcut_env())
     if extra_env:
         env.update(extra_env)
+    if hud_process_running() or summon_socket_accepts():
+        sys.stderr.write(
+            "groket hud: already running (use groket hud --restart to replace)\n"
+        )
+        return 0
     sys.stderr.write(f"groket hud: cargo run (debug) in {checkout}\n")
     sys.stderr.flush()
     try:
@@ -400,14 +405,14 @@ def launch_hud(
         n = stop_hud_processes()
         if n:
             sys.stderr.write(f"groket hud: stopped {n} running process(es)\n")
-    elif not attach and hud_process_running():
-        if summon_socket_accepts():
-            sys.stderr.write(
-                "groket hud: already running in the background "
-                f"(summon: {summon_hint}; X11/macOS/Windows hotkey {chord_hint}; "
-                "use --restart to replace)\n"
-            )
-            return 0
+    elif summon_socket_accepts():
+        sys.stderr.write(
+            "groket hud: already running "
+            f"(summon: {summon_hint}; X11/macOS/Windows hotkey {chord_hint}; "
+            "use --restart to replace)\n"
+        )
+        return 0
+    elif hud_process_running():
         n = stop_hud_processes()
         if n:
             sys.stderr.write(

@@ -193,7 +193,7 @@ restart serve to “refresh” the list.
 
 ```bash
 uv run groket serve -d        # or rely on client auto-start
-uv run groket hud             # auto-builds iced release binary if stale
+uv run groket hud             # one process + tray; second start is a no-op
 uv run groket hud --restart   # replace the running HUD
 uv run groket hud --rebuild   # force cargo rebuild then start
 uv run groket hud --dev       # cargo run (debug)

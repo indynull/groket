@@ -157,6 +157,11 @@ pub fn default_socket_path() -> Option<PathBuf> {
     )
 }
 
+/// True when a HUD already owns the default summon socket.
+pub fn already_running() -> bool {
+    default_socket_path().is_some_and(|p| socket_accepts(&p))
+}
+
 /// True when a listener is bound (connect succeeds).
 pub fn socket_accepts(path: &Path) -> bool {
     #[cfg(unix)]
