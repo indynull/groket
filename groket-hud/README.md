@@ -136,8 +136,9 @@ decorated pop-out keeps ``dev.indynull.groket-hud`` so Sway can tile it.
 
 On Sway, summon centers the overlay on the **focused** output (pointer
 output when ``focus_follows_mouse`` is on). iced ``move_to`` is unused on
-Wayland. Keyboard focus after ``--toggle`` is ``swaymsg [app_id=overlay]
-focus`` plus iced search focus.
+Wayland. Keyboard focus after a compositor ``--toggle`` bind is
+``xdg_activation_v1.activate`` with the forwarded token (tray or a
+terminal ``--toggle`` has no token and does not steal keyboard focus).
 
 Seat checklist: ``docs/hud-sway-dogfood.md``.
 

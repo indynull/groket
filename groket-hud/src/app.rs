@@ -127,6 +127,7 @@ pub enum Message {
     CloseRequested(window::Id),
     Tray(crate::tray::TrayAction),
     Summon(crate::summon::SummonRequest),
+    ActivationApplied(bool),
     MdLink(String),
     ListScroll(icedtea::collection::VisibleWindow),
     TimelineScroll(icedtea::collection::VisibleWindow),
@@ -268,8 +269,7 @@ pub struct Hud {
     pointer: Point,
     context: Option<Point>,
     window_size: Size,
-    /// Last show/toggle xdg-activation token; cleared on hide.
-    #[allow(dead_code)]
+    /// Last show/toggle xdg-activation token; cleared on hide or successful activate.
     pending_activation_token: Option<String>,
 }
 
@@ -1198,6 +1198,12 @@ impl Hud {
             Message::CloseRequested(id) => self.on_close_requested(id),
             Message::Tray(action) => self.on_tray(action),
             Message::Summon(req) => self.on_summon(req),
+            Message::ActivationApplied(ok) => {
+                if ok {
+                    self.pending_activation_token = None;
+                }
+                Task::none()
+            }
             Message::Yank => self.yank_active(),
             Message::Cursor(ev) => self.on_cursor(ev),
             Message::ContextDismiss => {
@@ -2861,15 +2867,18 @@ impl Hud {
         #[cfg(target_os = "linux")]
         {
             if !crate::x11focus::x11_grab_needed() {
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = crate::place_linux::focus_overlay();
-                }
+                let token = self.pending_activation_token.clone();
+                let activate = window::run(id, move |win| {
+                    token
+                        .as_deref()
+                        .is_some_and(|tok| crate::wlactivate::activate(win, tok))
+                })
+                .map(Message::ActivationApplied);
                 let gain = window::gain_focus(id);
                 if attempt < 6 {
-                    return Task::batch([gain, delayed_focus(attempt.saturating_add(1))]);
+                    return Task::batch([activate, gain, delayed_focus(attempt.saturating_add(1))]);
                 }
-                return gain;
+                return Task::batch([activate, gain]);
             }
             Task::batch([
                 window::gain_focus(id),
@@ -5848,6 +5857,18 @@ mod tests {
             action: crate::summon::SummonAction::Toggle,
             token: Some("fresh".into()),
         });
+        assert_eq!(hud.pending_activation_token, None);
+    }
+
+    #[test]
+    fn activation_applied_true_clears_token() {
+        let mut hud = Hud {
+            pending_activation_token: Some("tok".into()),
+            ..Hud::default()
+        };
+        let _ = hud.update(Message::ActivationApplied(false));
+        assert_eq!(hud.pending_activation_token.as_deref(), Some("tok"));
+        let _ = hud.update(Message::ActivationApplied(true));
         assert_eq!(hud.pending_activation_token, None);
     }
 

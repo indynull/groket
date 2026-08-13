@@ -54,19 +54,6 @@ pub fn place_command(output_name: &str) -> String {
     )
 }
 
-/// Sway ``[app_id=…] focus`` (compositor keyboard focus after summon).
-pub fn focus_command() -> String {
-    format!("[app_id=\"{OVERLAY_APP_ID}\"] focus")
-}
-
-/// Ask Sway to focus the overlay. True when IPC accepted the command.
-pub fn focus_overlay() -> bool {
-    let Some(sock) = sway_sock() else {
-        return false;
-    };
-    ipc_run(&sock, &focus_command())
-}
-
 fn escape_quotes(name: &str) -> String {
     name.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -151,12 +138,6 @@ mod tests {
         assert!(cmd.contains("move to output \"DP-1\""));
         assert!(cmd.contains("move position center"));
         assert!(cmd.contains("floating enable"));
-    }
-
-    #[test]
-    fn focus_command_names_overlay_app_id() {
-        assert!(focus_command().contains(OVERLAY_APP_ID));
-        assert!(focus_command().contains("focus"));
     }
 
     #[test]
