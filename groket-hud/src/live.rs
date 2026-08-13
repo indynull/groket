@@ -878,7 +878,7 @@ mod tests {
             status: "running".into(),
             ..SessionRow::default()
         };
-        let out = patch_catalog_delta(&[work.clone()], vec![host.clone()], &[]);
+        let out = patch_catalog_delta(std::slice::from_ref(&work), vec![host.clone()], &[]);
         assert_eq!(out.len(), 2);
         assert!(out
             .iter()
