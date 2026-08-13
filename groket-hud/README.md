@@ -105,11 +105,13 @@ Sol-style session **command palette** for the local groket control plane
   **X11:** override-redirect floating card plus keyboard grab so a tiler does
   not insert it. **Wayland:** normal xdg-toplevel (override-redirect does not
   apply); Sway/etc. may tile unless you float
-  ``app_id=dev.indynull.groket-hud``. Focus is compositor-owned
-  (``gain_focus``, no X11 grab). Decorated pop-out is a normal desktop
-  client so a tiler (yabai, i3, sway) tiles it. Closing the window does not
-  stop the HUD process. Tray Show on an already-visible overlay only focuses
-  (no remap).
+  ``app_id=dev.indynull.groket-hud``. Keyboard focus on Wayland is
+  ``xdg_activation_v1.activate`` when ``--show`` / ``--toggle`` forwards a
+  token (compositor bind). Tray Show and a terminal ``--toggle`` have no
+  token and do not steal keyboard focus. Decorated pop-out is a normal
+  desktop client so a tiler (yabai, i3, sway) tiles it. Closing the window
+  does not stop the HUD process. Tray Show on an already-visible overlay
+  does not remap.
 
 ## Sway / Wayland
 

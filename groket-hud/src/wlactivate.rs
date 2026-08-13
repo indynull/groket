@@ -60,6 +60,8 @@ fn activate_guest(display: *mut c_void, surface: *mut c_void, token: &str) -> bo
     let Some(activation) = guest.activation else {
         return false;
     };
+    // SAFETY: iced owns the surface for the window lifetime. from_ptr does
+    // not take ownership; drop must not destroy the foreign proxy.
     let Ok(id) = (unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.cast()) }) else {
         return false;
     };
@@ -67,6 +69,7 @@ fn activate_guest(display: *mut c_void, surface: *mut c_void, token: &str) -> bo
         return false;
     };
     activation.activate(token.to_string(), &surf);
+    activation.destroy();
     conn.flush().is_ok()
 }
 
