@@ -137,10 +137,12 @@ decorated pop-out keeps ``dev.indynull.groket-hud`` so Sway can tile it.
 ``bindsym $mod+Shift+g exec groket hud --toggle`` is included.
 
 On Sway, summon centers the overlay on the **focused** output (pointer
-output when ``focus_follows_mouse`` is on). iced ``move_to`` is unused on
-Wayland. Keyboard focus after a compositor ``--toggle`` bind is
-``xdg_activation_v1.activate`` with the forwarded token (tray or a
+output when ``focus_follows_mouse`` is on) via Sway IPC. iced ``move_to``
+is unused on Wayland. Keyboard focus after a compositor ``--toggle`` bind
+is ``xdg_activation_v1.activate`` with the forwarded token (tray or a
 terminal ``--toggle`` has no token and does not steal keyboard focus).
+Layer-shell is not the overlay host yet (namespace ``groket-hud``,
+780×560, exclusive zone 0).
 
 Seat checklist: ``docs/hud-sway-dogfood.md``.
 
