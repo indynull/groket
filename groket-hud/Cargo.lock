@@ -1761,6 +1761,9 @@ dependencies = [
  "tokio",
  "tray-icon",
  "uuid",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "x11rb",
 ]
 
