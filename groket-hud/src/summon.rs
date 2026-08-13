@@ -55,6 +55,8 @@ pub enum SummonError {
     NoPath,
     #[error("HUD summon socket not accepting ({0})")]
     NotRunning(String),
+    #[error("HUD already running ({0})")]
+    AlreadyRunning(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -153,6 +155,11 @@ pub fn default_socket_path() -> Option<PathBuf> {
             .join("run")
             .join("hud-summon.sock"),
     )
+}
+
+/// True when a HUD already owns the default summon socket.
+pub fn already_running() -> bool {
+    default_socket_path().is_some_and(|p| socket_accepts(&p))
 }
 
 /// True when a listener is bound (connect succeeds).
@@ -277,10 +284,7 @@ fn action_sender() -> SyncSender<SummonRequest> {
 #[cfg(unix)]
 fn prepare_bind_path(path: &Path) -> Result<(), SummonError> {
     if socket_accepts(path) {
-        return Err(SummonError::Other(format!(
-            "HUD already listening on {}",
-            path.display()
-        )));
+        return Err(SummonError::AlreadyRunning(path.display().to_string()));
     }
     if path.exists() {
         let _ = std::fs::remove_file(path);
@@ -299,7 +303,7 @@ fn install_unix() -> Result<SummonServer, SummonError> {
     prepare_bind_path(&path)?;
     let listener = UnixListener::bind(&path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::AddrInUse {
-            SummonError::Other(format!("HUD already listening on {}", path.display()))
+            SummonError::AlreadyRunning(path.display().to_string())
         } else {
             SummonError::Io(err)
         }
@@ -526,7 +530,8 @@ mod tests {
         let _listener = UnixListener::bind(&path).expect("bind");
         let err = prepare_bind_path(&path).expect_err("live");
         assert!(path.exists(), "live inode must remain");
-        assert!(matches!(err, SummonError::Other(_)));
+        assert!(matches!(err, SummonError::AlreadyRunning(_)));
+        assert!(socket_accepts(&path));
         drop(_listener);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
