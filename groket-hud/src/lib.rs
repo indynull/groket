@@ -26,6 +26,7 @@ pub mod wire;
 
 #[cfg(target_os = "linux")]
 pub mod wlactivate;
+pub mod wllayer;
 #[cfg(target_os = "linux")]
 pub mod x11focus;
 

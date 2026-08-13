@@ -48,6 +48,19 @@ def test_session_display_wayland(monkeypatch):
     assert r.required is False
     assert "Wayland" in r.detail
     assert "toggle" in r.detail
+    assert "XDG_ACTIVATION_TOKEN" in r.detail
+
+
+def test_sway_socket_names_place_not_focus(tmp_path: Path, monkeypatch):
+    sock = tmp_path / "sway-ipc.sock"
+    sock.write_bytes(b"")
+    monkeypatch.setenv("SWAYSOCK", str(sock))
+    from groket.diagnostics import self_test as st
+
+    r = st._check_sway_socket()
+    assert r.ok is True
+    assert "place" in r.detail
+    assert "xdg-activation" in r.detail
 
 
 def test_hud_summon_socket_missing(monkeypatch, tmp_path: Path):

@@ -316,7 +316,10 @@ def _check_session_display() -> CheckResult:
         detail = f"Wayland ({wayland})"
         if x11:
             detail += f"; Xwayland DISPLAY={x11}"
-        detail += " — HUD summon: groket hud --toggle / tray (no X11 hotkey)"
+        detail += (
+            " — HUD summon: groket hud --toggle (forwards XDG_ACTIVATION_TOKEN) "
+            "/ tray (no X11 hotkey)"
+        )
         return CheckResult(
             id="session_display",
             name="Session display",
@@ -360,7 +363,7 @@ def _check_sway_socket() -> CheckResult:
             id="sway_socket",
             name="Sway IPC (SWAYSOCK)",
             ok=True,
-            detail=str(path),
+            detail=f"{path} — overlay place (float/center); focus is xdg-activation",
             required=False,
         )
     return CheckResult(
