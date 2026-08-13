@@ -250,6 +250,7 @@ pub struct Hud {
     turn_marks: std::collections::HashMap<i64, CardMark>,
     event_marks: std::collections::HashMap<i64, CardMark>,
     seen_status: std::collections::HashMap<String, String>,
+    notice_stable: std::collections::HashSet<String>,
     notices_primed: bool,
     seen_analysis: std::collections::HashMap<String, String>,
     toasts: icedtea::toast::ToastQueue,
@@ -344,6 +345,7 @@ impl Default for Hud {
             turn_marks: std::collections::HashMap::new(),
             event_marks: std::collections::HashMap::new(),
             seen_status: std::collections::HashMap::new(),
+            notice_stable: std::collections::HashSet::new(),
             notices_primed: false,
             seen_analysis: std::collections::HashMap::new(),
             toasts: icedtea::toast::ToastQueue::new(),
@@ -2054,7 +2056,12 @@ impl Hud {
                 )
             })
             .collect();
-        for notice in crate::desktop::notices_from_rows(&mut self.seen_status, &rows, seed) {
+        for notice in crate::desktop::notices_from_rows(
+            &mut self.seen_status,
+            &mut self.notice_stable,
+            &rows,
+            seed,
+        ) {
             crate::desktop::post(notice);
         }
         if !self.catalog_busy && !self.all_sessions.is_empty() {
