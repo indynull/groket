@@ -795,6 +795,12 @@ pub fn merge_catalog_rows(prev: &[SessionRow], next: Vec<SessionRow>) -> Vec<Ses
                 if is_blank_status(&row.status) && !is_blank_status(&p.status) {
                     row.status = p.status.clone();
                 }
+                if crate::format::is_terminal_status(&p.status)
+                    && is_live_status(&row.status)
+                    && !is_live_status(&list_status_label("", &row.outcome))
+                {
+                    row.status = p.status.clone();
+                }
                 if row.outcome.is_empty() && !p.outcome.is_empty() {
                     row.outcome = p.outcome.clone();
                 }
@@ -1033,6 +1039,25 @@ mod tests {
         }];
         let merged = merge_catalog_rows(&prev, next);
         assert_eq!(merged[0].status, "running");
+    }
+
+    #[test]
+    fn catalog_refresh_keeps_complete_when_live_label_has_no_live_outcome() {
+        use crate::model::SessionRow;
+        let prev = vec![SessionRow {
+            session_id: "s1".into(),
+            status: "complete".into(),
+            outcome: "success".into(),
+            ..SessionRow::default()
+        }];
+        let next = vec![SessionRow {
+            session_id: "s1".into(),
+            status: "running".into(),
+            ..SessionRow::default()
+        }];
+        let merged = merge_catalog_rows(&prev, next);
+        assert_eq!(merged[0].status, "complete");
+        assert_eq!(merged[0].outcome, "success");
     }
 
     #[test]
