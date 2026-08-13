@@ -2867,13 +2867,13 @@ impl Hud {
         {
             if !crate::x11focus::x11_grab_needed() {
                 let _ = crate::place_linux::place_overlay(HUD_W, HUD_H);
-                let token = self.pending_activation_token.clone();
-                let activate = window::run(id, move |win| {
-                    token
-                        .as_deref()
-                        .is_some_and(|tok| crate::wlactivate::activate(win, tok))
-                })
-                .map(Message::ActivationApplied);
+                let activate = match self.pending_activation_token.clone() {
+                    Some(tok) if attempt == 0 => {
+                        window::run(id, move |win| crate::wlactivate::activate(win, &tok))
+                            .map(Message::ActivationApplied)
+                    }
+                    _ => Task::none(),
+                };
                 let gain = window::gain_focus(id);
                 if attempt < 6 {
                     return Task::batch([activate, gain, delayed_focus(attempt.saturating_add(1))]);
