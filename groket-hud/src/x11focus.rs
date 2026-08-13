@@ -5,7 +5,8 @@
 //!
 //! **Wayland (Sway, etc.):** the compositor owns focus. We never grab via
 //! Xwayland (a Wayland surface id is not a valid X11 window and retries stack).
-//! Summon uses tray / compositor binds; focus is ``window::gain_focus`` only.
+//! Summon uses tray / compositor binds; keyboard focus is
+//! ``xdg_activation_v1.activate`` on the iced surface when a token is present.
 //!
 //! The in-process global hotkey crate is X11-only on Linux — same gate as grab.
 

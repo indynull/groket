@@ -25,6 +25,8 @@ pub mod view;
 pub mod wire;
 
 #[cfg(target_os = "linux")]
+pub mod wlactivate;
+#[cfg(target_os = "linux")]
 pub mod x11focus;
 
 pub use app::run;
