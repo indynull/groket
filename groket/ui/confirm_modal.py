@@ -17,10 +17,9 @@ class DiscardConfirmModal(QuitActions, ModalScreen[bool]):
     """Ask whether to discard edits. Result ``True`` = discard and leave."""
 
     BINDINGS = [
-        Binding("escape", "keep", U.bind_cancel(), show=True),
-        Binding("enter", "discard", t("ui-discard"), show=False),
-        Binding("y", "discard", t("ui-discard"), show=False),
-        Binding("n", "keep", U.bind_cancel(), show=False),
+        Binding("escape", "keep", U.bind_cancel(), id="overlay.hide", show=True),
+        Binding("enter,y", "discard", t("ui-discard"), id="confirm.discard", show=False),
+        Binding("n", "keep", U.bind_cancel(), id="confirm.keep", show=False),
     ]
 
     def compose(self) -> ComposeResult:

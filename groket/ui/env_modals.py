@@ -9,6 +9,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static, TextArea
 
+from .bindings import FORM_SAVE
 from .i18n import t
 from .quit_actions import QuitActions
 from .widgets.key_value_editor import KeyValueEditor
@@ -101,11 +102,7 @@ def parse_skill_md(content: str) -> tuple[str, str, str]:
 class EnvEditorModal(QuitActions, ModalScreen[dict[str, str] | None]):
     """Edit a string map as key/value rows (not KEY=value free text)."""
 
-    BINDINGS = [
-        ("escape", "cancel", t("ui-cancel")),
-        ("q", "quit", t("bind-quit")),
-        ("ctrl+s", "save", t("ui-save")),
-    ]
+    BINDINGS = list(FORM_SAVE)
 
     def __init__(self, initial: dict[str, str] | None = None, *, title: str = "") -> None:
         super().__init__()
@@ -137,11 +134,7 @@ class EnvEditorModal(QuitActions, ModalScreen[dict[str, str] | None]):
 class InlineSkillModal(QuitActions, ModalScreen[tuple[str, str] | None]):
     """Author a one-off skill (id + description + instructions → SKILL.md)."""
 
-    BINDINGS = [
-        ("escape", "cancel", t("ui-cancel")),
-        ("q", "quit", t("bind-quit")),
-        ("ctrl+s", "save", t("ui-save")),
-    ]
+    BINDINGS = list(FORM_SAVE)
 
     def __init__(self, *, name: str = "", body: str = "") -> None:
         super().__init__()

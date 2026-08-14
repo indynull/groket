@@ -33,6 +33,7 @@ from ...runs.personas import Persona, PersonaStore, personas_dir
 from .. import text as U
 from ..bindings import (
     CAPABILITY_PICKER,
+    FORM_SAVE,
     PERSONA_EDITOR,
     PERSONAS,
     ChromeActions,
@@ -105,11 +106,7 @@ McpPickerResult = tuple[list[str], list[dict], dict[str, str], list[str]]
 class McpConfigureModal(QuitActions, ModalScreen[dict | None]):
     """Interactive configure for one MCP server (registry/catalog hit) before adding to persona."""
 
-    BINDINGS = [
-        Binding("escape", "cancel", t("ui-cancel")),
-        Binding("q", "quit", t("bind-quit"), show=True),
-        Binding("ctrl+s", "save", t("ui-save"), priority=True, show=True),
-    ]
+    BINDINGS = list(FORM_SAVE)
 
     def __init__(self, definition: dict, *, title: str = "Configure MCP") -> None:
         super().__init__()
@@ -254,8 +251,8 @@ class McpPickerModal(QuitActions, ModalScreen[McpPickerResult | None]):
 
     BINDINGS = [
         *CAPABILITY_PICKER,
-        Binding("r", "registry_mode", t("ui-registry"), show=True),
-        Binding("l", "local_mode", t("ui-local"), show=False),
+        Binding("r", "registry_mode", t("ui-registry"), id="mcp.registry", show=True),
+        Binding("l", "local_mode", t("ui-local"), id="mcp.local", show=False),
     ]
 
     def __init__(

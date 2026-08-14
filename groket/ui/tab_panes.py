@@ -18,19 +18,38 @@ from . import text as U
 from .i18n import t
 
 
-def _bind(key: str, action: str, description: str, *, show: bool = True) -> Binding:
-    return Binding(key, action, description, show=show)
+def _bind(key: str, action: str, description: str, *, id: str, show: bool = True) -> Binding:
+    return Binding(key, action, description, show=show, id=id)
 
 
 def tab_nav_bindings(n_panes: int) -> tuple[Binding, ...]:
     """``[`` / ``]`` plus ``1``…``N`` (max 9) mapped to ``tab_pane_k`` actions."""
     n = max(0, min(9, int(n_panes)))
     digits = tuple(
-        _bind(str(i), f"tab_pane_{i}", t("bind-pane-digit"), show=False) for i in range(1, n + 1)
+        _bind(
+            str(i),
+            f"tab_pane_{i}",
+            t("bind-pane-digit"),
+            id=f"app.pane.{i}",
+            show=False,
+        )
+        for i in range(1, n + 1)
     )
     return (
-        _bind("left_square_bracket", "tab_prev", U.bind_prev_pane(), show=True),
-        _bind("right_square_bracket", "tab_next", U.bind_next_pane(), show=True),
+        _bind(
+            "left_square_bracket",
+            "tab_prev",
+            U.bind_prev_pane(),
+            id="app.pane.prev",
+            show=True,
+        ),
+        _bind(
+            "right_square_bracket",
+            "tab_next",
+            U.bind_next_pane(),
+            id="app.pane.next",
+            show=True,
+        ),
     ) + digits
 
 

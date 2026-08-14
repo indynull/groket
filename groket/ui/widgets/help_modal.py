@@ -86,9 +86,9 @@ class HelpModal(QuitActions, ModalScreen[None]):
     }
     """
     BINDINGS = [
-        Binding("escape", "dismiss", t("ui-cancel"), show=True),
-        Binding("?", "dismiss", t("ui-close"), show=False),
-        Binding("enter", "dismiss", t("ui-close"), show=False),
+        Binding("escape", "dismiss", t("ui-cancel"), id="overlay.hide", show=True),
+        Binding("?", "dismiss", t("ui-close"), id="help.toggle", show=False),
+        Binding("enter", "dismiss", t("ui-close"), id="help.dismiss", show=False),
     ]
 
     def compose(self) -> ComposeResult:

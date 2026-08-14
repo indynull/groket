@@ -19,9 +19,9 @@ class PathInputModal(QuitActions, ModalScreen[str | None]):
     """Ask for a filesystem path. Result is the raw input string, or None if cancelled."""
 
     BINDINGS = [
-        Binding("escape", "cancel", t("ui-cancel"), show=True),
-        Binding("ctrl+s", "submit", t("ui-save"), show=True),
-        Binding("enter", "submit", t("ui-save"), show=False),
+        Binding("escape", "cancel", t("ui-cancel"), id="overlay.hide", show=True),
+        Binding("ctrl+s", "submit", t("ui-save"), id="edit.save", show=True),
+        Binding("enter", "submit", t("ui-save"), id="modal.submit_enter", show=False),
     ]
 
     def __init__(

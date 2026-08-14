@@ -17,7 +17,7 @@ from groket.models import JsonValue
 from ...runs.batch import load_models
 from ...runs.run_configs import RunConfig, RunConfigStore
 from ...runs.run_manager import BackgroundRun, RunManager
-from ..bindings import RUN_CONFIGS, ChromeActions
+from ..bindings import MODAL_CANCEL_QUIT, RUN_CONFIGS, ChromeActions
 from ..data_table import (
     cursor_row_key,
     restore_cursor,
@@ -44,9 +44,8 @@ class _ModelsOverrideModal(QuitActions, ModalScreen[object]):
     """Pick models (multi-select) before launching a saved config."""
 
     BINDINGS = [
-        Binding("escape", "cancel", t("ui-cancel")),
-        Binding("q", "quit", t("bind-quit"), show=True),
-        Binding("ctrl+r", "submit", t("ui-run-1")),
+        *MODAL_CANCEL_QUIT,
+        Binding("ctrl+r", "submit", t("ui-run-1"), id="modal.submit"),
     ]
 
     def __init__(self, default_models: list[str], title: str = "Models for this launch") -> None:
@@ -92,10 +91,9 @@ class _BatchLaunchModal(QuitActions, ModalScreen[object]):
     """Configure models + max in-flight configs for a multi-config launch."""
 
     BINDINGS = [
-        Binding("escape", "cancel", t("ui-cancel")),
-        Binding("q", "quit", t("bind-quit"), show=True),
-        Binding("ctrl+r", "submit", t("ui-launch-selected")),
-        Binding("enter", "submit", t("ui-launch-selected"), show=False),
+        *MODAL_CANCEL_QUIT,
+        Binding("ctrl+r", "submit", t("ui-launch-selected"), id="modal.submit"),
+        Binding("enter", "submit", t("ui-launch-selected"), id="modal.submit_enter", show=False),
     ]
 
     def __init__(
