@@ -67,6 +67,14 @@ class TestBoundedCache:
         c["d"] = 4
         assert "a" not in c
 
+    def test_items_and_values_do_not_reorder(self):
+        c: BoundedCache[int] = BoundedCache(3)
+        c["a"], c["b"], c["c"] = 1, 2, 3
+        assert list(c.items()) == [("a", 1), ("b", 2), ("c", 3)]
+        assert list(c.values()) == [1, 2, 3]
+        c["d"] = 4
+        assert "a" not in c
+
     def test_miss_returns_default(self):
         c: BoundedCache[int] = BoundedCache(3)
         assert c.get("nope") is None
@@ -123,7 +131,10 @@ class TestParserCachesAreBounded:
 
     def test_timeline_cache_honours_env_cap(self, monkeypatch):
         monkeypatch.setenv(TIMELINE_CACHE_MAX_ENV, "5")
-        assert resolve_maxsize(TIMELINE_CACHE_MAXSIZE, TIMELINE_CACHE_MAX_ENV) == 5
+        cache: BoundedCache[int] = BoundedCache(
+            TIMELINE_CACHE_MAXSIZE, env_var=TIMELINE_CACHE_MAX_ENV
+        )
+        assert cache.maxsize == 5
 
     def test_parsing_many_sessions_keeps_timeline_cache_capped(self, tmp_path):
         """Parsing more sessions than the cap must not retain them all."""

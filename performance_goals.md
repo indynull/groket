@@ -111,6 +111,9 @@ bounds memory in that state:
 Raise the heaviest one with `GROKET_TIMELINE_CACHE_MAX` when an operator
 browses far more than 32 sessions at a time and has the memory to spare.
 The floor is 2 so a live session and the fork parent it merges always fit.
+In-flight parses (`_timeline_inflight`, `_overview_inflight`) are still
+plain maps: a stampede of new sessions can hold every result until those
+jobs finish, then the cap applies.
 
 Measure it the way the rest of this file is measured — current `VmRSS`
 from `/proc/self/status`, not `ru_maxrss`, which is a high-water mark and

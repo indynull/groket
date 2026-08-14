@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator, MutableMapping
+from collections.abc import ItemsView, Iterator, MutableMapping, ValuesView
 from typing import TypeVar
 
 V = TypeVar("V")
@@ -87,6 +87,16 @@ class BoundedCache(MutableMapping[str, V]):
     def __iter__(self) -> Iterator[str]:
         with self._lock:
             return iter(list(self._data))
+
+    def items(self) -> ItemsView[str, V]:
+        """Coldest-first pairs. Does not count as use."""
+        with self._lock:
+            return dict(self._data).items()
+
+    def values(self) -> ValuesView[V]:
+        """Coldest-first values. Does not count as use."""
+        with self._lock:
+            return dict(self._data).values()
 
     def __len__(self) -> int:
         with self._lock:
