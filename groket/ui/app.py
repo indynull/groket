@@ -457,6 +457,7 @@ class TraceEvalApp(App):
         except Exception:
             logger.debug(t("ui-failed-to-apply-saved-theme-r"), early or "groket")
         self._traces_root_for_reload = traces_root_for_reload
+        self._apply_resolved_keymap()
 
     def compose(self) -> ComposeResult:
         yield AppChrome()
@@ -590,7 +591,17 @@ class TraceEvalApp(App):
         self._config["theme"] = name
         self._save_config()
 
+    def _apply_resolved_keymap(self) -> None:
+        """Apply ``keys.toml`` remaps via Textual ``set_keymap``.
+
+        A refused or missing overlay leaves catalog defaults (``load_keymap``).
+        """
+        from groket.keys import load_keymap, textual_keymap
+
+        self.set_keymap(textual_keymap(load_keymap()))
+
     def on_mount(self) -> None:
+        self._apply_resolved_keymap()
         try:
             from ..runs.personas import PersonaStore
 

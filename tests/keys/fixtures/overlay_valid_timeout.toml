@@ -1,0 +1,3 @@
+leader_timeout_ms = 800
+[home]
+"session.follow" = "z"

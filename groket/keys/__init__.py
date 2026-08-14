@@ -29,6 +29,7 @@ from .overlay import (
     occupancy_rows,
     parse_overlay,
     resolve_keys_path,
+    textual_keymap,
 )
 
 __all__ = [
@@ -56,4 +57,5 @@ __all__ = [
     "occupancy_rows",
     "parse_overlay",
     "resolve_keys_path",
+    "textual_keymap",
 ]

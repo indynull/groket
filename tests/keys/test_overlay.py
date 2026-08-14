@@ -16,6 +16,7 @@ from groket.keys.overlay import (
     occupancy_rows,
     parse_overlay,
     resolve_keys_path,
+    textual_keymap,
 )
 from groket.paths import user_keys_path
 from typer.testing import CliRunner
@@ -358,3 +359,75 @@ def test_cli_check_ok_after_remap(tmp_path: Path, monkeypatch) -> None:
 
 def test_normalize_chord_used_for_overlay_slash() -> None:
     assert normalize_chord("/") == normalize_chord("slash")
+
+
+def test_textual_keymap_is_remappable_resolved_chords(tmp_path: Path, monkeypatch) -> None:
+    path = _write(
+        tmp_path / "keys.toml",
+        """
+[home]
+"session.follow" = "z"
+"list.down" = "h"
+""",
+    )
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
+    assert keymap.ok
+    mapped = textual_keymap(keymap)
+    assert mapped["session.follow"] == "z"
+    assert mapped["list.down"] == "h"
+    assert mapped["session.done"] == "e"
+    assert mapped["home.runner"] == "r"
+    assert "help.toggle" not in mapped
+    assert "overlay.hide" not in mapped
+    assert "session.open" not in mapped
+    assert set(mapped) == {row.id for row in keymap.bindings if action_by_id(row.id).remappable}
+
+
+def test_textual_keymap_defaults_when_overlay_refused(tmp_path: Path, monkeypatch) -> None:
+    path = _write(
+        tmp_path / "keys.toml",
+        """
+[home]
+"list.down" = "n"
+""",
+    )
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
+    assert not keymap.ok
+    mapped = textual_keymap(keymap)
+    assert mapped["list.down"] == "j"
+    assert mapped["session.follow"] == "n"
+    assert mapped["home.runner"] == "r"
+
+
+def test_textual_keymap_defaults_without_overlay() -> None:
+    mapped = textual_keymap(load_keymap())
+    assert mapped["list.down"] == action_by_id("list.down").default
+    assert mapped["session.follow"] == action_by_id("session.follow").default
+    assert "help.toggle" not in mapped
+
+
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+_PARSER_PARITY: tuple[tuple[str, bool], ...] = (
+    ("overlay_integer_remap.toml", False),
+    ("overlay_single_quote.toml", True),
+    ("overlay_reserved_leader.toml", False),
+    ("overlay_timeout_zero.toml", False),
+    ("overlay_valid_timeout.toml", True),
+)
+
+
+def test_parser_parity_fixtures_match_load_keymap(tmp_path: Path, monkeypatch) -> None:
+    """Same file body: load_keymap().ok matches HUD KeyOverlay::parse is Some."""
+    for name, expect_ok in _PARSER_PARITY:
+        text = (_FIXTURES / name).read_text(encoding="utf-8")
+        path = _write(tmp_path / name, text)
+        monkeypatch.setenv(KEYS_ENV, str(path))
+        keymap = load_keymap()
+        assert keymap.ok is expect_ok, name
+        if name == "overlay_single_quote.toml":
+            assert _follow_chord(keymap) == "z"
+        if not expect_ok:
+            assert keymap.loaded_overlay is False
+            assert _follow_chord(keymap) == "n"

@@ -270,12 +270,12 @@ pub fn layout(hud: &Hud) -> Element<'_, Message> {
         ]
         .into();
         if hud.help_open() {
-            return kit::help_modal(menu, &crate::help::help_table(), tea);
+            return kit::help_modal(menu, &crate::help::help_table_for(hud.key_overlay()), tea);
         }
         return menu;
     }
     if hud.help_open() {
-        return kit::help_modal(busy, &crate::help::help_table(), tea);
+        return kit::help_modal(busy, &crate::help::help_table_for(hud.key_overlay()), tea);
     }
     busy
 }
@@ -696,7 +696,7 @@ fn footer(hud: &Hud, tea: icedtea::theme::Tokens) -> Element<'_, Message> {
     kit::status_footer(
         hud.status(),
         hud.status_err(),
-        &crate::help::footer_table(hud.key_scope()),
+        &crate::help::footer_table_for(hud.key_scope(), hud.key_overlay()),
         tea,
     )
 }
@@ -2361,7 +2361,7 @@ mod tests {
         assert!(prod.contains("fn closed_list_card"));
         assert!(prod.contains("fn event_detail_pane"));
         assert!(prod.contains("fn event_detail_stepper"));
-        assert!(prod.contains("footer_table(hud.key_scope())"));
+        assert!(prod.contains("footer_table_for(hud.key_scope(), hud.key_overlay())"));
         assert!(!prod.contains("chip_btn(\"Back\""));
         assert!(!prod.contains("is_timeline_expanded"));
         assert!(!prod.contains("TurnExpand"));

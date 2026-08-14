@@ -73,6 +73,28 @@ async def test_restore_cursor_missing_key_is_safe():
 
 
 @pytest.mark.asyncio
+async def test_style_data_table_list_nav_follows_overlay(tmp_path, monkeypatch):
+    keys = tmp_path / "keys.toml"
+    keys.write_text('[home]\n"list.down" = "h"\n', encoding="utf-8")
+    monkeypatch.setenv("GROKET_KEYS", str(keys))
+    app = _TableApp()
+    async with app.run_test() as pilot:
+        table = app.query_one("#t", DataTable)
+        style_data_table(table)
+        table.add_columns("name")
+        table.add_row("a", key="a")
+        table.add_row("b", key="b")
+        table.focus()
+        table.move_cursor(row=0, animate=False)
+        await pilot.press("j")
+        await pilot.pause()
+        assert table.cursor_row == 0
+        await pilot.press("h")
+        await pilot.pause()
+        assert table.cursor_row == 1
+
+
+@pytest.mark.asyncio
 async def test_preserving_scroll_keeps_horizontal_offset():
     app = _TableApp()
     async with app.run_test(size=(40, 12)) as pilot:

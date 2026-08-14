@@ -410,6 +410,24 @@ def _default_chords() -> dict[str, str]:
     return {row.id: row.default for row in ACTIONS}
 
 
+def textual_keymap(keymap: Keymap) -> dict[str, str]:
+    """Binding.id → chord for Textual ``App.set_keymap``.
+
+    Only remappable catalog ids are included. Reserved chords stay on the
+    Binding defaults (Esc, Enter, Tab, Shift+Tab, ``?``).
+
+    :param keymap: Resolved map (defaults when the overlay is missing or refused).
+    :returns: Mapping Textual applies over ``Binding.id``.
+    """
+    out: dict[str, str] = {}
+    for row in keymap.bindings:
+        action = ACTIONS_BY_ID.get(row.id)
+        if action is None or not action.remappable:
+            continue
+        out[row.id] = row.chord
+    return out
+
+
 def default_keymap(path: Path | None = None) -> Keymap:
     """Catalog defaults with no overlay applied.
 

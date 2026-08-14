@@ -14,4 +14,5 @@ uv run groket keys --check
 plus leader verbs, not a full layout emulator.
 
 A bad overlay is refused in full (`groket keys --check` exits 1) and
-the catalog defaults stay active.
+the catalog defaults stay active. The TUI and HUD both apply a valid
+map to footer, help, and key dispatch.

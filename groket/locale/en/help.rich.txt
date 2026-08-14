@@ -72,3 +72,4 @@ The footer lists primary keys. The palette lists the rest.
 
 Desktop HUD shares ? / Esc / / / y / j k / n e (awaiting) / N with this
 TUI. HUD panes are Tab and Ctrl+1-5; [ ] scope Timeline turns.
+A keys.toml remap applies on both surfaces.

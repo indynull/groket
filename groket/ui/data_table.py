@@ -19,15 +19,21 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 
 from rich.text import Text
+from textual.binding import Binding
 from textual.widgets import DataTable
+
+from groket.keys import load_keymap
 
 
 def style_data_table(table: DataTable, *, zebra: bool = True) -> DataTable:
     """Apply consistent list-table behaviour used across the app."""
     table.cursor_type = "row"
     table.zebra_stripes = zebra
-    table._bindings.bind("j", "cursor_down", description="Down", show=False)
-    table._bindings.bind("k", "cursor_up", description="Up", show=False)
+    keymap = load_keymap()
+    down = keymap.binding("list.down").chord
+    up = keymap.binding("list.up").chord
+    table._bindings._add_binding(Binding(down, "cursor_down", "Down", show=False, id="list.down"))
+    table._bindings._add_binding(Binding(up, "cursor_up", "Up", show=False, id="list.up"))
     return table
 
 

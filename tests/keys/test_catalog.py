@@ -26,8 +26,9 @@ from textual.screen import Screen
 
 _REPO = Path(__file__).resolve().parents[2]
 _HELP_RS = _REPO / "groket-hud" / "src" / "help.rs"
+_KEYS_RS = _REPO / "groket-hud" / "src" / "keys.rs"
 _PUSH = re.compile(
-    r'push\(\s*&mut table,\s*"([^"]+)",\s*"[^"]*",\s*"([^"]+)"',
+    r'push(?:_mapped)?\(\s*&mut table,\s*(?:overlay,\s*)?"([^"]+)",\s*"[^"]*",\s*"([^"]+)"',
     re.S,
 )
 
@@ -239,14 +240,21 @@ def test_hud_named_ids_present() -> None:
         assert action_id in ACTIONS_BY_ID
 
 
-def test_list_nav_is_shared_without_tui_binding() -> None:
+def test_list_nav_is_shared_table_binding() -> None:
+    from groket.ui.data_table import style_data_table
+    from textual.widgets import DataTable
+
     down = action_by_id("list.down")
     up = action_by_id("list.up")
     assert down.surfaces is ActionSurface.SHARED
     assert up.surfaces is ActionSurface.SHARED
     assert down.tui_action is None
     assert up.tui_action is None
-    assert not any(b.id == "list.down" for tup in _BINDING_TUPLES for b in tup)
+    table = DataTable()
+    style_data_table(table)
+    ids = {binding.id for _key, binding in table._bindings}
+    assert "list.down" in ids
+    assert "list.up" in ids
 
 
 def test_tab_nav_bindings_use_catalog_ids() -> None:
@@ -259,6 +267,29 @@ def test_tab_nav_bindings_use_catalog_ids() -> None:
     for binding in nav:
         assert binding.id in ACTIONS_BY_ID
         assert _key_matches_default(binding.key, ACTIONS_BY_ID[binding.id].default)
+
+
+def test_hud_overlay_catalog_matches_python() -> None:
+    """Rust overlay catalog must stay aligned with ACTIONS."""
+    text = _KEYS_RS.read_text(encoding="utf-8")
+    rows = re.findall(
+        r'id:\s*"([^"]+)",\s*scope:\s*"([^"]+)",\s*default:\s*"([^"]+)",\s*remappable:\s*(true|false)',
+        text,
+    )
+    found = {action_id: (scope, default, rem == "true") for action_id, scope, default, rem in rows}
+    missing = sorted(set(ACTIONS_BY_ID) - set(found))
+    extra = sorted(set(found) - set(ACTIONS_BY_ID))
+    assert missing == []
+    assert extra == []
+    drifted = []
+    for row in ACTIONS:
+        scope, default, remappable = found[row.id]
+        if scope != row.scope.value or default != row.default or remappable is not row.remappable:
+            drifted.append(
+                f"{row.id}: rust=({scope!r},{default!r},{remappable}) "
+                f"py=({row.scope.value!r},{row.default!r},{row.remappable})"
+            )
+    assert drifted == []
 
 
 def test_action_by_id_roundtrip() -> None:

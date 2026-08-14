@@ -48,7 +48,8 @@ every **3 seconds** (idle sessions slower). An unfocused pop-out or
 hidden overlay does not poll; control notifies still refresh the
 catalog and fire desktop notifications. Press **?** for the shortcut
 cheatsheet. Shared keys match the terminal app (`?` `Esc` `/` `y` `j`/`k`
-`n`/`e` `N`); panes are Tab and Ctrl+1–5.
+`n`/`e` `N`); panes are Tab and Ctrl+1–5. A `keys.toml` remap applies
+on both surfaces.
 
 ## Overlay, pop-out, tray, notify
 

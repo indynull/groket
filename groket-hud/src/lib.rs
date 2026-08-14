@@ -8,6 +8,7 @@ pub mod format;
 pub mod fuzzy;
 pub mod help;
 pub mod install_desktop;
+pub mod keys;
 pub mod kit;
 pub mod live;
 pub mod log;
