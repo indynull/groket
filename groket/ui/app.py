@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
@@ -33,6 +33,7 @@ from textual.widgets import (
     Label,
     Select,
     Static,
+    TextArea,
 )
 
 from ..analysis.base import AnalysisResult, Finding
@@ -40,6 +41,7 @@ from ..constants import META_CACHE_FILENAME
 
 if TYPE_CHECKING:
     from ..analysis.service import AnalysisService
+    from ..keys import Keymap
 from ..integrations.control_client import (
     HEAVY_RPC_TIMEOUT,
     ControlClient,
@@ -321,6 +323,18 @@ class TraceEvalApp(App):
         """Footer / key panel: Ctrl+S, not caret ^s or unicode glyphs."""
         if binding.key_display:
             return binding.key_display
+        bid = getattr(binding, "id", None)
+        keymap = getattr(self, "_resolved_keymap", None)
+        if bid and keymap is not None:
+            from groket.keys import chord_has_sequence, format_leader_chord
+
+            try:
+                chord = keymap.binding(bid).chord
+            except KeyError:
+                chord = ""
+            if chord and chord_has_sequence(chord):
+                raw = format_leader_chord(keymap.leader, chord)
+                return " ".join(format_key_chord(part) for part in raw.split())
         return format_key_chord(binding.key)
 
     def get_system_commands(self, screen: Screen):
@@ -457,6 +471,9 @@ class TraceEvalApp(App):
         except Exception:
             logger.debug(t("ui-failed-to-apply-saved-theme-r"), early or "groket")
         self._traces_root_for_reload = traces_root_for_reload
+        self._resolved_keymap: Keymap | None = None
+        self._leader_armed = False
+        self._leader_timer: Timer | None = None
         self._apply_resolved_keymap()
 
     def compose(self) -> ComposeResult:
@@ -595,10 +612,121 @@ class TraceEvalApp(App):
         """Apply ``keys.toml`` remaps via Textual ``set_keymap``.
 
         A refused or missing overlay leaves catalog defaults (``load_keymap``).
+        Sequence chords are unbound here and dispatched by the leader prefix.
         """
         from groket.keys import load_keymap, textual_keymap
 
-        self.set_keymap(textual_keymap(load_keymap()))
+        keymap = load_keymap()
+        self._resolved_keymap = keymap
+        self.set_keymap(textual_keymap(keymap))
+        if keymap.leader:
+            self.bind(
+                keymap.leader,
+                "leader_idle",
+                description=t("ui-leader"),
+                show=True,
+                key_display=keymap.leader,
+            )
+
+    def _leader_editing_focus(self) -> bool:
+        """True when a typing field owns the key (Input / TextArea / notes)."""
+        focused = self.focused
+        return isinstance(focused, (Input, TextArea))
+
+    def _leader_disarm(self) -> None:
+        if self._leader_timer is not None:
+            self._leader_timer.stop()
+            self._leader_timer = None
+        if self._leader_armed:
+            self._leader_armed = False
+            self.refresh_bindings()
+
+    def _leader_arm(self) -> None:
+        keymap = self._resolved_keymap
+        timeout_ms = 800
+        if keymap is not None and keymap.leader_timeout_ms:
+            timeout_ms = keymap.leader_timeout_ms
+        self._leader_disarm()
+        self._leader_armed = True
+        self._leader_timer = self.set_timer(timeout_ms / 1000.0, self._leader_disarm)
+        self.refresh_bindings()
+
+    def _leader_event_suffix(self, event: object) -> str:
+        character = getattr(event, "character", None)
+        if isinstance(character, str) and character:
+            return character
+        key = str(getattr(event, "key", "") or "")
+        if key.startswith("shift+") and len(key) > 6:
+            return key
+        return key
+
+    def _leader_is_leader_key(self, event: object) -> bool:
+        keymap = self._resolved_keymap
+        if keymap is None or not keymap.leader:
+            return False
+        leader = keymap.leader
+        character = getattr(event, "character", None)
+        if isinstance(character, str) and character == leader:
+            return True
+        key = str(getattr(event, "key", "") or "")
+        if key == leader:
+            return True
+        punct = {";": "semicolon", "semicolon": ";"}
+        if punct.get(key) == leader or punct.get(leader) == key:
+            return True
+        from groket.keys import normalize_chord
+
+        return normalize_chord(key) == normalize_chord(leader)
+
+    async def _run_binding_id(self, action_id: str) -> None:
+        """Dispatch *action_id* from the screen chain (home vs browser action)."""
+        chain = getattr(self.screen, "_modal_binding_chain", ())
+        for namespace, bindings in chain:
+            for _key, binding in bindings:
+                if getattr(binding, "id", None) != action_id:
+                    continue
+                if await self.run_action(binding.action, namespace):
+                    return
+
+    async def _handle_leader_key(self, event: object) -> bool:
+        """Consume a leader prefix or ``leader+X`` dispatch. True when handled."""
+        keymap = self._resolved_keymap
+        if keymap is None or not keymap.leader:
+            return False
+        if self._leader_editing_focus():
+            if self._leader_armed:
+                self._leader_disarm()
+            return False
+        key = str(getattr(event, "key", "") or "")
+        if key in {"escape", "esc"}:
+            if self._leader_armed:
+                self._leader_disarm()
+                return True
+            return False
+        if self._leader_armed:
+            self._leader_disarm()
+            if self._leader_is_leader_key(event):
+                return True
+            suffix = self._leader_event_suffix(event)
+            action_id = keymap.lookup_sequence(suffix)
+            if action_id is not None:
+                await self._run_binding_id(action_id)
+            return True
+        if self._leader_is_leader_key(event):
+            self._leader_arm()
+            return True
+        return False
+
+    async def on_event(self, event: events.Event) -> None:
+        if isinstance(event, events.Key) and await self._handle_leader_key(event):
+            event.stop()
+            event.prevent_default()
+            return
+        await super().on_event(event)
+
+    def action_leader_idle(self) -> None:
+        """Footer slot while the leader is armed; dispatch is in on_event."""
+        return
 
     def on_mount(self) -> None:
         self._apply_resolved_keymap()
@@ -2459,6 +2587,8 @@ class TraceEvalApp(App):
         ``n`` / ``e`` need an awaiting multi-turn target. ``H`` is two actions
         (show / hide host); only the matching one is enabled.
         """
+        if action == "leader_idle":
+            return bool(self._leader_armed)
         if action == "launch_from_runner":
             return self._runner_active()
         if action in SESSION_HOME_ACTIONS and not self._sessions_home_active():

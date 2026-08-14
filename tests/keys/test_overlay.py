@@ -117,7 +117,7 @@ def test_wrong_scope_table_is_unknown_id(tmp_path: Path, monkeypatch) -> None:
         tmp_path / "keys.toml",
         """
 [browser]
-"session.follow" = "z"
+"home.runner" = "z"
 """,
     )
     monkeypatch.setenv(KEYS_ENV, str(path))
@@ -215,7 +215,7 @@ def test_default_dual_bindings_are_not_clashes() -> None:
     assert keymap.binding("edit.save").chord == keymap.binding("modal.done").chord
 
 
-def test_leader_sequence_parses_but_resolve_fails(tmp_path: Path, monkeypatch) -> None:
+def test_leader_sequence_loads(tmp_path: Path, monkeypatch) -> None:
     text = """
 leader = ";"
 leader_timeout_ms = 800
@@ -235,11 +235,90 @@ leader_timeout_ms = 800
     path = _write(tmp_path / "keys.toml", text)
     monkeypatch.setenv(KEYS_ENV, str(path))
     keymap = load_keymap()
+    assert keymap.ok
+    assert keymap.loaded_overlay is True
+    assert keymap.leader == ";"
+    assert keymap.leader_timeout_ms == 800
+    assert _follow_chord(keymap) == "leader+n"
+    assert keymap.binding("session.done").chord == "leader+e"
+    assert keymap.binding("list.down").chord == "n"
+    assert keymap.binding("list.up").chord == "e"
+    assert keymap.lookup_sequence("n") == "session.follow"
+    assert keymap.lookup_sequence("e") == "session.done"
+    mapped = textual_keymap(keymap)
+    assert mapped["list.down"] == "n"
+    assert mapped["session.follow"].startswith("ctrl+shift+alt+f")
+    assert mapped["session.done"].startswith("ctrl+shift+alt+f")
+    assert mapped["session.follow"] != mapped["session.done"]
+    assert mapped["session.follow"] != "f24"
+    assert mapped["session.done"] != "f24"
+
+
+def test_list_nav_sequence_is_refused(tmp_path: Path, monkeypatch) -> None:
+    path = _write(
+        tmp_path / "keys.toml",
+        """
+leader = ";"
+[home]
+"list.down" = "leader+j"
+""",
+    )
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
+    assert not keymap.ok
+    assert keymap.binding("list.down").chord == "j"
+    assert any(err.kind is OverlayErrorKind.INVALID_VALUE for err in keymap.errors)
+
+
+def test_leader_sequence_without_leader_refuses(tmp_path: Path, monkeypatch) -> None:
+    path = _write(
+        tmp_path / "keys.toml",
+        """
+[home]
+"session.follow" = "leader+n"
+""",
+    )
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
     assert not keymap.ok
     assert keymap.loaded_overlay is False
     assert _follow_chord(keymap) == "n"
-    assert keymap.binding("list.down").chord == "j"
-    assert any(err.kind is OverlayErrorKind.SEQUENCE_NOT_WIRED for err in keymap.errors)
+    assert any(err.kind is OverlayErrorKind.INVALID_VALUE for err in keymap.errors)
+
+
+def test_leader_clashes_with_single_chord(tmp_path: Path, monkeypatch) -> None:
+    path = _write(
+        tmp_path / "keys.toml",
+        """
+leader = "j"
+
+[home]
+"session.follow" = "z"
+""",
+    )
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
+    assert not keymap.ok
+    assert any(err.kind is OverlayErrorKind.CLASH for err in keymap.errors)
+
+
+def test_colemak_example_is_clean(monkeypatch) -> None:
+    from groket.cli import app
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "examples" / "keys" / "colemak.toml"
+    monkeypatch.setenv(KEYS_ENV, str(path))
+    keymap = load_keymap()
+    assert keymap.ok
+    assert keymap.loaded_overlay is True
+    assert keymap.leader == ";"
+    assert keymap.binding("list.down").chord == "n"
+    assert keymap.binding("list.up").chord == "e"
+    assert keymap.binding("session.follow").chord == "leader+n"
+    assert keymap.binding("session.done").chord == "leader+e"
+    result = runner.invoke(app, ["keys", "--check"])
+    assert result.exit_code == 0
+    assert "OK" in (result.stdout or result.output or "")
 
 
 def test_invalid_toml_refuses_overlay(tmp_path: Path, monkeypatch) -> None:

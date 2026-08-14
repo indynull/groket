@@ -1,0 +1,14 @@
+leader = ";"
+leader_timeout_ms = 800
+
+[home]
+"list.down" = "n"
+"list.up" = "e"
+"session.follow" = "leader+n"
+"session.done" = "leader+e"
+
+[browser]
+"list.down" = "n"
+"list.up" = "e"
+"session.follow" = "leader+n"
+"session.done" = "leader+e"

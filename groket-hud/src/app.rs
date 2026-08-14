@@ -282,6 +282,9 @@ pub struct Hud {
     help_open: bool,
     /// Resolved keys.toml overlay (defaults when missing or refused).
     keys: crate::keys::KeyOverlay,
+    /// Leader prefix is waiting for the next key.
+    leader_armed: bool,
+    leader_until: Option<Instant>,
 }
 
 impl Default for Hud {
@@ -383,6 +386,8 @@ impl Default for Hud {
             pending_activation_token: None,
             help_open: false,
             keys: crate::keys::KeyOverlay::default(),
+            leader_armed: false,
+            leader_until: None,
         }
     }
 }
@@ -615,7 +620,7 @@ impl Hud {
             let poll = if any_live { LIVE_POLL_MS } else { IDLE_POLL_MS };
             subs.push(time::every(Duration::from_millis(poll)).map(|_| Message::Tick));
         }
-        if self.note_delete_until.is_some() {
+        if self.note_delete_until.is_some() || self.leader_until.is_some() {
             subs.push(time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
         subs.push(tray_subscription());
@@ -1284,7 +1289,12 @@ impl Hud {
             timeline_detail: self.tab == Tab::Timeline && self.timeline_open.is_some(),
             awaiting: self.selected_awaiting(),
             tab: self.tab,
+            leader_armed: self.leader_armed,
         }
+    }
+
+    pub fn leader_armed(&self) -> bool {
+        self.leader_armed
     }
 
     pub fn key_overlay(&self) -> &crate::keys::KeyOverlay {
@@ -3101,6 +3111,11 @@ impl Hud {
         self.toasts.tick(dt.max(1));
         self.spin_phase = (self.spin_phase + 0.05) % 1.0;
         self.sync_theme();
+        if let Some(until) = self.leader_until {
+            if Instant::now() >= until {
+                self.disarm_leader();
+            }
+        }
         if let Some(until) = self.note_delete_until {
             if Instant::now() >= until {
                 self.note_delete_armed.clear();
@@ -3305,12 +3320,83 @@ impl Hud {
         self.keys.matches(id, default, key, modifiers)
     }
 
+    fn arm_leader(&mut self) {
+        let ms = self.keys.leader_timeout_ms().max(1) as u64;
+        self.leader_armed = true;
+        self.leader_until = Some(Instant::now() + Duration::from_millis(ms));
+    }
+
+    fn disarm_leader(&mut self) {
+        self.leader_armed = false;
+        self.leader_until = None;
+    }
+
+    fn expire_leader(&mut self) {
+        if let Some(until) = self.leader_until {
+            if Instant::now() >= until {
+                self.disarm_leader();
+            }
+        }
+    }
+
+    fn dispatch_catalog_id(&mut self, id: &str) -> Task<Message> {
+        match id {
+            "session.follow" if self.browse_mode() && self.selected_awaiting() => {
+                operation::focus(self.follow_id.clone())
+            }
+            "session.done" if self.browse_mode() && self.selected_awaiting() => self.mark_done(),
+            "list.down" => self.nav_step(1),
+            "list.up" => self.nav_step(-1),
+            "edit.copy" | "edit.copy_chord" => self.yank_active(),
+            "search.focus" => self.focus_context_search(),
+            "pane.notes" if self.browse_mode() => self.update(Message::SetTab(Tab::Notes)),
+            _ => Task::none(),
+        }
+    }
+
+    fn handle_leader(&mut self, key: &Key, modifiers: KeyMods) -> Option<Task<Message>> {
+        self.expire_leader();
+        if self.typing_notes {
+            if self.leader_armed {
+                self.disarm_leader();
+            }
+            return None;
+        }
+        if self.leader_armed {
+            self.disarm_leader();
+            if self.keys.is_leader_key(key, modifiers) {
+                return Some(Task::none());
+            }
+            if let Some(id) = self
+                .keys
+                .lookup_sequence(key, modifiers)
+                .map(str::to_string)
+            {
+                return Some(self.dispatch_catalog_id(&id));
+            }
+            return Some(Task::none());
+        }
+        if self.keys.is_leader_key(key, modifiers) {
+            self.arm_leader();
+            return Some(Task::none());
+        }
+        None
+    }
+
     fn on_key(&mut self, key: Key, modifiers: KeyMods) -> Task<Message> {
+        self.expire_leader();
         if matches!(key, Key::Named(Named::Escape)) {
+            if self.leader_armed {
+                self.disarm_leader();
+                return Task::none();
+            }
             return self.on_escape();
         }
         if self.help_open {
             return Task::none();
+        }
+        if let Some(task) = self.handle_leader(&key, modifiers) {
+            return task;
         }
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let n = i + 1;
@@ -4407,6 +4493,128 @@ mod tests {
         assert_eq!(hud.active, 0, "default j no longer moves after remap");
         let _ = hud.on_key(Key::Character("n".into()), Modifiers::empty());
         assert_eq!(hud.active, 1, "remapped list.down = n takes the j nav path");
+    }
+
+    fn colemak_overlay() -> crate::keys::KeyOverlay {
+        crate::keys::KeyOverlay::parse(concat!(
+            "leader = \";\"\n",
+            "leader_timeout_ms = 800\n",
+            "[home]\n",
+            "\"list.down\" = \"n\"\n",
+            "\"list.up\" = \"e\"\n",
+            "\"session.follow\" = \"leader+n\"\n",
+            "\"session.done\" = \"leader+e\"\n",
+        ))
+        .expect("colemak")
+    }
+
+    #[test]
+    fn leader_arms_and_dispatches_follow_and_done() {
+        use iced::keyboard::{Key, Modifiers};
+        let overlay = colemak_overlay();
+        let mut hud = Hud {
+            overview: Some(Overview {
+                meta: crate::wire::SessionMeta {
+                    status: "awaiting".into(),
+                    ..crate::wire::SessionMeta::default()
+                },
+                ..Overview::default()
+            }),
+            tab: Tab::Overview,
+            keys: overlay,
+            all_sessions: vec![SessionRow {
+                session_id: "s1".into(),
+                ..SessionRow::default()
+            }],
+            ..Hud::default()
+        };
+        hud.sessions = hud.all_sessions.clone();
+        assert!(hud.browse_mode());
+        assert!(hud.selected_awaiting());
+        let _ = hud.on_key(Key::Character("n".into()), Modifiers::empty());
+        assert_eq!(hud.active, 0, "n is list.down only after leader");
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        assert!(hud.leader_armed());
+        let _ = hud.on_key(Key::Character("n".into()), Modifiers::empty());
+        assert!(!hud.leader_armed());
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        let _ = hud.on_key(Key::Character("e".into()), Modifiers::empty());
+        assert!(!hud.leader_armed());
+    }
+
+    #[test]
+    fn leader_cancelled_by_escape_and_timeout() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let mut hud = Hud {
+            keys: colemak_overlay(),
+            all_sessions: vec![
+                SessionRow {
+                    session_id: "s1".into(),
+                    ..SessionRow::default()
+                },
+                SessionRow {
+                    session_id: "s2".into(),
+                    ..SessionRow::default()
+                },
+            ],
+            query: "x".into(),
+            ..Hud::default()
+        };
+        hud.sessions = hud.all_sessions.clone();
+        hud.set_active(0);
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        assert!(hud.leader_armed());
+        let _ = hud.on_key(Key::Named(Named::Escape), Modifiers::empty());
+        assert!(!hud.leader_armed());
+        assert!(hud.visible, "Esc while armed does not hide");
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        assert!(hud.leader_armed());
+        hud.leader_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = hud.on_tick();
+        assert!(!hud.leader_armed());
+        let start = hud.active;
+        let _ = hud.on_key(Key::Character("n".into()), Modifiers::empty());
+        assert_eq!(hud.active, start + 1, "n after cancel is list.down");
+    }
+
+    #[test]
+    fn leader_expires_before_next_key_is_sequence() {
+        use iced::keyboard::{Key, Modifiers};
+        let mut hud = Hud {
+            keys: colemak_overlay(),
+            all_sessions: vec![
+                SessionRow {
+                    session_id: "s1".into(),
+                    ..SessionRow::default()
+                },
+                SessionRow {
+                    session_id: "s2".into(),
+                    ..SessionRow::default()
+                },
+            ],
+            query: "x".into(),
+            ..Hud::default()
+        };
+        hud.sessions = hud.all_sessions.clone();
+        hud.set_active(0);
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        assert!(hud.leader_armed());
+        hud.leader_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = hud.on_key(Key::Character("n".into()), Modifiers::empty());
+        assert!(!hud.leader_armed());
+        assert_eq!(hud.active, 1, "expired arm treats n as list.down");
+    }
+
+    #[test]
+    fn leader_does_not_arm_while_notes_focused() {
+        use iced::keyboard::{Key, Modifiers};
+        let mut hud = Hud {
+            keys: colemak_overlay(),
+            typing_notes: true,
+            ..Hud::default()
+        };
+        let _ = hud.on_key(Key::Character(";".into()), Modifiers::empty());
+        assert!(!hud.leader_armed());
     }
 
     #[test]

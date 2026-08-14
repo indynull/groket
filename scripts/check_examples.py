@@ -237,7 +237,9 @@ def check_analysis_configs(plugin_classes: dict[str, type]) -> None:
             stem, cls_name = entry.split(":", 1)
             stem, cls_name = stem.strip(), cls_name.strip()
             if stem not in plugin_classes:
-                _err(path, f"unknown plugin module {stem!r} (no examples/analysis/plugins/{stem}.py)")
+                _err(
+                    path, f"unknown plugin module {stem!r} (no examples/analysis/plugins/{stem}.py)"
+                )
             cls = plugin_classes[stem]
             if cls.__name__ != cls_name:
                 # Allow alternate class in same module
@@ -296,11 +298,30 @@ def check_readmes() -> None:
         EXAMPLES / "analysis" / "README.md",
         EXAMPLES / "tasks" / "README.md",
         EXAMPLES / "notes" / "README.md",
+        EXAMPLES / "keys" / "README.md",
     ]
     for path in required:
         if not path.is_file() or path.stat().st_size < 40:
             _err(path, "missing or empty README")
         _ok(f"{_repo_rel(path)}")
+
+
+def check_keys_overlay() -> None:
+    """Validate examples/keys overlays load cleanly."""
+    from groket.keys import load_keymap
+
+    keys_dir = EXAMPLES / "keys"
+    files = sorted(keys_dir.glob("*.toml"))
+    if not files:
+        _err(keys_dir, "no keys.toml overlays")
+    for path in files:
+        keymap = load_keymap(path)
+        if not keymap.ok:
+            msgs = "; ".join(err.message for err in keymap.errors) or "refused"
+            _err(path, msgs)
+        if not keymap.loaded_overlay:
+            _err(path, "overlay did not apply")
+        _ok(f"{_repo_rel(path)}  leader={keymap.leader or '-'} bindings={len(keymap.bindings)}")
 
 
 def check_notes_schema() -> None:
@@ -331,6 +352,7 @@ def main() -> int:
         check_analysis_configs(plugins)
         check_personas()
         check_notes_schema()
+        check_keys_overlay()
     except _Fail as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

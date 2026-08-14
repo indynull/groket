@@ -49,7 +49,9 @@ hidden overlay does not poll; control notifies still refresh the
 catalog and fire desktop notifications. Press **?** for the shortcut
 cheatsheet. Shared keys match the terminal app (`?` `Esc` `/` `y` `j`/`k`
 `n`/`e` `N`); panes are Tab and Ctrl+1–5. A `keys.toml` remap applies
-on both surfaces.
+on both surfaces. A configured leader (Colemak example: `;`) then one
+letter runs `leader+X`; Esc or timeout cancels. Copy
+`examples/keys/colemak.toml` to `~/.groket/keys.toml`.
 
 ## Overlay, pop-out, tray, notify
 

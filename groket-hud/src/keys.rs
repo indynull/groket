@@ -1,8 +1,8 @@
 //! Load `keys.toml` overlays for HUD dispatch and shortcut tables.
 //!
 //! Same path family as the TUI (`GROKET_KEYS` or `~/.groket/keys.toml`).
-//! A missing or refused file keeps catalog defaults. Leader sequences are
-//! accepted at parse time and refused here (not dispatched in this phase).
+//! A missing or refused file keeps catalog defaults. A printable ``leader``
+//! plus ``leader+X`` sequences are accepted and dispatched by the HUD.
 
 use iced::keyboard::{key::Named, Key, Modifiers as KeyMods};
 use std::collections::HashMap;
@@ -544,9 +544,21 @@ const KNOWN_SCOPES: &[&str] = &[
 const RESERVED: &[&str] = &["escape", "esc", "enter", "tab", "shift+tab", "?"];
 
 /// Resolved overlay: remapped catalog ids only. Empty = catalog defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyOverlay {
     remaps: HashMap<String, String>,
+    leader: Option<String>,
+    leader_timeout_ms: i64,
+}
+
+impl Default for KeyOverlay {
+    fn default() -> Self {
+        Self {
+            remaps: HashMap::new(),
+            leader: None,
+            leader_timeout_ms: 800,
+        }
+    }
 }
 
 static PROCESS: OnceLock<KeyOverlay> = OnceLock::new();
@@ -602,7 +614,54 @@ impl KeyOverlay {
 
     /// True when *key*+*mods* matches the resolved chord for *id*.
     pub fn matches(&self, id: &str, default: &str, key: &Key, mods: KeyMods) -> bool {
-        spec_matches(&self.chord(id, default), key, mods)
+        let resolved = self.chord(id, default);
+        if chord_has_sequence(&resolved) {
+            return false;
+        }
+        spec_matches(&resolved, key, mods)
+    }
+
+    /// Configured leader key (``;``), or None when the product default applies.
+    pub fn leader(&self) -> Option<&str> {
+        self.leader.as_deref()
+    }
+
+    /// Arm window in milliseconds (800 when unset).
+    pub fn leader_timeout_ms(&self) -> i64 {
+        if self.leader_timeout_ms > 0 {
+            self.leader_timeout_ms
+        } else {
+            800
+        }
+    }
+
+    /// True when *key* is the overlay leader (no modifiers).
+    pub fn is_leader_key(&self, key: &Key, mods: KeyMods) -> bool {
+        let Some(leader) = self.leader.as_deref() else {
+            return false;
+        };
+        spec_matches(leader, key, mods)
+    }
+
+    /// ``; n`` label for a ``leader+X`` remap, or None when *id* is a single chord.
+    pub fn sequence_display(&self, id: &str, default: &str) -> Option<String> {
+        let resolved = self.chord(id, default);
+        let suffix = sequence_suffix(&resolved)?;
+        let leader = self.leader()?;
+        Some(format!("{leader} {suffix}"))
+    }
+
+    /// Catalog id bound to ``leader+X`` for this keypress, if any.
+    pub fn lookup_sequence(&self, key: &Key, mods: KeyMods) -> Option<&str> {
+        for (id, chord) in &self.remaps {
+            let Some(suffix) = sequence_suffix(chord) else {
+                continue;
+            };
+            if spec_matches(&suffix, key, mods) {
+                return Some(id.as_str());
+            }
+        }
+        None
     }
 }
 
@@ -638,12 +697,16 @@ struct Remap {
 }
 
 struct Document {
+    leader: Option<String>,
+    leader_timeout_ms: Option<i64>,
     remaps: Vec<Remap>,
 }
 
 fn parse_document(text: &str) -> Option<Document> {
     let mut remaps = Vec::new();
     let mut scope: Option<String> = None;
+    let mut leader = None;
+    let mut leader_timeout_ms = None;
     for raw in text.lines() {
         let stripped = strip_comment(raw);
         let line = stripped.trim();
@@ -661,11 +724,12 @@ fn parse_document(text: &str) -> Option<Document> {
         if scope.is_none() {
             match key.as_str() {
                 "leader" => {
-                    let leader = parse_quoted_string(&val_raw)?;
-                    validate_leader(&leader)?;
+                    let raw_leader = parse_quoted_string(&val_raw)?;
+                    validate_leader(&raw_leader)?;
+                    leader = Some(normalize_chord(&raw_leader));
                 }
                 "leader_timeout_ms" => {
-                    parse_positive_timeout(&val_raw)?;
+                    leader_timeout_ms = Some(parse_positive_timeout(&val_raw)?);
                 }
                 _ => return None,
             }
@@ -681,7 +745,14 @@ fn parse_document(text: &str) -> Option<Document> {
             chord,
         });
     }
-    Some(Document { remaps })
+    if leader.is_some() && leader_timeout_ms.is_none() {
+        leader_timeout_ms = Some(800);
+    }
+    Some(Document {
+        leader,
+        leader_timeout_ms,
+        remaps,
+    })
 }
 
 fn strip_comment(line: &str) -> String {
@@ -791,14 +862,29 @@ fn validate_leader(raw: &str) -> Option<()> {
     Some(())
 }
 
+fn overlay_scope_ok(row: &CatalogRow, scope: &str) -> bool {
+    if row.scope == scope {
+        return true;
+    }
+    matches!(
+        (row.id, scope),
+        (
+            "list.down" | "list.up" | "session.follow" | "session.done",
+            "browser"
+        )
+    )
+}
+
 fn merge_document(doc: &Document) -> Option<KeyOverlay> {
     let mut chords: HashMap<&str, String> = ACTIONS
         .iter()
         .map(|row| (row.id, normalize_chord(row.default)))
         .collect();
+    let mut seen: HashMap<&str, String> = HashMap::new();
+    let mut uses_sequence = false;
     for remap in &doc.remaps {
         let row = action_by_id(&remap.id)?;
-        if row.scope != remap.scope {
+        if !overlay_scope_ok(row, &remap.scope) {
             return None;
         }
         if !row.remappable {
@@ -812,12 +898,32 @@ fn merge_document(doc: &Document) -> Option<KeyOverlay> {
             return None;
         }
         if chord_has_sequence(&remap.chord) || chord_has_sequence(&canon) {
-            return None;
+            if row.id == "list.down" || row.id == "list.up" {
+                return None;
+            }
+            if sequence_suffix(&canon).is_none() {
+                return None;
+            }
+            uses_sequence = true;
         }
+        if let Some(prev) = seen.get(row.id) {
+            if prev != &canon {
+                return None;
+            }
+        }
+        seen.insert(row.id, canon.clone());
         chords.insert(row.id, canon);
+    }
+    if uses_sequence && doc.leader.is_none() {
+        return None;
     }
     if has_new_clash(&chords) {
         return None;
+    }
+    if let Some(leader) = &doc.leader {
+        if leader_occupies_single_chord(&chords, leader) {
+            return None;
+        }
     }
     let remaps = ACTIONS
         .iter()
@@ -831,7 +937,20 @@ fn merge_document(doc: &Document) -> Option<KeyOverlay> {
             }
         })
         .collect();
-    Some(KeyOverlay { remaps })
+    Some(KeyOverlay {
+        remaps,
+        leader: doc.leader.clone(),
+        leader_timeout_ms: doc.leader_timeout_ms.unwrap_or(800),
+    })
+}
+
+fn leader_occupies_single_chord(chords: &HashMap<&str, String>, leader: &str) -> bool {
+    let lead = normalize_chord(leader);
+    if lead.is_empty() {
+        return false;
+    }
+    let occ = occupancy(chords);
+    occ.values().any(|parts| parts.contains_key(&lead))
 }
 
 fn has_new_clash(chords: &HashMap<&str, String>) -> bool {
@@ -892,6 +1011,22 @@ fn chord_has_sequence(chord: &str) -> bool {
     })
 }
 
+fn sequence_suffix(chord: &str) -> Option<String> {
+    let parts: Vec<String> = chord_parts(chord);
+    if parts.len() != 1 {
+        return None;
+    }
+    let bits: Vec<&str> = parts[0].split('+').collect();
+    if bits.len() != 2 || bits[0] != "leader" {
+        return None;
+    }
+    let suffix = bits[1];
+    if suffix.is_empty() || suffix == "leader" || chord_is_reserved(suffix) {
+        return None;
+    }
+    Some(suffix.to_string())
+}
+
 fn chord_is_reserved(chord: &str) -> bool {
     chord_parts(chord)
         .iter()
@@ -944,6 +1079,7 @@ fn alias_key(raw: &str) -> String {
         ("/", _) | (_, "slash") => "slash".into(),
         ("[", _) | (_, "left_square_bracket") => "left_square_bracket".into(),
         ("]", _) | (_, "right_square_bracket") => "right_square_bracket".into(),
+        (";", _) | (_, "semicolon") => ";".into(),
         (_, "esc" | "escape") => "escape".into(),
         _ if raw.chars().all(|c| c.is_ascii_alphabetic()) => low,
         _ => low,
@@ -1042,8 +1178,13 @@ fn parse_spec(part: &str) -> Option<ParsedChord> {
 }
 
 fn spec_matches(spec: &str, key: &Key, mods: KeyMods) -> bool {
-    spec.split(',')
-        .any(|part| one_matches(part.trim(), key, mods))
+    spec.split(',').any(|part| {
+        let trimmed = part.trim();
+        if chord_has_sequence(trimmed) {
+            return false;
+        }
+        one_matches(trimmed, key, mods)
+    })
 }
 
 fn one_matches(part: &str, key: &Key, mods: KeyMods) -> bool {
@@ -1106,8 +1247,57 @@ mod tests {
         assert!(KeyOverlay::parse("[global]\n\"help.toggle\" = \"x\"\n").is_none());
         assert!(KeyOverlay::parse("[home]\n\"list.down\" = \"escape\"\n").is_none());
         assert!(KeyOverlay::parse("[home]\n\"session.follow\" = \"leader+n\"\n").is_none());
+        assert!(
+            KeyOverlay::parse("leader = \";\"\n[home]\n\"list.down\" = \"leader+j\"\n").is_none()
+        );
         assert!(KeyOverlay::parse("[nope]\n\"list.down\" = \"h\"\n").is_none());
         assert!(KeyOverlay::parse("[home]\n\"not.an.id\" = \"h\"\n").is_none());
+    }
+
+    #[test]
+    fn leader_sequence_is_accepted() {
+        let text = concat!(
+            "leader = \";\"\n",
+            "leader_timeout_ms = 800\n",
+            "[home]\n",
+            "\"list.down\" = \"n\"\n",
+            "\"list.up\" = \"e\"\n",
+            "\"session.follow\" = \"leader+n\"\n",
+            "\"session.done\" = \"leader+e\"\n",
+            "[browser]\n",
+            "\"list.down\" = \"n\"\n",
+            "\"list.up\" = \"e\"\n",
+            "\"session.follow\" = \"leader+n\"\n",
+            "\"session.done\" = \"leader+e\"\n",
+        );
+        let overlay = KeyOverlay::parse(text).expect("colemak overlay");
+        assert_eq!(overlay.leader(), Some(";"));
+        assert_eq!(overlay.leader_timeout_ms(), 800);
+        assert_eq!(overlay.chord("list.down", "j"), "n");
+        assert_eq!(overlay.chord("session.follow", "n"), "leader+n");
+        assert!(!overlay.matches(
+            "session.follow",
+            "n",
+            &Key::Character("n".into()),
+            KeyMods::empty()
+        ));
+        assert!(overlay.is_leader_key(&Key::Character(";".into()), KeyMods::empty()));
+        assert_eq!(
+            overlay.lookup_sequence(&Key::Character("n".into()), KeyMods::empty()),
+            Some("session.follow")
+        );
+        assert_eq!(
+            overlay.lookup_sequence(&Key::Character("e".into()), KeyMods::empty()),
+            Some("session.done")
+        );
+        assert_eq!(
+            overlay.sequence_display("session.follow", "n").as_deref(),
+            Some("; n")
+        );
+        assert_eq!(
+            overlay.sequence_display("session.done", "e").as_deref(),
+            Some("; e")
+        );
     }
 
     #[test]

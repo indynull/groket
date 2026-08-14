@@ -57,6 +57,7 @@ _NAMED_KEYS: dict[str, str] = {
     "comma": ",",
     "minus": "-",
     "equals": "=",
+    "semicolon": ";",
 }
 
 

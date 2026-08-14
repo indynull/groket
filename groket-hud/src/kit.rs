@@ -309,6 +309,7 @@ mod tests {
             timeline_detail: true,
             awaiting: false,
             tab: crate::model::Tab::Timeline,
+            leader_armed: false,
         });
         let _ = status_footer("ready", false, &table, tea);
         let _ = status_footer(
@@ -320,6 +321,7 @@ mod tests {
                 timeline_detail: false,
                 awaiting: false,
                 tab: crate::model::Tab::Overview,
+                leader_armed: false,
             }),
             tea,
         );

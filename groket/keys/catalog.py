@@ -8,7 +8,7 @@ use :attr:`KeyAction.id`. :attr:`KeyAction.default` is Textual notation
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 # Overlay cannot steal dismiss, activate, focus-traversal, or ``?``.
@@ -65,6 +65,7 @@ class KeyAction:
     :ivar remappable: False for reserved chords (Esc, Enter, Tab, Shift+Tab, ``?``).
     :ivar tui_action: Textual action name, or None when the TUI has no Binding.
     :ivar hud_message: Stable HUD dispatch token, or None when the HUD does not dispatch.
+    :ivar overlay_scopes: Overlay tables that may remap this id (always includes *scope*).
     """
 
     id: str
@@ -74,6 +75,7 @@ class KeyAction:
     remappable: bool
     tui_action: str | None
     hud_message: str | None
+    overlay_scopes: frozenset[ActionScope] = field(default_factory=frozenset)
 
 
 def _normalize_part(part: str) -> str:
@@ -133,9 +135,11 @@ def _a(
     tui_action: str | None = None,
     hud_message: str | None = None,
     remappable: bool = True,
+    overlay_scopes: frozenset[ActionScope] | None = None,
 ) -> KeyAction:
     if chord_is_reserved(default):
         remappable = False
+    scopes = frozenset({scope}) if overlay_scopes is None else frozenset(overlay_scopes) | {scope}
     return KeyAction(
         id=action_id,
         scope=scope,
@@ -144,6 +148,7 @@ def _a(
         remappable=remappable,
         tui_action=tui_action,
         hud_message=hud_message,
+        overlay_scopes=scopes,
     )
 
 
@@ -179,6 +184,7 @@ ACTIONS: tuple[KeyAction, ...] = (
         "j",
         ActionSurface.SHARED,
         hud_message="noop",
+        overlay_scopes=frozenset({ActionScope.HOME, ActionScope.BROWSER}),
     ),
     _a(
         "list.up",
@@ -186,6 +192,7 @@ ACTIONS: tuple[KeyAction, ...] = (
         "k",
         ActionSurface.SHARED,
         hud_message="noop",
+        overlay_scopes=frozenset({ActionScope.HOME, ActionScope.BROWSER}),
     ),
     _a(
         "search.focus",
@@ -218,6 +225,7 @@ ACTIONS: tuple[KeyAction, ...] = (
         ActionSurface.SHARED,
         tui_action="follow_up_sessions",
         hud_message="noop",
+        overlay_scopes=frozenset({ActionScope.HOME, ActionScope.BROWSER}),
     ),
     _a(
         "session.done",
@@ -226,6 +234,7 @@ ACTIONS: tuple[KeyAction, ...] = (
         ActionSurface.SHARED,
         tui_action="mark_sessions_done",
         hud_message="mark_done",
+        overlay_scopes=frozenset({ActionScope.HOME, ActionScope.BROWSER}),
     ),
     _a(
         "pane.notes",

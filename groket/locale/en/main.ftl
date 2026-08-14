@@ -89,6 +89,8 @@ bind-github = 2 GitHub
 
 bind-help = Help
 
+ui-leader = Leader
+
 bind-identity = 1 Identity
 
 bind-jobs = Jobs

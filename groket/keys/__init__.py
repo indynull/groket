@@ -14,6 +14,7 @@ from .catalog import (
     normalize_chord,
 )
 from .overlay import (
+    DEFAULT_LEADER_TIMEOUT_MS,
     KEYS_ENV,
     Keymap,
     OverlayDocument,
@@ -24,17 +25,21 @@ from .overlay import (
     default_keymap,
     format_errors,
     format_keymap_table,
+    format_leader_chord,
     format_occupancy,
     load_keymap,
     occupancy_rows,
     parse_overlay,
     resolve_keys_path,
+    sequence_suffix,
+    sequence_unbound_slot,
     textual_keymap,
 )
 
 __all__ = [
     "ACTIONS",
     "ACTIONS_BY_ID",
+    "DEFAULT_LEADER_TIMEOUT_MS",
     "KEYS_ENV",
     "RESERVED_KEYS",
     "ActionScope",
@@ -51,11 +56,14 @@ __all__ = [
     "default_keymap",
     "format_errors",
     "format_keymap_table",
+    "format_leader_chord",
     "format_occupancy",
     "load_keymap",
     "normalize_chord",
     "occupancy_rows",
     "parse_overlay",
     "resolve_keys_path",
+    "sequence_suffix",
+    "sequence_unbound_slot",
     "textual_keymap",
 ]

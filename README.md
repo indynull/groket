@@ -45,8 +45,12 @@ groket /path/to/work        # work root, traces tree, or one session dir
 
 Optional key diffs: `~/.groket/keys.toml` (`GROKET_KEYS` overrides the path).
 A missing file keeps the catalog defaults. Esc, Enter, Tab, Shift+Tab, and
-`?` are not remappable. The TUI and HUD both use the resolved map for
-footer, help, and dispatch.
+`?` are not remappable. The product default has no leader. An overlay may
+set one printable leader (recommended Colemak: `;`) and bind `leader+X`
+for one extra letter. Copy [`examples/keys/colemak.toml`](examples/keys/colemak.toml)
+to `~/.groket/keys.toml` for home-row `n`/`e` nav with follow-up and Done
+behind the leader. The TUI and HUD both use the resolved map for footer,
+help, and dispatch. The footer shows the leader while it is armed.
 
 ```bash
 groket keys              # resolved table (scope, id, chord, surface)

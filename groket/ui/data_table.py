@@ -22,7 +22,7 @@ from rich.text import Text
 from textual.binding import Binding
 from textual.widgets import DataTable
 
-from groket.keys import load_keymap
+from groket.keys import chord_has_sequence, load_keymap
 
 
 def style_data_table(table: DataTable, *, zebra: bool = True) -> DataTable:
@@ -32,8 +32,12 @@ def style_data_table(table: DataTable, *, zebra: bool = True) -> DataTable:
     keymap = load_keymap()
     down = keymap.binding("list.down").chord
     up = keymap.binding("list.up").chord
-    table._bindings._add_binding(Binding(down, "cursor_down", "Down", show=False, id="list.down"))
-    table._bindings._add_binding(Binding(up, "cursor_up", "Up", show=False, id="list.up"))
+    if not chord_has_sequence(down):
+        table._bindings._add_binding(
+            Binding(down, "cursor_down", "Down", show=False, id="list.down")
+        )
+    if not chord_has_sequence(up):
+        table._bindings._add_binding(Binding(up, "cursor_up", "Up", show=False, id="list.up"))
     return table
 
 
