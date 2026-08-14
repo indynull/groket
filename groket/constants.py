@@ -14,6 +14,22 @@ INTERRUPTED_MARKER_FILENAME = "groket-interrupted.json"  # on-disk marker
 LOG_BUFFER_MAXLEN = 8000
 LOG_TAIL_MAXLEN = 4000
 MAX_RUN_HISTORY = 20
+# Parse-cache caps (:mod:`groket.bounded_cache`). Entries are keyed per session,
+# so a long-lived owner over a large bucket pins every session it ever parsed
+# unless the cold tail is dropped. Sized by entry weight, heaviest first.
+# Finalized timeline plus incremental scan state: two event lists per session.
+TIMELINE_CACHE_MAXSIZE = 32
+TIMELINE_CACHE_MAX_ENV = "GROKET_TIMELINE_CACHE_MAX"
+# Rendered turn segments per session.
+TURN_VIEW_CACHE_MAXSIZE = 32
+# Overview payload per session.
+OVERVIEW_CACHE_MAXSIZE = 64
+# Marker events per session.
+RUNTIME_MARKERS_CACHE_MAXSIZE = 256
+# One system prompt string per session.
+SYSTEM_PROMPT_CACHE_MAXSIZE = 128
+# Scalars only; sized to cover a whole bucket so the session list stays cheap.
+LIST_RUNTIME_CACHE_MAXSIZE = 2048
 # Activity bar (cheap counters — not a traces poller).
 ACTIVITY_BAR_INTERVAL = 5.0
 # Spinner poll while *build/extract/analyze* busy — never for mere "running".

@@ -87,6 +87,34 @@ reopen while serve stays up: catalog I/O should not be the delay — import
   is 45 s; timeout is a toast, not a worker crash.
 - Catalog I/O for the home list runs on `@work(thread=True)`, not the
   Textual message pump. First table paint is the first page only.
+- Parse caches are bounded (`groket/bounded_cache.py`). Entries are keyed
+  per session, so an owner left open over a large bucket used to pin every
+  session it ever parsed: measured over a 554-session bucket, 200 sessions
+  cost +132 MB and were still climbing linearly. Bounded, the same 200 cost
+  +49 MB and 400 plateau at +71 MB. Recency updates on read and on write,
+  so the sessions a live refresh keeps touching stay resident.
+
+## Leaving it running
+
+`groket serve` and the TUI are meant to sit open for a working day. What
+bounds memory in that state:
+
+| Cache | Cap | Entry weight |
+|-------|-----|--------------|
+| `_timeline_cache` | 32 | Finalized timeline + incremental scan state (two event lists) |
+| `_turn_view_cache` | 32 | Rendered turn segments |
+| `_overview_cache` | 64 | Overview payload |
+| `_runtime_markers_cache` | 256 | Marker events |
+| `_system_prompt_cache` | 128 | One string |
+| `_list_runtime_cache` | 2048 | Scalars; sized to cover a whole bucket |
+
+Raise the heaviest one with `GROKET_TIMELINE_CACHE_MAX` when an operator
+browses far more than 32 sessions at a time and has the memory to spare.
+The floor is 2 so a live session and the fork parent it merges always fit.
+
+Measure it the way the rest of this file is measured — current `VmRSS`
+from `/proc/self/status`, not `ru_maxrss`, which is a high-water mark and
+never falls.
 
 ## Remaining goals
 

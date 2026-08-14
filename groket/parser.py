@@ -13,7 +13,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from .constants import INCOMPLETE_STALE_SECONDS, INTERRUPTED_MARKER_FILENAME
+from .bounded_cache import BoundedCache
+from .constants import (
+    INCOMPLETE_STALE_SECONDS,
+    INTERRUPTED_MARKER_FILENAME,
+    LIST_RUNTIME_CACHE_MAXSIZE,
+    RUNTIME_MARKERS_CACHE_MAXSIZE,
+    SYSTEM_PROMPT_CACHE_MAXSIZE,
+    TIMELINE_CACHE_MAX_ENV,
+    TIMELINE_CACHE_MAXSIZE,
+)
 from .core_scan import keep_updates_line as keep_updates_line_native
 from .core_scan import keep_updates_line_py
 from .models import (
@@ -104,16 +113,22 @@ class _UpdatesScanState:
         self.result_by_call = result_by_call if result_by_call is not None else {}
 
 
-_timeline_cache: dict[str, tuple[TimelineStamp, list[TraceEvent], _UpdatesScanState | None]] = {}
+_timeline_cache: BoundedCache[tuple[TimelineStamp, list[TraceEvent], _UpdatesScanState | None]] = (
+    BoundedCache(TIMELINE_CACHE_MAXSIZE, env_var=TIMELINE_CACHE_MAX_ENV)
+)
 # In-flight parse keyed by session cache_key only (not stamp). Incremental
 # scans mutate shared ``_UpdatesScanState`` in place; only one body may run
 # per session at a time. Waiters re-check stamp after the flight finishes.
 _timeline_inflight: dict[str, Future[list[TraceEvent]]] = {}
 _timeline_inflight_lock = threading.Lock()
 # events.jsonl path -> (mtime_ns, size, markers, turn_outcome, loop_count)
-_runtime_markers_cache: dict[str, tuple[int, int, list[TraceEvent], str, int]] = {}
+_runtime_markers_cache: BoundedCache[tuple[int, int, list[TraceEvent], str, int]] = BoundedCache(
+    RUNTIME_MARKERS_CACHE_MAXSIZE
+)
 # events.jsonl path -> (mtime_ns, size, turn_outcome, loop_count, open_after_completed)
-_list_runtime_cache: dict[str, tuple[int, int, str, int, bool]] = {}
+_list_runtime_cache: BoundedCache[tuple[int, int, str, int, bool]] = BoundedCache(
+    LIST_RUNTIME_CACHE_MAXSIZE
+)
 _LIST_MARKER_NEEDLES = (
     '"turn_started"',
     '"turn_ended"',
@@ -1270,7 +1285,7 @@ def _drop_empty_turn_starts(events: list[TraceEvent]) -> list[TraceEvent]:
     return [ev for i, ev in enumerate(events) if i not in drop]
 
 
-_system_prompt_cache: dict[str, tuple[float, str]] = {}
+_system_prompt_cache: BoundedCache[tuple[float, str]] = BoundedCache(SYSTEM_PROMPT_CACHE_MAXSIZE)
 
 
 def load_system_prompt_text(session_dir: Path) -> str:

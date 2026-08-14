@@ -13,6 +13,8 @@ from concurrent.futures import Future
 from pathlib import Path
 
 from .. import event_types as et
+from ..bounded_cache import BoundedCache
+from ..constants import OVERVIEW_CACHE_MAXSIZE, TURN_VIEW_CACHE_MAXSIZE
 from ..models import JsonObject, JsonValue, SessionMeta, TraceEvent, as_json_object
 from ..notes import load_schema, notes_snapshot
 from ..parser import (
@@ -47,14 +49,16 @@ DEFAULT_FINDINGS_LIMIT = 80
 # multi‑MB session overview (~12–30s each). Join one flight per path and cache
 # by timeline/notes/findings inputs so warm re-polls stay cheap.
 _OverviewStamp = tuple[TimelineStamp, str, tuple[tuple[str, int, int], ...]]
-_overview_cache: dict[str, tuple[_OverviewStamp, JsonObject]] = {}
+_overview_cache: BoundedCache[tuple[_OverviewStamp, JsonObject]] = BoundedCache(
+    OVERVIEW_CACHE_MAXSIZE
+)
 _overview_inflight: dict[str, Future[JsonObject]] = {}
 _overview_inflight_lock = threading.Lock()
 
 # Warm paged session/timeline must not re-segment multi‑k event lists.
 # Keyed by session path; invalidated when session_timeline_stamp changes.
 _TurnViewCache = tuple[TimelineStamp, list[TurnSegment], dict[int, int]]
-_turn_view_cache: dict[str, _TurnViewCache] = {}
+_turn_view_cache: BoundedCache[_TurnViewCache] = BoundedCache(TURN_VIEW_CACHE_MAXSIZE)
 _turn_view_lock = threading.Lock()
 
 # Tool families aligned with ``ui.styles.tool_family`` (domain copy — no UI import).
