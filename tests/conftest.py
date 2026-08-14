@@ -398,6 +398,7 @@ def _isolate_all_config_dirs(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
     monkeypatch.setenv("GIT_ASKPASS", "echo")
     monkeypatch.setenv("GCM_INTERACTIVE", "never")
+    monkeypatch.delenv("GROKET_KEYS", raising=False)
 
     # pathlib.Path.home() — used widely for ~/.grok and fallbacks
     monkeypatch.setattr(_Path, "home", classmethod(lambda cls: user_home))

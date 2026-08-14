@@ -4,7 +4,7 @@ Default: interactive TUI. Optional path (``-P`` or leading argument) selects
 work root, traces tree, or session (default ``~/.groket/work``).
 
 Commands: ``serve`` (control owner), ``hud``, ``batch``, ``rules``, ``gen``,
-``doctor``, ``editor``.
+``doctor``, ``editor``, ``keys``.
 
 Shell completion: ``uv run groket --install-completion``
 """
@@ -34,7 +34,8 @@ app = typer.Typer(
         "[cyan]batch[/cyan] headless tasks · "
         "[cyan]rules[/cyan] / [cyan]gen[/cyan] detection · "
         "[cyan]doctor[/cyan] host checks · "
-        "[cyan]editor[/cyan] Emacs/Neovim pack paths."
+        "[cyan]editor[/cyan] Emacs/Neovim pack paths · "
+        "[cyan]keys[/cyan] resolved bindings."
     ),
     no_args_is_help=False,
     add_completion=True,
@@ -106,6 +107,7 @@ TOOL_COMMANDS = frozenset(
         "tui",
         "doctor",
         "editor",
+        "keys",
     }
 )
 
@@ -843,6 +845,49 @@ def cmd_rules_schema(
         typer.echo(text, nl=False)
     else:
         typer.echo(f"Wrote {out}")
+
+
+@app.command("keys")
+def cmd_keys(
+    occupancy: Annotated[
+        bool,
+        typer.Option(
+            "--occupancy",
+            help="List taken chords per scope (normalized).",
+        ),
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Load the overlay and exit 1 on error or conflict.",
+        ),
+    ] = False,
+) -> None:
+    """Print the resolved key table (catalog defaults plus optional keys.toml)."""
+    from .keys.overlay import (
+        format_errors,
+        format_keymap_table,
+        format_occupancy,
+        load_keymap,
+    )
+
+    keymap = load_keymap()
+    if check:
+        if keymap.ok:
+            label = str(keymap.path) if keymap.loaded_overlay else "defaults"
+            typer.echo(f"OK  {label}")
+            raise typer.Exit(0)
+        typer.echo(format_errors(keymap), err=True)
+        raise typer.Exit(1)
+    if not keymap.ok:
+        typer.echo(format_errors(keymap), err=True)
+    if occupancy:
+        typer.echo(format_occupancy(keymap))
+    else:
+        typer.echo(format_keymap_table(keymap))
+    if not keymap.ok:
+        raise typer.Exit(1)
 
 
 @app.command("doctor")

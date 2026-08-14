@@ -13,6 +13,7 @@ from groket.paths import (
     resolve_work_and_traces,
     run_name,
     strip_run_prefix,
+    user_keys_path,
 )
 
 
@@ -135,6 +136,11 @@ class TestAppHome:
         monkeypatch.setattr("groket.paths.APP_HOME", fake)
         result = app_config_path()
         assert result == fake / "config.json"
+
+    def test_user_keys_path(self, tmp_path, monkeypatch):
+        fake = tmp_path / "app-home"
+        monkeypatch.setattr("groket.paths.APP_HOME", fake)
+        assert user_keys_path() == fake / "keys.toml"
 
 
 from pathlib import Path

@@ -3,7 +3,7 @@
 **Config home** (``APP_HOME`` / ``~/.groket``) holds identity and extensions —
 config, personas, rules, detectors, analysis plugins, tasks scaffolds, analysis
 cache, exported reports, flag fallbacks, notes schema / notes fallbacks,
-optional ``models.yaml``.
+optional ``models.yaml``, optional ``keys.toml``.
 
 **Work dir** holds only session / run data — traces, run configs, feedback
 cache, Docker build contexts for launches, batch result log. Default work dir
@@ -60,6 +60,11 @@ def app_config_path() -> Path:
 def user_models_path() -> Path:
     """``~/.groket/models.yaml`` — optional preferred model ordering for batch."""
     return APP_HOME / "models.yaml"
+
+
+def user_keys_path() -> Path:
+    """``~/.groket/keys.toml`` — optional key overlay (diffs over the catalog)."""
+    return APP_HOME / "keys.toml"
 
 
 def reports_dir() -> Path:

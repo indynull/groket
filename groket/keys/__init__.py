@@ -1,4 +1,4 @@
-"""Shared key action catalog for TUI bindings and HUD help rows."""
+"""Shared key action catalog and optional keys.toml overlay."""
 
 from __future__ import annotations
 
@@ -13,15 +13,47 @@ from .catalog import (
     chord_is_reserved,
     normalize_chord,
 )
+from .overlay import (
+    KEYS_ENV,
+    Keymap,
+    OverlayDocument,
+    OverlayError,
+    OverlayErrorKind,
+    ResolvedBinding,
+    chord_has_sequence,
+    default_keymap,
+    format_errors,
+    format_keymap_table,
+    format_occupancy,
+    load_keymap,
+    occupancy_rows,
+    parse_overlay,
+    resolve_keys_path,
+)
 
 __all__ = [
     "ACTIONS",
     "ACTIONS_BY_ID",
+    "KEYS_ENV",
     "RESERVED_KEYS",
     "ActionScope",
     "ActionSurface",
     "KeyAction",
+    "Keymap",
+    "OverlayDocument",
+    "OverlayError",
+    "OverlayErrorKind",
+    "ResolvedBinding",
     "action_by_id",
+    "chord_has_sequence",
     "chord_is_reserved",
+    "default_keymap",
+    "format_errors",
+    "format_keymap_table",
+    "format_occupancy",
+    "load_keymap",
     "normalize_chord",
+    "occupancy_rows",
+    "parse_overlay",
+    "resolve_keys_path",
 ]

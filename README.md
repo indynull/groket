@@ -35,12 +35,22 @@ uv tool upgrade groket
 
 | Root | Default | Holds |
 |------|---------|--------|
-| Config home | `~/.groket` | `config.json`, personas, detectors, rules, plugins, prefs |
+| Config home | `~/.groket` | `config.json`, personas, detectors, rules, plugins, prefs, optional `keys.toml` |
 | Work root | `~/.groket/work` | `runs/traces/`, recipes, Docker contexts, batch results |
 
 ```bash
 groket                      # default work root
 groket /path/to/work        # work root, traces tree, or one session dir
+```
+
+Optional key diffs: `~/.groket/keys.toml` (`GROKET_KEYS` overrides the path).
+A missing file keeps the catalog defaults. Esc, Enter, Tab, Shift+Tab, and
+`?` are not remappable.
+
+```bash
+groket keys              # resolved table (scope, id, chord, surface)
+groket keys --occupancy  # taken chords per scope
+groket keys --check      # exit 1 on overlay errors
 ```
 
 ## Eval and Host
@@ -255,4 +265,4 @@ make test
 make ci              # lint + schema-check + hud-check + examples-check + test
 ```
 
-Also: `groket doctor`, `groket gen …`, `groket rules validate`.
+Also: `groket doctor`, `groket gen …`, `groket rules validate`, `groket keys`.

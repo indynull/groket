@@ -23,6 +23,7 @@ def test_help_lists_main_commands() -> None:
     assert "hud" in out
     assert "tui" in out
     assert "editor" in out
+    assert "keys" in out
     assert "self-test" not in out
     assert "emacs-path" not in out or "editor" in out
     assert "generator" not in out
@@ -31,6 +32,7 @@ def test_help_lists_main_commands() -> None:
     assert runner.invoke(app, ["batch", "--help"]).exit_code == 0
     assert runner.invoke(app, ["serve", "--help"]).exit_code == 0
     assert runner.invoke(app, ["editor", "--help"]).exit_code == 0
+    assert runner.invoke(app, ["keys", "--help"]).exit_code == 0
 
 
 def test_tool_commands() -> None:
@@ -44,6 +46,7 @@ def test_tool_commands() -> None:
             "tui",
             "doctor",
             "editor",
+            "keys",
         }
     )
 
