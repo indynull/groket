@@ -912,6 +912,32 @@ def cmd_config_schema(
         typer.echo(f"Wrote {out}")
 
 
+@app.command("export-host")
+def cmd_export_host(
+    out: Annotated[
+        Path,
+        typer.Option(
+            "-o",
+            "--out",
+            help="JSON path for names and mtimes (host archive only).",
+        ),
+    ],
+    host_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--host-root",
+            help="Override ~/.grok/sessions.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Write a host-session catalog export. Does not start or reconfigure serve."""
+    from .session.mtime_export import write_host_catalog_export
+
+    path = write_host_catalog_export(out, host_root=host_root)
+    typer.echo(str(path))
+
+
 @app.command("keys")
 def cmd_keys(
     occupancy: Annotated[

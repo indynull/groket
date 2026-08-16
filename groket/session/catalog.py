@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..models import JsonObject, JsonValue, SessionMeta
 from ..parser import load_session_meta_list, session_trace_mtime
+from .classify import classify_title
 from .sources import (
     ORIGIN_HOST,
     ORIGIN_WORK,
@@ -168,7 +169,7 @@ def session_catalog_row(
     return {
         "sessionId": session_id,
         "path": path_str,
-        "title": meta.title or "",
+        "title": classify_title(meta.title or ""),
         "label": label if label is not None else meta.label,
         "model": meta.model_display,
         "status": meta.list_status_label(),
