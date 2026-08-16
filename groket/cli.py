@@ -919,7 +919,7 @@ def cmd_export_host(
         typer.Option(
             "-o",
             "--out",
-            help="JSON path for names and mtimes (host archive only).",
+            help="JSON path for the host catalog snapshot (summary + signals).",
         ),
     ],
     host_root: Annotated[
@@ -931,7 +931,7 @@ def cmd_export_host(
         ),
     ] = None,
 ) -> None:
-    """Write a host-session catalog export. Does not start or reconfigure serve."""
+    """Write the host catalog snapshot serve uses. Does not start serve."""
     from .session.mtime_export import write_host_catalog_export
 
     path = write_host_catalog_export(out, host_root=host_root)

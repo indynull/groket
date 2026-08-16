@@ -97,6 +97,9 @@ def test_list_session_catalog_follows_show_host_config(
     cfg = tmp_path / "config.toml"
     cfg.write_text("show_host_sessions = true\n", encoding="utf-8")
     monkeypatch.setattr("groket.paths.app_config_path", lambda: cfg)
+    cache = tmp_path / "host-catalog-cache"
+    cache.mkdir()
+    monkeypatch.setattr("groket.session.mtime_export.analysis_cache_dir", lambda: cache)
     from groket.config import invalidate_config_cache
 
     invalidate_config_cache()

@@ -15,8 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..models import JsonObject, JsonValue, SessionMeta
-from ..parser import load_session_meta_list, session_trace_mtime
-from .classify import classify_title
+from ..parser import load_host_list_meta, load_session_meta_list, session_trace_mtime
+from .mtime_export import default_host_catalog_cache, load_or_rebuild_host_catalog
 from .sources import (
     ORIGIN_HOST,
     ORIGIN_WORK,
@@ -143,7 +143,10 @@ def session_catalog_row(
     :returns: Wire row mapping, or None when meta cannot be loaded.
     """
     try:
-        meta = load_session_meta_list(session_dir, origin=origin)
+        if origin == ORIGIN_HOST:
+            meta = load_host_list_meta(session_dir)
+        else:
+            meta = load_session_meta_list(session_dir, origin=origin)
     except Exception:
         logger.debug("catalog meta failed for %s", session_dir, exc_info=True)
         return None
@@ -169,7 +172,7 @@ def session_catalog_row(
     return {
         "sessionId": session_id,
         "path": path_str,
-        "title": classify_title(meta.title or ""),
+        "title": (meta.title or "").strip(),
         "label": label if label is not None else meta.label,
         "model": meta.model_display,
         "status": meta.list_status_label(),
@@ -200,16 +203,19 @@ def list_session_catalog(
     traces_path: Path | None = None,
     include_host: bool | None = None,
     host_root: Path | None = None,
+    host_catalog_cache: Path | None = None,
 ) -> list[JsonObject]:
     """Scan catalog roots and return wire-shaped rows for ``session/list``.
 
-    Row meta loads are independent and I/O-bound; build them in a small
-    thread pool so hundreds of sessions stay under the HUD control timeout.
+    Work/eval rows load list-meta in a small thread pool. Host rows use
+    summary.json + signals.json and a stamp-gated snapshot so a second
+    list does not reopen those files.
 
     :param work_dir: Work root owning eval traces.
     :param traces_path: Optional traces path override.
     :param include_host: Host inclusion (True/False force; None = config pref).
     :param host_root: Optional host root override (tests).
+    :param host_catalog_cache: Optional snapshot path (tests).
     :returns: Catalog rows sorted newest activity first (``sortEpoch`` desc).
     """
     roots = catalog_scan_roots(
@@ -221,17 +227,39 @@ def list_session_catalog(
     dirs = list(collect_session_dirs(roots))
     if not dirs:
         return []
-    # Cap workers: list meta is mostly sequential file reads; extra threads
-    # only fight the GIL and the disk on a large host catalog.
-    workers = min(4, max(1, len(dirs)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        built = list(
-            pool.map(
-                lambda item: session_catalog_row(item[0], origin=item[1]),
-                dirs,
+    work_dirs = [(path, origin) for path, origin in dirs if origin != ORIGIN_HOST]
+    host_dirs = [path for path, origin in dirs if origin == ORIGIN_HOST]
+    rows: list[JsonObject] = []
+    if work_dirs:
+        workers = min(4, max(1, len(work_dirs)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            built = list(
+                pool.map(
+                    lambda item: session_catalog_row(item[0], origin=item[1]),
+                    work_dirs,
+                )
             )
-        )
-    rows = [row for row in built if row is not None]
+        rows.extend(row for row in built if row is not None)
+    if host_dirs:
+        host_paths = [root.path for root in roots if root.origin == ORIGIN_HOST]
+        seen_host: set[str] = set()
+        for hroot in host_paths:
+            key = str(hroot)
+            if key in seen_host:
+                continue
+            seen_host.add(key)
+            dest = (
+                host_catalog_cache
+                if host_catalog_cache is not None
+                else default_host_catalog_cache(hroot)
+            )
+            rows.extend(
+                load_or_rebuild_host_catalog(
+                    hroot,
+                    dest=dest,
+                    build_row=lambda sd: session_catalog_row(sd, origin=ORIGIN_HOST),
+                )
+            )
     rows.sort(
         key=lambda r: (
             -catalog_row_sort_epoch(r),

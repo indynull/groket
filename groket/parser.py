@@ -2032,7 +2032,7 @@ def _git_remote_url(raw: object) -> str:
     return ""
 
 
-def _load_summary(meta: SessionMeta, session_dir: Path) -> None:
+def _load_summary(meta: SessionMeta, session_dir: Path, *, infer_title: bool = True) -> None:
     """Populate meta from summary.json, then first user ask if still untitled."""
     summary_file = session_dir / "summary.json"
     if summary_file.exists():
@@ -2064,8 +2064,27 @@ def _load_summary(meta: SessionMeta, session_dir: Path) -> None:
                             break
         except (json.JSONDecodeError, KeyError, TypeError, OSError):
             pass
-    if not (meta.title or "").strip():
+    if infer_title and not (meta.title or "").strip():
         meta.title = _title_from_session_files(session_dir)
+
+
+def load_host_list_meta(session_dir: Path) -> SessionMeta:
+    """Host home-list meta: ``summary.json`` and ``signals.json`` only.
+
+    Does not read ``events.jsonl``, tail ``updates.jsonl``, infer a title
+    from the trace, or consult the turn gate. Opening a session still uses
+    :func:`load_session_meta`.
+    """
+    meta = SessionMeta(
+        session_id=session_dir.name,
+        session_dir=session_dir,
+        origin="host",
+    )
+    _load_summary(meta, session_dir, infer_title=False)
+    _load_signals(meta, session_dir)
+    if not meta.num_events and meta.num_messages:
+        meta.num_events = int(meta.num_messages)
+    return meta
 
 
 def _load_signals(meta: SessionMeta, session_dir: Path) -> None:
