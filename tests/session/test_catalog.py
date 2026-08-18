@@ -169,6 +169,32 @@ def test_resolve_by_id_does_not_load_meta_for_other_sessions(
     assert calls == []
 
 
+def test_resolve_nested_host_id_skips_full_session_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host session id uses the native two-level layout without a tree walk."""
+    from groket.session import catalog as catalog_mod
+
+    work = tmp_path / "work"
+    (work / "runs" / "traces").mkdir(parents=True)
+    host = tmp_path / "host-sessions"
+    session = _write_session(host / "%2Fproject", "host-direct-id")
+
+    def _unexpected_collect(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("full session collection must not resolve a nested host id")
+
+    monkeypatch.setattr(catalog_mod, "collect_session_dirs", _unexpected_collect)
+
+    found = resolve_session_reference(
+        "host-direct-id",
+        work,
+        include_host=True,
+        host_root=host,
+    )
+
+    assert found == session.resolve()
+
+
 def test_catalog_cache_resolves_id_from_warm_rows(tmp_path: Path) -> None:
     """Serve must resolve session ids from the warm catalog, not a second walk."""
     from groket.session.catalog import SessionCatalogCache
