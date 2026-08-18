@@ -669,6 +669,113 @@ Pattern: skip
 
 
 @pytest.mark.asyncio
+async def test_analysis_changed_clears_report_loading_while_open(tmp_path: Path) -> None:
+    """Control analysis/changed must clear pending so Report is not stuck loading.
+
+    Repro: open a session, analysis finishes on the owner while the browser is
+    already open on Report — results used to land under permanent loading overlays
+    until the operator left and re-entered the session.
+    """
+    from textual.containers import Vertical
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    sess = _write_multi_turn_session(traces)
+    finding = Finding(
+        id="f1",
+        title="Stuck report finding",
+        severity=Severity.HIGH,
+        plugin_id="engine",
+        detail="detail",
+    )
+    results = {
+        "engine": AnalysisResult(
+            session_id=sess.name,
+            session_dir=str(sess),
+            analyzer_id="engine",
+            ok=True,
+            summary="1 finding",
+            findings=[finding],
+            artifacts={"report": "# Report\n\n## Issue\n\nWhat: Stuck report finding\n"},
+        )
+    }
+    app = _host_app(work, traces)
+
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = await _open_browser(app, pilot, sess)
+        await _activate_tab(pilot, screen, "tab-reports")
+        screen._analysis_pending = True
+        screen._show_analysis_pending()
+        await pilot.pause()
+        assert screen.query_one("#reports-scroll").loading is True
+
+        class _CachedSvc:
+            def load_cached_all(self, *_a: object, **_k: object) -> dict:
+                return results
+
+        app._analysis_svc = lambda: _CachedSvc()  # type: ignore[method-assign]
+        app._control_analysis_changed_ui(sess.name)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert screen._analysis_pending is False
+        assert screen.query_one("#reports-scroll").loading is False
+        assert len(screen._findings) == 1
+        section = screen.query_one("#report-section-plugin-engine", Vertical)
+        assert section.loading is False
+        plains = [p.get_plain_text() for p in section.query(SelectableStatic)]
+        joined = "\n".join(plains)
+        assert "Stuck report finding" in joined
+
+
+@pytest.mark.asyncio
+async def test_apply_analysis_results_paints_report_from_empty(tmp_path: Path) -> None:
+    """Home/batch finish while the browser is open paints Report without re-entry."""
+    from textual.containers import Vertical
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    sess = _write_multi_turn_session(traces)
+    finding = Finding(
+        id="f2",
+        title="Batch finding",
+        severity=Severity.MEDIUM,
+        plugin_id="engine",
+        detail="d",
+    )
+    results = {
+        "engine": AnalysisResult(
+            session_id=sess.name,
+            session_dir=str(sess),
+            analyzer_id="engine",
+            ok=True,
+            summary="1",
+            findings=[finding],
+            artifacts={"report": "## Body\n\nbatch body text\n"},
+        )
+    }
+    app = _host_app(work, traces)
+
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = await _open_browser(app, pilot, sess)
+        await _activate_tab(pilot, screen, "tab-reports")
+        screen._analysis_pending = True
+        screen._show_analysis_pending()
+        await pilot.pause()
+
+        app._push_analysis_results_to_open_browser(sess, results)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert screen._analysis_pending is False
+        assert screen.query_one("#reports-scroll").loading is False
+        section = screen.query_one("#report-section-plugin-engine", Vertical)
+        joined = "\n".join(p.get_plain_text() for p in section.query(SelectableStatic))
+        assert "Batch finding" in joined
+        assert "batch body text" in joined
+
+
+@pytest.mark.asyncio
 async def test_browser_analysis_pending_collapses_report_panes(tmp_path: Path) -> None:
     """Pending analysis shows LoadingIndicator and widget.loading on report cards."""
     from groket.ui.selectable_static import SelectableStatic

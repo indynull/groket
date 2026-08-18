@@ -269,7 +269,7 @@ JOBS_MODAL: tuple[Binding, ...] = (
     _b("enter", "open_session", U.bind_open(), id="session.open", show=True),
     _b("o", "open_session", U.bind_open(), id="jobs.open", show=False),
     _b("s", "open_share", U.bind_share(), id="session.share", show=True),
-    _b("c", "clear_logs", U.bind_clear_logs(), id="jobs.clear_logs", show=False),
+    _b("c", "clear_logs", U.bind_clear_logs(), id="jobs.clear_logs", show=True),
 ) + tab_nav_bindings(3)
 
 

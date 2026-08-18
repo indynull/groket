@@ -67,10 +67,14 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
         self._tabs_mounted: set[str] = set()
         self._known_rows: set[str] = set()
         self._hydrating = False
+        self._activity_seq = -1
+        self._control_log_sig: tuple[str, int, int] = ("", 0, 0)
+        # Byte offset in the detached serve log after Clear (only show newer lines).
+        self._control_log_skip_bytes = 0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="jobs-modal"):
-            yield Static("[bold]Jobs[/bold]", id="jobs-modal-title")
+            yield Static(id="jobs-modal-title")
             with TabbedContent(id="jobs-tabs"):
                 with TabPane(U.jobs_tab(), id="jobs-tab-status"):
                     yield Static("", id="jobs-app-status")
@@ -95,6 +99,10 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
                 yield Button(U.close_btn(), variant="primary", id="jobs-close-btn")
 
     def on_mount(self) -> None:
+        with suppress(Exception):
+            # Markup on Static (not Text()); Fluent value stays plain.
+            title = t("jobs")
+            self.query_one("#jobs-modal-title", Static).update("[bold]" + title + "[/bold]")
         st = self.query_one("#jobs-status-table", DataTable)
         style_data_table(st)
         st.add_columns(
@@ -113,18 +121,65 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
             t("ui-run-1"), t("ui-status"), t("ui-containers"), t("ui-elapsed"), t("ui-error-3")
         )
         self._activity_seq = -1
+        self._control_log_sig = ("", 0, 0)
         self._subscribe()
         self._hydrate_from_manager()
         self._refresh_app_jobs()
         self._refresh_activity_log()
-        self.set_interval(0.1, self._refresh_activity_log)
+        self.set_interval(0.25, self._refresh_activity_log)
         focus_primary_list(st)
 
     def on_unmount(self) -> None:
         self._unsubscribe()
 
-    def _refresh_activity_log(self) -> None:
-        """Paint analysis/refresh pool ActivityLog into the Activity tab."""
+    def _control_log_path(self) -> Path | None:
+        """Detached ``groket serve`` log next to the control socket, if any."""
+        sock = getattr(self.app, "_control_socket", None)
+        if sock is None:
+            return None
+        try:
+            from ...integrations.daemon import control_log_path
+
+            path = control_log_path(Path(sock))
+        except Exception:
+            return None
+        return path if path.is_file() else None
+
+    def _control_log_signature(self) -> tuple[str, int, int]:
+        """``(path, mtime_ns, size)`` for the serve log, or empty."""
+        path = self._control_log_path()
+        if path is None:
+            return ("", 0, 0)
+        try:
+            st = path.stat()
+            return (
+                str(path),
+                int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))),
+                int(st.st_size),
+            )
+        except OSError:
+            return ("", 0, 0)
+
+    def _read_control_log_tail(self, *, max_lines: int = 120) -> list[str]:
+        """Lines from the serve log after the last Clear offset."""
+        path = self._control_log_path()
+        if path is None:
+            return []
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return []
+        skip = max(0, int(self._control_log_skip_bytes or 0))
+        if skip >= len(data):
+            return []
+        text = data[skip:].decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        if max_lines > 0:
+            return lines[-max_lines:]
+        return lines
+
+    def _refresh_activity_header(self) -> None:
+        """Inflight counts on the Activity help line (cheap; every tick)."""
         from ...job_pools import (
             analysis_inflight,
             get_activity_log,
@@ -134,29 +189,43 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
         )
 
         log = get_activity_log()
-        seq = log.seq
-        if seq == getattr(self, "_activity_seq", -1):
-            # Still refresh header line for inflight counts
-            pass
-        self._activity_seq = seq
         try:
             help_w = self.query_one("#jobs-activity-help", Static)
-            help_w.update(
-                t(
-                    "jobs-activity-status",
-                    analysis=analysis_inflight(),
-                    analysis_workers=get_analysis_pool().max_workers,
-                    refresh=refresh_inflight(),
-                    refresh_workers=get_live_refresh_pool().max_workers,
-                    spin=log.spinner_frame() if (analysis_inflight() or refresh_inflight()) else "",
-                )
-            )
+        except Exception:
+            return
+        ctrl = self._control_log_path()
+        base = t(
+            "jobs-activity-status",
+            analysis=analysis_inflight(),
+            analysis_workers=get_analysis_pool().max_workers,
+            refresh=refresh_inflight(),
+            refresh_workers=get_live_refresh_pool().max_workers,
+            spin=log.spinner_frame() if (analysis_inflight() or refresh_inflight()) else "",
+        )
+        if ctrl is not None:
+            help_w.update(join_ui(base, t("jobs-activity-control-path", path=str(ctrl)), sep="\n"))
+        else:
+            help_w.update(join_ui(base, t("jobs-activity-no-control"), sep="\n"))
+
+    def _refresh_activity_log(self) -> None:
+        """Paint TUI pool ActivityLog + optional serve log tail into Activity."""
+        from datetime import datetime
+
+        from ...job_pools import get_activity_log
+
+        log = get_activity_log()
+        seq = log.seq
+        ctrl_sig = self._control_log_signature()
+        self._refresh_activity_header()
+        if seq == self._activity_seq and ctrl_sig == self._control_log_sig:
+            return
+        self._activity_seq = seq
+        self._control_log_sig = ctrl_sig
+        try:
             rich = self.query_one("#jobs-activity-log", RichLog)
         except Exception:
             return
         rich.clear()
-        from datetime import datetime
-
         for entry in log.snapshot(limit=200):
             ts = datetime.fromtimestamp(entry.ts).strftime("%H:%M:%S")
             kind = entry.kind
@@ -164,12 +233,23 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
                 "analysis": "cyan",
                 "refresh": "yellow",
                 "system": "dim",
+                "control": "magenta",
             }.get(kind, "")
             line = Text()
             line.append(f"{ts} ", style="dim")
             line.append(f"[{kind}] ", style=style or "bold")
             line.append(entry.message)
             rich.write(line)
+        ctrl_lines = self._read_control_log_tail(max_lines=120)
+        if ctrl_lines:
+            sep = Text()
+            sep.append(t("jobs-activity-control-header"), style="bold magenta")
+            rich.write(sep)
+            for raw in ctrl_lines:
+                line = Text()
+                line.append("[control] ", style="magenta")
+                line.append(raw.rstrip("\n"))
+                rich.write(line)
 
     def action_show_help(self) -> None:
         notify_help(self)
@@ -260,6 +340,9 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
                 app.notify(t("notify-open-session-failed", exc=str(exc)), severity="error")
 
     def action_clear_logs(self) -> None:
+        """Clear Logs panes, Activity ring, retained run buffers, and serve-log view offset."""
+        from ...job_pools import get_activity_log
+
         with suppress(Exception):
             self.query_one("#jobs-logs-all", RichLog).clear()
         for name in list(self._log_buffer.keys()):
@@ -268,6 +351,20 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
             log_id = "jobs-log-" + tab_id.removeprefix("jobs-log-tab-")
             with suppress(Exception):
                 self.query_one(f"#{log_id}", RichLog).clear()
+        with suppress(Exception):
+            self.query_one("#jobs-activity-log", RichLog).clear()
+        get_activity_log().clear()
+        self._activity_seq = -1
+        with suppress(Exception):
+            self.run_manager.clear_captured_logs()
+        path = self._control_log_path()
+        if path is not None:
+            with suppress(OSError):
+                self._control_log_skip_bytes = int(path.stat().st_size)
+        else:
+            self._control_log_skip_bytes = 0
+        self._control_log_sig = ("", 0, 0)
+        self._refresh_activity_log()
 
     @on(Button.Pressed, "#jobs-close-btn")
     def _btn_close(self) -> None:
@@ -394,7 +491,7 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
         latest = self.run_manager.latest()
         rid = latest.run_id if latest else "—"
         batches = self.run_manager.active_batch_ids
-        batch_bit = f"batch={batches[0][:14]}" if batches else ""
+        batch_bit = f" batch={batches[0][:14]}" if batches else ""
         lines.append(
             t(
                 "jobs-banner-runs",
@@ -403,28 +500,30 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
             )
             + batch_bit
         )
-        if batches:
-            lines.append("")
-        fb_busy = bool(getattr(app, "_feedback_batch_busy", False))
-        lines.append(
-            t("ui-feedback-batch") + ("[yellow]running[/yellow]" if fb_busy else "[dim]idle[/dim]")
-        )
         with suppress(Exception):
-            meta_only = getattr(app, "_meta_only", None) or []
-            analyzed = getattr(app, "_analyzed", None) or {}
-            total = len(meta_only)
-            done = len(analyzed)
-            pend = max(0, total - done)
-            if pend and total:
-                lines.append(t("jobs-detector-progress", done=done, total=total, pend=pend))
-            elif total:
-                lines.append(t("jobs-detector-done", done=done, total=total))
+            from ...job_pools import analysis_inflight
+
+            cached = len(getattr(app, "_plugin_results", None) or {})
+            inflight = max(
+                int(getattr(app, "_analysis_jobs_active", 0) or 0),
+                int(analysis_inflight()),
+            )
+            if inflight:
+                lines.append(t("jobs-analysis-inflight", n=inflight, cached=cached))
+            elif cached:
+                lines.append(t("jobs-analysis-cached", n=cached))
             else:
-                lines.append(t("ui-detector-analysis-no-sessions-loaded"))
+                lines.append(t("jobs-analysis-idle"))
+        with suppress(Exception):
+            if getattr(app, "is_control_client", lambda: False)():
+                sock = getattr(app, "_control_socket", None)
+                lines.append(t("jobs-control-attached", path=str(sock) if sock else "—"))
+            else:
+                lines.append(t("jobs-control-offline"))
         with suppress(Exception):
             wd = getattr(app, "work_dir", None) or self.work_dir
             if wd:
-                lines.append(t("jobs-work-dir", path=wd))
+                lines.append(t("jobs-work-dir", path=str(wd)))
         self.query_one("#jobs-app-status", Static).update("\n".join(lines))
 
     @staticmethod
@@ -672,6 +771,7 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
     def _append_log(self, container_name: str, line: str) -> None:
         self._ensure_log_tabs([container_name])
         color = self._container_color_map.get(container_name, "white")
+        _tab_id, log_id = self._log_ids(container_name)
         styled = Text()
         styled.append(f"[{container_name.split('-')[-1][:10]}] ", style=f"bold {color}")
         text = line.rstrip("\n")
@@ -685,7 +785,7 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
             self.query_one("#jobs-logs-all", RichLog).write(styled)
         if container_name in self._tabs_mounted:
             try:
-                self.query_one(f"#jobs-log-{container_name}", RichLog).write(styled)
+                self.query_one(f"#{log_id}", RichLog).write(styled)
             except Exception:
                 self._log_buffer.setdefault(container_name, []).append(styled)
         else:

@@ -19,6 +19,10 @@ def test_activity_log_and_spinner() -> None:
     log.log("refresh", "b")
     assert len(log.snapshot()) == 2
     assert log.spinner_frame()
+    before = log.seq
+    log.clear()
+    assert log.snapshot() == []
+    assert log.seq > before
 
 
 def test_pool_serial_submit() -> None:

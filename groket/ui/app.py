@@ -964,6 +964,7 @@ class TraceEvalApp(App):
             logger.debug("notes refresh on notes/changed failed", exc_info=True)
 
     def _control_analysis_changed_ui(self, session_id: str) -> None:
+        """Reload cache into the open browser when analysis finishes on the owner."""
         screen = self.screen
         if not isinstance(screen, BrowserScreen) or not session_id:
             return
@@ -971,13 +972,31 @@ class TraceEvalApp(App):
             if screen.session_dir.name != session_id:
                 return
             cached = self._analysis_svc().load_cached_all(screen.session_dir, allow_stale=True)
-            if cached:
-                screen.plugin_results = cached
-                screen._collect_findings()
-                screen._rebuild_indices()
-                screen._populate_analysis_ui()
+            if not cached:
+                return
+            from ..analysis.inflight import analysis_session_key
+
+            self._plugin_results[analysis_session_key(screen.session_dir)] = cached
+            # Clears pending/loading; Report was left blank under overlays before.
+            screen.apply_analysis_results(cached)
         except Exception:
             logger.debug("analysis refresh on analysis/changed failed", exc_info=True)
+
+    def _push_analysis_results_to_open_browser(
+        self, session_dir: Path, results: dict[str, AnalysisResult]
+    ) -> None:
+        """If the open browser is *session_dir*, apply finished plugin results."""
+        screen = self.screen
+        if not isinstance(screen, BrowserScreen):
+            return
+        try:
+            from ..analysis.inflight import analysis_session_key
+
+            if analysis_session_key(screen.session_dir) != analysis_session_key(session_dir):
+                return
+            screen.apply_analysis_results(results)
+        except Exception:
+            logger.debug("push analysis results to open browser failed", exc_info=True)
 
     def is_control_client(self) -> bool:
         """True only after successful control ``initialize`` against a live owner."""
@@ -1726,6 +1745,14 @@ class TraceEvalApp(App):
         except Exception as exc:
             logger.warning(t("ui-analysis-failed-for-s-s"), sd_key, exc)
             self._plugin_results[sd_key] = {}
+        else:
+            # Offline home/batch path: control does not emit analysis/changed.
+            call_ui(
+                self,
+                self._push_analysis_results_to_open_browser,
+                meta.session_dir,
+                self._plugin_results[sd_key],
+            )
         finally:
             if not hold_inflight:
                 end_session_analysis(meta.session_dir)

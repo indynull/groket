@@ -136,7 +136,7 @@ The footer lists the keys that apply now; `?` is the full list.
 | ? | everywhere | This panel |
 | Ctrl+P | everywhere | Command palette for this screen |
 | F5 | everywhere | Refresh (also Ctrl+R) |
-| J | everywhere | Jobs and logs |
+| J | everywhere | Jobs and logs (Docker runs, TUI pool activity, serve log tail, container logs; `c` clears) |
 | q | everywhere | Quit when no field is focused |
 | / | sessions | Search |
 | r | sessions | New run |

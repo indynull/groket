@@ -8,7 +8,7 @@
   ?               This panel
   Ctrl+P          Command palette for this screen
   F5              Refresh (also Ctrl+R)
-  J               Jobs and logs
+  J               Jobs and logs (Docker runs, TUI pool activity, serve log tail, container logs)
   q               Quit when no field is focused
 
 [bold]Sessions[/bold]

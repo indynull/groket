@@ -1654,16 +1654,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         def _finish_with(results: dict) -> None:
             try:
                 if self.is_mounted:
-                    self.plugin_results = results
-                    self._analysis_pending = False
-                    self._stop_analysis_spinner_timer()
-                    self._collect_findings()
-                    self._rebuild_indices()
-                    self._apply_stale_analysis_hints(repaint=False)
-                    try:
-                        self._populate_analysis_ui()
-                    except Exception:
-                        logger.exception("analysis finish UI update failed")
+                    self.apply_analysis_results(results)
                 try:
                     host_results = getattr(app, "_plugin_results", None)
                     if isinstance(host_results, dict):
@@ -2262,8 +2253,32 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             timer.stop()
         self._set_analysis_loading(False)
 
+    def apply_analysis_results(self, results: dict[str, AnalysisResult]) -> None:
+        """Apply finished plugin results on the UI thread.
+
+        Used by the browser analysis job, control ``analysis/changed``, and
+        home-batch completion while this session is open. Always clears the
+        in-flight spinner so Report is not left covered by loading overlays
+        after results land.
+        """
+        if not self.is_mounted:
+            return
+        self.plugin_results = dict(results or {})
+        self._analysis_pending = False
+        self._stop_analysis_spinner_timer()
+        self._collect_findings()
+        self._rebuild_indices()
+        self._apply_stale_analysis_hints(repaint=False)
+        try:
+            self._populate_analysis_ui()
+        except Exception:
+            logger.exception("analysis results UI update failed")
+
     def _populate_analysis_ui(self) -> None:
         """Phase 2 UI: findings + reports — after analysis plugins finish."""
+        if not self._analysis_pending:
+            # Results path: never leave Report under a stale loading overlay.
+            self._set_analysis_loading(False)
         timeline_table = self.query_one("#timeline-list", TimelineTable)
         timeline_table.load_events(
             self.timeline,

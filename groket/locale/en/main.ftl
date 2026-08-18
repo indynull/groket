@@ -281,11 +281,14 @@ cmd-help-help = Show key / workflow help
 
 cmd-jobs-logs = Jobs / logs
 
-cmd-jobs-logs-help = Runs, analysis/refresh activity log, and container logs (J)
+cmd-jobs-logs-help = Docker runs, TUI pool activity, serve log tail, and container logs (J)
 
 jobs-activity-tab = Activity
-jobs-activity-help = Analysis and refresh pool log.
+jobs-activity-help = TUI analysis/refresh pools, plus a tail of the detached serve log when attached.
 jobs-activity-status = {$spin} analysis {$analysis}/{$analysis_workers} · refresh {$refresh}/{$refresh_workers}
+jobs-activity-control-path = Serve log: {$path}
+jobs-activity-no-control = No control owner log (offline TUI, or serve not detached).
+jobs-activity-control-header = — serve log —
 
 cmd-launch-config = Launch config
 
@@ -1186,7 +1189,7 @@ ui-id-2 = Id
 
 ui-image = image:
 
-ui-in-flight-running-in-background-j-jobs-logs-no-p =  in flight — running in background ([bold]j[/bold] = jobs/logs; no per-run popups)
+ui-in-flight-running-in-background-j-jobs-logs-no-p =  in flight — running in background ([bold]J[/bold] = jobs/logs; no per-run popups)
 
 ui-inactive-model-s-not-in-grok-models-models-cache = inactive model(s) (not in `grok models` / models_cache.json). Launching:
 
@@ -1214,7 +1217,7 @@ ui-last-turn = Last turn
 
 ui-launch = Launch:
 
-ui-launch-error-s-open-j-for-jobs-logs =  launch error(s). Open [bold]j[/bold] for jobs/logs.
+ui-launch-error-s-open-j-for-jobs-logs =  launch error(s). Open [bold]J[/bold] for jobs/logs.
 
 ui-launch-pick-models = launch (pick models)
 
@@ -1468,7 +1471,7 @@ ui-run-extras = Run extras:
 
 ui-run-s-active-1 = [/bold] run(s) active —
 
-ui-run-s-keep-going-in-docker-j-jobs-logs-quit-anyt =  run(s) keep going in docker — [bold]j[/bold] jobs/logs; quit anytime (relaunch prunes finished eval containers)
+ui-run-s-keep-going-in-docker-j-jobs-logs-quit-anyt =  run(s) keep going in docker — [bold]J[/bold] jobs/logs; quit anytime (relaunch prunes finished eval containers)
 
 ui-run-s-started = run(s) started,
 
@@ -1786,8 +1789,11 @@ notify-open-session-failed = Open session failed: { $exc }
 notify-no-session-yet = No session yet for { $container } — wait for traces to appear
 notify-share-open-failed = Could not open share for { $name }: { $exc }
 jobs-banner-runs = Docker eval runs: { $n } active{ $latest }
-jobs-detector-progress = Detector analysis { $done }/{ $total } ({ $pend } pending in background)
-jobs-detector-done = Detector analysis { $done }/{ $total } done
+jobs-analysis-inflight = Analysis: { $n } in flight · { $cached } session(s) cached in this TUI
+jobs-analysis-cached = Analysis: { $n } session(s) cached in this TUI
+jobs-analysis-idle = Analysis: idle (no cached results in this TUI yet)
+jobs-control-attached = Control: attached · { $path }
+jobs-control-offline = Control: offline (this TUI only)
 jobs-work-dir = work dir: { $path }
 persona-registry-searching = Registry searching { $query }…
 persona-registry-error = Registry error: { $error }

@@ -275,6 +275,14 @@ class RunManager:
         # Active first (newest last within each group)
         return hist + active
 
+    def clear_captured_logs(self) -> None:
+        """Drop retained container log lines for active and history runs (Jobs Clear)."""
+        with self._lock:
+            runs = list(self._active.values()) + list(self._history)
+        for bg in runs:
+            bg.log_buffer.clear()
+            bg.log_lines.clear()
+
     def latest(self) -> BackgroundRun | None:
         """Most recent run (prefer still-active, else newest finished)."""
         with self._lock:

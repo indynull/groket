@@ -17,7 +17,7 @@ from groket.ui.commands import yield_app_commands
 from groket.ui.screens.jobs import JobsModal
 from textual.widgets import DataTable, RichLog, Static
 
-from .pilot_helpers import wait_until
+from .pilot_helpers import static_plain, wait_until
 
 
 def _make_work(tmp_path: Path) -> tuple[Path, Path]:
@@ -203,8 +203,16 @@ async def test_jobs_modal_history_table_with_finished_run(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_jobs_modal_clear_logs(tmp_path: Path) -> None:
+    from groket.job_pools import get_activity_log
+
     work, traces = _make_work(tmp_path)
     app = _host_app(work, traces)
+    bg = _make_bg_run()
+    bg.append_log("test-c", "retained line")
+    with app.run_manager._lock:
+        app.run_manager._active[bg.run_id] = bg
+    get_activity_log().log("analysis", "pool line before clear")
+
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         modal = await _open_jobs(app, pilot, work)
@@ -214,6 +222,12 @@ async def test_jobs_modal_clear_logs(tmp_path: Path) -> None:
         await pilot.pause()
         all_log = modal.query_one("#jobs-logs-all", RichLog)
         assert len(all_log.lines) == 0
+        act = modal.query_one("#jobs-activity-log", RichLog)
+        # Pool ring cleared; control header may still appear when a serve log exists.
+        plains = [str(line) for line in act.lines]
+        assert not any("pool line before clear" in p for p in plains)
+        assert bg.log_buffer.snapshot() == []
+        assert list(bg.log_lines) == []
 
 
 @pytest.mark.asyncio
@@ -227,6 +241,96 @@ async def test_jobs_modal_clear_btn(tmp_path: Path) -> None:
         await pilot.pause()
         modal._btn_clear()
         await pilot.pause()
+        assert len(modal.query_one("#jobs-logs-all", RichLog).lines) == 0
+
+
+@pytest.mark.asyncio
+async def test_jobs_status_shows_analysis_cache_not_dead_analyzed(tmp_path: Path) -> None:
+    """Jobs banner uses _plugin_results / inflight — not the removed _analyzed map."""
+    from groket.analysis.base import AnalysisResult
+    from groket.analysis.inflight import analysis_session_key
+
+    work, traces = _make_work(tmp_path)
+    app = _host_app(work, traces)
+    sess = traces / "s1"
+    sess.mkdir(parents=True)
+    key = analysis_session_key(sess)
+    app._plugin_results[key] = {
+        "engine": AnalysisResult(
+            session_id="s1",
+            session_dir=str(sess),
+            analyzer_id="engine",
+            ok=True,
+            summary="ok",
+            findings=[],
+        )
+    }
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_jobs(app, pilot, work)
+        modal._refresh_app_jobs()
+        await pilot.pause()
+        status = static_plain(modal.query_one("#jobs-app-status", Static))
+        assert "1 session" in status or "cached" in status.lower()
+        assert "Detector analysis" not in status
+
+
+@pytest.mark.asyncio
+async def test_jobs_append_log_uses_safe_widget_id(tmp_path: Path) -> None:
+    """Container names with dots must map to sanitized RichLog ids."""
+    from textual.widgets import TabbedContent
+
+    work, traces = _make_work(tmp_path)
+    app = _host_app(work, traces)
+    name = "groket.model.effort-abc12"
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_jobs(app, pilot, work)
+        tabs = modal.query_one("#jobs-tabs", TabbedContent)
+        tabs.active = "jobs-tab-logs"
+        await pilot.pause()
+        modal._append_log(name, "safe id line")
+        await pilot.pause()
+        modal._flush_log_buffers()
+        await pilot.pause()
+        _tab, log_id = modal._log_ids(name)
+        assert _tab in modal._log_tabs
+        # Prefer All tab (always mounted); per-container pane may lag add_pane.
+        all_log = modal.query_one("#jobs-logs-all", RichLog)
+        joined = "\n".join(str(line) for line in all_log.lines)
+        assert "safe id line" in joined
+        assert log_id == "jobs-log-groket-model-effort-abc12"
+
+
+@pytest.mark.asyncio
+async def test_jobs_activity_tails_control_log(tmp_path: Path) -> None:
+    """Activity tab shows a tail of the detached serve log when present."""
+    from textual.widgets import TabbedContent
+
+    work, traces = _make_work(tmp_path)
+    app = _host_app(work, traces)
+    sock = tmp_path / "groket.sock"
+    sock.write_text("", encoding="utf-8")
+    log_path = sock.with_name(sock.name + ".log")
+    log_path.write_text("serve boot\nanalysis done for sess\n", encoding="utf-8")
+    app._control_socket = sock
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        modal = await _open_jobs(app, pilot, work)
+        assert modal._read_control_log_tail() == ["serve boot", "analysis done for sess"]
+        tabs = modal.query_one("#jobs-tabs", TabbedContent)
+        tabs.active = "jobs-tab-activity"
+        await pilot.pause()
+        modal._activity_seq = -1
+        modal._control_log_sig = ("", 0, 0)
+        modal._refresh_activity_log()
+        await pilot.pause()
+        await pilot.pause()
+        act = modal.query_one("#jobs-activity-log", RichLog)
+        joined = "\n".join(str(line) for line in act.lines)
+        assert "analysis done for sess" in joined
+        help_txt = static_plain(modal.query_one("#jobs-activity-help", Static))
+        assert str(log_path) in help_txt or "Serve log" in help_txt
 
 
 @pytest.mark.asyncio

@@ -46,6 +46,12 @@ class ActivityLog:
             self._seq += 1
         logger.info("[%s] %s", kind, message)
 
+    def clear(self) -> None:
+        """Drop all entries (Jobs Clear); bump *seq* so viewers repaint."""
+        with self._lock:
+            self._entries.clear()
+            self._seq += 1
+
     def snapshot(self, limit: int = 100) -> list[ActivityEntry]:
         with self._lock:
             items = list(self._entries)
