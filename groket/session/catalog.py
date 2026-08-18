@@ -916,6 +916,23 @@ def resolve_session_reference(
                 return direct.resolve()
             except OSError:
                 return direct
+    # Native Grok sessions are grouped by encoded working directory. Resolve a
+    # directory-name reference with bounded stat calls before the generic walk.
+    if Path(ref).name == ref and ref not in {".", ".."}:
+        for root in roots:
+            if root.origin != ORIGIN_HOST:
+                continue
+            try:
+                parents = root.path.iterdir()
+            except OSError:
+                continue
+            for parent in parents:
+                nested = parent / ref
+                if nested.is_dir():
+                    try:
+                        return nested.resolve()
+                    except OSError:
+                        return nested
     # Directory name only. List-meta for every sibling is a multi-second tax on
     # each session/overview and session/timeline call. Id≠dirname uses the
     # warm catalog on the control owner (SessionCatalogCache.resolve).
