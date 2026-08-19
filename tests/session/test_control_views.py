@@ -208,6 +208,192 @@ def test_build_session_overview_one_shot(tmp_path: Path) -> None:
     assert all(e.get("turnIndex") == 0 for e in conv)
 
 
+def test_overview_includes_background_jobs_and_schedules(tmp_path: Path) -> None:
+    sd = tmp_path / "sess-jobs-ov"
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-jobs-ov"}, "generated_title": "jobs"}),
+        encoding="utf-8",
+    )
+    term = sd / "terminal"
+    term.mkdir()
+    mon = term / "monitor-call-ov.log"
+    mon.write_text("DONE\n", encoding="utf-8")
+    updates = [
+        {
+            "timestamp": 10,
+            "params": {
+                "update": {
+                    "sessionUpdate": "task_backgrounded",
+                    "task_id": "job-ov",
+                    "command": "watch",
+                    "cwd": "/tmp",
+                    "output_file": str(mon),
+                    "description": "Watch board",
+                }
+            },
+        },
+        {
+            "timestamp": 11,
+            "params": {
+                "update": {
+                    "sessionUpdate": "scheduled_task_created",
+                    "task_id": "sched-ov",
+                    "prompt": "hourly ping",
+                    "human_schedule": "every 1 hour",
+                    "next_fire_at": "2026-08-18T23:00:00Z",
+                }
+            },
+        },
+    ]
+    (sd / "updates.jsonl").write_text(
+        "".join(json.dumps(u) + "\n" for u in updates), encoding="utf-8"
+    )
+    (sd / "resources_state.json").write_text(
+        json.dumps(
+            {
+                "state": {
+                    "grok_build.Scheduler": {
+                        "tasks": [
+                            {
+                                "id": "sched-ov",
+                                "intervalSecs": 3600,
+                                "prompt": "hourly ping",
+                                "recurring": True,
+                                "durable": True,
+                            }
+                        ]
+                    },
+                    "grok_build.ReportedTaskCompletions": {"reported": []},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ov = build_session_overview(sd)
+    jobs = ov["backgroundJobs"]
+    schedules = ov["schedules"]
+    assert len(jobs) == 1
+    assert jobs[0]["id"] == "job-ov"
+    assert jobs[0]["kind"] == "monitor"
+    assert jobs[0]["status"] == "done"
+    assert jobs[0]["outputPath"] == str(mon)
+    assert "logTail" not in jobs[0]
+    assert jobs[0]["command"] == "watch"
+    assert len(schedules) == 1
+    assert schedules[0]["id"] == "sched-ov"
+    assert schedules[0]["humanSchedule"] == "every 1 hour"
+    assert schedules[0]["intervalSecs"] == 3600
+    assert ov.get("workflows") == []
+    page = build_session_timeline(sd, offset=0, limit=50)
+    types = {e.get("type") for e in page["events"]}
+    assert "task_backgrounded" in types
+    assert "scheduled_task_created" in types
+    assert "subagent_spawned" not in types
+
+
+def test_overview_includes_workflows_without_script_or_journal_body(tmp_path: Path) -> None:
+    sd = tmp_path / "sess-wf-ov"
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-wf-ov"}, "generated_title": "wf"}),
+        encoding="utf-8",
+    )
+    (sd / "updates.jsonl").write_text("", encoding="utf-8")
+    d = sd / "workflows" / "wf_failed"
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "state": {
+                    "run_id": "wf_failed",
+                    "name": "sprint-8",
+                    "status": "failed",
+                    "current_phase": "Kickoff",
+                    "objective": "Engineering sprint",
+                    "agents_used": 1,
+                    "agent_budget": 64,
+                    "elapsed_ms_floor": 150198,
+                    "pause_message": "Variable not found: vissue_root",
+                    "agents": [
+                        {"agent_id": "ag-1", "label": "aik", "state": "done"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (d / "journal.jsonl").write_text(
+        json.dumps(
+            {
+                "kind": "spawn_agent",
+                "result": {
+                    "agent_id": "ag-1",
+                    "success": True,
+                    "output": {"summary": "Seated on existing sprint heading aik-7ao0."},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ov = build_session_overview(sd)
+    rows = ov["workflows"]
+    assert len(rows) == 1
+    assert rows[0]["name"] == "sprint-8"
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["phase"] == "Kickoff"
+    assert "vissue_root" in rows[0]["pauseMessage"]
+    assert rows[0]["children"][0]["label"] == "aik"
+    dumped = json.dumps(ov)
+    assert "Seated on existing sprint heading" not in dumped
+    assert "let meta" not in dumped
+    assert "fn gathering" not in dumped
+
+
+def test_timeline_kind_workflows_keeps_workflow_tools(tmp_path: Path) -> None:
+    sd = tmp_path / "sess-wf-kind"
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-wf-kind"}, "generated_title": "wf"}),
+        encoding="utf-8",
+    )
+    (sd / "updates.jsonl").write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {
+                    "timestamp": 1,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-wf",
+                            "title": "workflow",
+                            "rawInput": {"script_path": "/repo/.grok/workflows/sprint.rhai"},
+                        }
+                    },
+                },
+                {
+                    "timestamp": 2,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-read",
+                            "title": "read_file",
+                            "rawInput": {"target_file": "x.py"},
+                        }
+                    },
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    page = build_session_timeline(sd, offset=0, limit=50, kind="workflows")
+    names = [e.get("toolName") for e in page["events"]]
+    assert names == ["workflow"]
+
+
 def test_overview_caps_assistant_preview_for_list(tmp_path: Path) -> None:
     """session/overview keeps short assistant previews; session/turns keeps long."""
     from groket.parser import parse_timeline
@@ -424,6 +610,68 @@ def test_build_session_overview_single_flight_and_cache(tmp_path: Path) -> None:
         cv._build_session_overview_uncached = orig  # type: ignore[assignment]
         cv._overview_inflight.clear()
         cv._overview_cache.clear()
+
+
+def test_overview_stamp_monitor_done_not_signals_or_shell_log(tmp_path: Path) -> None:
+    """Monitor last-line status busts cache; signals.json and call-*.log do not."""
+    from unittest.mock import patch
+
+    import groket.session.control_views as cv
+
+    sd = tmp_path / "sess-stamp"
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-stamp"}, "generated_title": "stamp"}),
+        encoding="utf-8",
+    )
+    term = sd / "terminal"
+    term.mkdir()
+    mon = term / "monitor-call-live.log"
+    mon.write_text("still going\n", encoding="utf-8")
+    (term / "call-shell.log").write_text("partial\n", encoding="utf-8")
+    (sd / "updates.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": 10,
+                "params": {
+                    "update": {
+                        "sessionUpdate": "task_backgrounded",
+                        "task_id": "job-mon",
+                        "command": "watch",
+                        "cwd": "/tmp",
+                        "output_file": str(mon),
+                        "description": "live watch",
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cv._overview_cache.clear()
+    cv._overview_inflight.clear()
+    parses = 0
+    real = cv.parse_timeline
+
+    def counting_parse(session_dir, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal parses
+        parses += 1
+        return real(session_dir, **kwargs)
+
+    with patch.object(cv, "parse_timeline", side_effect=counting_parse):
+        first = build_session_overview(sd)
+        assert first["backgroundJobs"][0]["status"] == "running"
+        assert parses == 1
+        (sd / "signals.json").write_text('{"contextWindowUsage": 1}', encoding="utf-8")
+        (term / "call-shell.log").write_text("partial\n" + ("x" * 4000), encoding="utf-8")
+        warm = build_session_overview(sd)
+        assert warm is first
+        assert parses == 1
+        mon.write_text("still going\nDONE\n", encoding="utf-8")
+        done = build_session_overview(sd)
+        assert done is not first
+        assert done["backgroundJobs"][0]["status"] == "done"
+        assert parses == 2
 
 
 def test_timeline_system_reminder_not_labeled_user() -> None:

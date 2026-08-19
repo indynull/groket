@@ -226,7 +226,7 @@ class TestRenderToolDetail:
         )
         assert _group_has_syntax(result)
 
-    def test_terminal_output_stays_plain_text(self):
+    def test_terminal_output_uses_syntax_chrome(self):
         from rich.syntax import Syntax
 
         result = render_tool_detail(
@@ -236,14 +236,11 @@ class TestRenderToolDetail:
             output="hi\n",
         )
         bits = list(result.renderables)
-        # Input command is bash Syntax; stdout stays plain Text.
-        cmd_syn = [x for x in bits if isinstance(x, Syntax)]
-        assert cmd_syn
-        cmd_lex = (
-            getattr(cmd_syn[0].lexer, "name", None) or type(cmd_syn[0].lexer).__name__
-        ).lower()
+        syn = [x for x in bits if isinstance(x, Syntax)]
+        assert syn
+        cmd_lex = (getattr(syn[0].lexer, "name", None) or type(syn[0].lexer).__name__).lower()
         assert "bash" in cmd_lex or "shell" in cmd_lex
-        assert any(isinstance(x, Text) and "hi" in x.plain for x in bits)
+        assert any(isinstance(x, Syntax) and "hi" in x.code for x in bits)
 
     def test_python_read_file_output_lexer_from_path(self):
         from rich.syntax import Syntax
@@ -389,6 +386,308 @@ class TestRenderEventDetail:
         )
         result = render_event_detail(ev)
         assert_rich_contains(result, "Investigate the bug")
+
+    def test_subagent_finished_dump_is_not_shown(self):
+        ev = make_trace_event(
+            index=206,
+            event_type="subagent_finished",
+            content=(
+                "Subagent finished  01a016d1-4df7-7d30-b99f-65289aa0b417  "
+                "completed  duration_ms=96555"
+            ),
+            raw_input={
+                "childSessionId": "01a016d1-4df7-7d30-b99f-65289aa0b417",
+                "status": "completed",
+                "durationMs": 96555,
+            },
+        )
+        from groket.session.subagents import SubagentRun
+
+        run = SubagentRun(
+            subagent_id="sa-1",
+            child_session_id="01a016d1-4df7-7d30-b99f-65289aa0b417",
+            child_path=None,
+            subagent_type="coder",
+            description="Investigate the bug",
+            status="completed",
+            parent_turn_index=1,
+            parent_prompt_id="",
+            spawn_event_index=10,
+            finish_event_index=206,
+            duration_ms=96555,
+            tool_calls=4,
+            turns=2,
+            tokens_used=None,
+            output_preview="",
+        )
+        plain = rich_plain(render_event_detail(ev, duration=0.2, subagent_run=run))
+        assert "Investigate the bug" in plain
+        assert "coder" in plain
+        assert "complete" in plain.lower()
+        assert "1m36s" in plain
+        assert "Enter opens this child" not in plain
+        assert "duration_ms=96555" not in plain
+        assert "Subagent finished  01a016d1" not in plain
+        assert "<1s" not in plain
+
+    def test_monitor_event_includes_log_tail(self, tmp_path):
+        log = tmp_path / "monitor-call.log"
+        log.write_text("120\nDONE\n", encoding="utf-8")
+        ev = make_trace_event(
+            index=0,
+            event_type="task_backgrounded",
+            content="Watch board",
+            raw_input={
+                "task_id": "job-1",
+                "command": "bash watch.sh",
+                "output_file": str(log),
+                "description": "Watch board",
+            },
+        )
+        result = render_event_detail(ev)
+        plain = rich_plain(result)
+        from rich.syntax import Syntax
+
+        assert "bash watch.sh" in plain
+        assert "DONE" in plain
+        assert "complete" in plain.lower() or "done" in plain.lower()
+        assert "subagent" not in plain.lower()
+        syn = [x for x in result.renderables if isinstance(x, Syntax)]
+        assert syn
+        lex = (getattr(syn[0].lexer, "name", None) or type(syn[0].lexer).__name__).lower()
+        assert "bash" in lex or "shell" in lex
+
+    def test_background_dump_content_is_not_shown(self):
+        ev = make_trace_event(
+            index=0,
+            event_type="task_backgrounded",
+            content=(
+                "task_backgrounded  tool_call_id=call-1  command=cd /tmp && just lint  cwd=/tmp"
+            ),
+            raw_input={},
+        )
+        plain = rich_plain(render_event_detail(ev))
+        assert "just lint" in plain
+        assert "task_backgrounded  tool_call_id" not in plain
+
+    def test_background_start_shows_finish_exit_code(self):
+        start = make_trace_event(
+            index=1,
+            event_type="task_backgrounded",
+            raw_input={"task_id": "job-x", "command": "false", "output_file": ""},
+        )
+        finish = make_trace_event(
+            index=2,
+            event_type="task_completed",
+            raw_input={"task_id": "job-x", "completed": True, "exit_code": 1},
+        )
+        plain = rich_plain(render_event_detail(start, job_mate=finish))
+        assert "exit 1" in plain
+        assert "fail" in plain.lower()
+
+    def test_job_and_subagent_inspect_keep_selectable_line_breaks(self):
+        """SelectableStatic concatenates Group children — fields must not glue."""
+        from groket.ui.selectable_static import plain_from_renderable
+
+        start = make_trace_event(
+            index=1,
+            event_type="task_backgrounded",
+            raw_input={"task_id": "job-x", "command": "sleep 5", "output_file": ""},
+        )
+        finish = make_trace_event(
+            index=2,
+            event_type="task_completed",
+            raw_input={"task_id": "job-x", "completed": True, "exit_code": 0},
+        )
+        job_plain = plain_from_renderable(render_event_detail(start, job_mate=finish), full=False)
+        assert "completeexit" not in job_plain.replace(" ", "")
+        assert "exitsleep" not in job_plain.replace(" ", "").lower()
+        assert "sleep 5" in job_plain
+        lines = [ln.strip() for ln in job_plain.splitlines() if ln.strip()]
+        assert any(ln == "exit 0" for ln in lines)
+        assert any("sleep 5" in ln for ln in lines)
+
+        spawn = make_trace_event(
+            index=3,
+            event_type="subagent_spawned",
+            content="Investigate the bug",
+            raw_input={"subagentType": "coder", "description": "Investigate the bug"},
+        )
+        from groket.session.subagents import SubagentRun
+
+        run = SubagentRun(
+            subagent_id="sa",
+            child_session_id="c1",
+            child_path=None,
+            subagent_type="coder",
+            description="Investigate the bug",
+            status="completed",
+            parent_turn_index=0,
+            parent_prompt_id="",
+            spawn_event_index=3,
+            finish_event_index=4,
+            duration_ms=1000,
+            tool_calls=1,
+            turns=1,
+            tokens_used=None,
+            output_preview="",
+        )
+        sub_plain = plain_from_renderable(render_event_detail(spawn, subagent_run=run), full=False)
+        assert "coderInvestigate" not in sub_plain.replace(" ", "")
+        assert "coder" in sub_plain
+        assert "Investigate the bug" in sub_plain
+
+    def test_workflow_inspect_uses_merged_run_not_script(self, tmp_path):
+        from groket.session.workflows import load_session_workflows
+        from groket.ui.render_detail import render_event_detail
+
+        sd = tmp_path / "sess-wf-inspect"
+        sd.mkdir()
+        d = sd / "workflows" / "wf_failed"
+        d.mkdir(parents=True)
+        (d / "state.json").write_text(
+            json.dumps(
+                {
+                    "version": 4,
+                    "state": {
+                        "run_id": "wf_failed",
+                        "name": "sprint-8",
+                        "status": "failed",
+                        "current_phase": "Kickoff",
+                        "objective": "Engineering sprint: aik, seated trees",
+                        "agents_used": 1,
+                        "agent_budget": 64,
+                        "elapsed_ms_floor": 150198,
+                        "pause_message": "Variable not found: vissue_root (line 155, position 28)",
+                        "agents": [
+                            {
+                                "agent_id": "01aaa-aik",
+                                "label": "aik",
+                                "state": "done",
+                            }
+                        ],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        run = load_session_workflows(sd)[0]
+        ev = make_trace_event(
+            index=12,
+            tool_name="workflow",
+            content='let meta = #{ name: "sprint" };\nfn gathering() {}',
+            raw_input={
+                "script": 'let meta = #{ name: "sprint" };\nfn gathering() {}',
+                "script_path": "/repo/.grok/workflows/sprint.rhai",
+            },
+        )
+        from groket.ui.selectable_static import plain_from_renderable
+
+        plain = plain_from_renderable(render_event_detail(ev, workflow=run), full=False)
+        assert "sprint-8" in plain
+        assert "Asked" in plain
+        assert "Happened" in plain
+        assert "Failed" in plain
+        assert "fail" in plain.lower() or "failed" in plain.lower()
+        assert "Kickoff" in plain
+        assert "vissue_root" in plain
+        assert "aik" in plain
+        # Selectable bodies concatenate Group children — each field needs its own line.
+        assert "completeKickoff" not in plain.replace(" ", "")
+        assert "failedKickoff" not in plain.replace(" ", "")
+        lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
+        assert any(ln == "Kickoff" or " ·  Kickoff" in ln or ln.endswith("Kickoff") for ln in lines)
+        assert any(ln.startswith("ok") and "aik" in ln for ln in lines)
+        assert "fn gathering" not in plain
+        assert "let meta" not in plain
+        bare = plain_from_renderable(render_event_detail(ev), full=False)
+        assert "fn gathering" not in bare
+        assert "No workflow run on disk" in bare or "workflow" in bare.lower()
+
+    def test_schedule_inspect_uses_merged_last_fire(self, tmp_path):
+        from groket.parser import parse_timeline
+        from groket.session.jobs import load_session_jobs, schedule_for_event
+        from groket.ui.render_detail import render_event_detail
+
+        sd = tmp_path / "sess-sched-inspect"
+        sd.mkdir()
+        (sd / "summary.json").write_text(
+            json.dumps({"info": {"id": "sess-sched-inspect"}, "generated_title": "sched"}),
+            encoding="utf-8",
+        )
+        (sd / "updates.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": 1_700_000_000,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "scheduled_task_created",
+                            "task_id": "sched-1",
+                            "prompt": "Watch the groket board every hour.",
+                            "human_schedule": "every 1 hour",
+                            "next_fire_at": "2026-08-18T23:05:45Z",
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (sd / "resources_state.json").write_text(
+            json.dumps(
+                {
+                    "state": {
+                        "grok_build.Scheduler": {
+                            "tasks": [
+                                {
+                                    "id": "sched-1",
+                                    "intervalSecs": 3600,
+                                    "prompt": "Watch the groket board every hour.",
+                                    "recurring": True,
+                                    "durable": True,
+                                    "lastFiredAt": "2026-08-18T22:05:45Z",
+                                    "lastSubagentId": "sub-1",
+                                }
+                            ]
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        events = parse_timeline(sd)
+        ev = next(e for e in events if e.event_type == "scheduled_task_created")
+        assert ev.raw_input.as_str("last_fired_at") == ""
+        assert ev.raw_input.as_str("last_subagent_id") == ""
+        packed = load_session_jobs(sd, events)
+        sch = schedule_for_event(ev, packed.schedules)
+        assert sch is not None
+        assert sch.last_fired_at.startswith("2026-08-18T22:05:45")
+        assert sch.last_subagent_id == "sub-1"
+        plain = rich_plain(render_event_detail(ev, schedule=sch))
+        assert "2026-08-18T22:05:45" in plain
+        assert "sub-1" in plain
+        bare = rich_plain(render_event_detail(ev))
+        assert "2026-08-18T22:05:45" not in bare
+
+    def test_background_start_heading_uses_pair_duration(self):
+        start = make_trace_event(
+            index=1,
+            event_type="task_backgrounded",
+            timestamp=1_700_000_000,
+            raw_input={"task_id": "job-d", "command": "sleep"},
+        )
+        finish = make_trace_event(
+            index=2,
+            event_type="task_completed",
+            timestamp=1_700_000_096,
+            raw_input={"task_id": "job-d", "completed": True, "exit_code": 0},
+        )
+        plain = rich_plain(render_event_detail(start, duration=0.2, job_mate=finish))
+        assert "1m36s" in plain
+        assert "<1s" not in plain
+        assert "background start" in plain.lower()
+        assert plain.lower().count("background start") == 1
 
     def test_user_event(self):
         ev = make_trace_event(

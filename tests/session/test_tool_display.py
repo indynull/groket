@@ -11,10 +11,12 @@ from groket.tool_display import (
     display_tool_output,
     format_tool_display,
     image_result_path,
+    job_list_preview,
     list_event_detail,
     list_event_preview,
     preserve_primary_raw_input,
     strip_inline_line_prefixes,
+    task_fields_from_content,
     tool_family,
     tool_input_fields,
     web_search_from_raw_output,
@@ -131,6 +133,19 @@ def test_preserve_primary_raw_input_keeps_old_new() -> None:
     kept = preserve_primary_raw_input(raw, max_chars=200)
     assert kept["old_string"] == "keep-old"
     assert kept["new_string"] == "keep-new"
+
+
+def test_preserve_primary_raw_input_keeps_workflow_run_id() -> None:
+    raw = {
+        "script_path": "/repo/.grok/workflows/sprint.rhai",
+        "run_id": "wf_sprint8",
+        "name": "sprint-8",
+        "args": {"sprint_goal": "x" * 80_000},
+    }
+    kept = preserve_primary_raw_input(raw, max_chars=200)
+    assert kept["run_id"] == "wf_sprint8"
+    assert kept["name"] == "sprint-8"
+    assert kept["script_path"] == "/repo/.grok/workflows/sprint.rhai"
 
 
 def _write_web_search_session(root: Path) -> Path:
@@ -279,3 +294,35 @@ def test_timeline_mapping_image_path(tmp_path: Path) -> None:
     )
     row = timeline_event_mapping(ev)
     assert row["imagePath"] == "/tmp/img.jpg"
+
+
+def test_job_list_preview_is_command_not_event_type() -> None:
+    dump = (
+        "task_backgrounded  tool_call_id=call-1  task_id=job-1  "
+        "command=cd /mnt/dev/_git/groket && just lint  cwd=/mnt/dev/_git/groket"
+    )
+    fields = task_fields_from_content(dump)
+    assert fields["command"].startswith("cd /mnt/dev/_git/groket")
+    assert fields["cwd"] == "/mnt/dev/_git/groket"
+    preview = job_list_preview("task_backgrounded", {}, dump)
+    assert preview.startswith("$ cd /mnt/dev/_git/groket")
+    assert "task_backgrounded" not in preview
+    structured = job_list_preview(
+        "task_backgrounded",
+        {"command": "bash watch.sh", "description": "Watch board"},
+        "",
+    )
+    assert structured == "$ bash watch.sh"
+    mon = job_list_preview(
+        "task_backgrounded",
+        {"description": "Watch board", "output_file": "/tmp/monitor-call.log"},
+        "",
+    )
+    assert mon == "Watch board"
+    sched = job_list_preview(
+        "scheduled_task_created",
+        {"human_schedule": "every 1 hour", "prompt": "hourly ping"},
+        "",
+    )
+    assert "hourly ping" in sched
+    assert "every 1 hour" in sched

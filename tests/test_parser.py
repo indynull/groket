@@ -814,6 +814,82 @@ def test_extract_raw_output_mcp_okay_output() -> None:
     assert "etcd" in text
 
 
+def test_timeline_does_not_copy_run_id_onto_non_workflow(tmp_path: Path) -> None:
+    """A shell result that happens to carry run_id does not mutate the tool bag."""
+    sd = tmp_path / "sess-bag"
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-bag"}, "generated_title": "bag"}),
+        encoding="utf-8",
+    )
+    (sd / "updates.jsonl").write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {
+                    "timestamp": 1,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-sh",
+                            "title": "run_terminal_command",
+                            "rawInput": {"command": "echo hi"},
+                        }
+                    },
+                },
+                {
+                    "timestamp": 2,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": "call-sh",
+                            "status": "completed",
+                            "content": "hi",
+                            "rawOutput": {
+                                "type": "Shell",
+                                "run_id": "wf_stolen",
+                                "output_for_prompt": "hi",
+                            },
+                        }
+                    },
+                },
+                {
+                    "timestamp": 3,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-wf",
+                            "title": "workflow",
+                            "rawInput": {"script_path": "/repo/.grok/workflows/sprint.rhai"},
+                        }
+                    },
+                },
+                {
+                    "timestamp": 4,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": "call-wf",
+                            "status": "completed",
+                            "rawOutput": {
+                                "type": "Workflow",
+                                "run_id": "wf_real",
+                                "name": "sprint-8",
+                            },
+                        }
+                    },
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    events = parse_timeline(sd)
+    shell = next(e for e in events if e.tool_name == "run_terminal_command")
+    assert shell.raw_input.as_str("run_id") == ""
+    wf = next(e for e in events if e.tool_name == "workflow")
+    assert wf.raw_input.as_str("run_id") == "wf_real"
+
+
 def test_coalesce_tool_result_from_mcp_raw_output() -> None:
     """tool_call_update with only MCP rawOutput still yields a tool_result row."""
     from groket.models import TraceEvent
@@ -951,7 +1027,132 @@ def test_timeline_subagent_events(tmp_path: Path):
     events = parse_timeline(sd)
     subs = [e for e in events if e.event_type in ("subagent_spawned", "subagent_finished")]
     assert len(subs) == 2
-    assert "coder" in subs[0].content
+    assert "worker" in subs[0].content
+    assert subs[0].raw_input.as_str("subagentType") == "coder"
+
+
+def _write_updates(sd: Path, updates: list[dict[str, object]]) -> None:
+    lines = [
+        json.dumps({"timestamp": i + 1, "params": {"update": upd}}) for i, upd in enumerate(updates)
+    ]
+    (sd / "updates.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_timeline_scheduled_task_created_has_structured_fields(tmp_path: Path) -> None:
+    sd = tmp_path / "sched"
+    sd.mkdir()
+    _write_updates(
+        sd,
+        [
+            {
+                "sessionUpdate": "scheduled_task_created",
+                "task_id": "01a016e8b810",
+                "prompt": "Watch the groket board every hour and notify on change.",
+                "human_schedule": "every 1 hour",
+                "next_fire_at": "2026-08-18T23:05:45.360458771+00:00",
+            }
+        ],
+    )
+    evs = [e for e in parse_timeline(sd) if e.event_type == "scheduled_task_created"]
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev.raw_input.as_str("task_id") == "01a016e8b810"
+    assert ev.raw_input.as_str("human_schedule") == "every 1 hour"
+    assert ev.raw_input.as_str("next_fire_at").startswith("2026-08-18T23:05:45")
+    assert "Watch the groket board" in ev.raw_input.as_str("prompt")
+    assert "every 1 hour" in ev.content
+    assert ev.event_type != "subagent_spawned"
+
+
+def test_timeline_scheduled_task_deleted_and_unknown_suffix(tmp_path: Path) -> None:
+    sd = tmp_path / "sched2"
+    sd.mkdir()
+    _write_updates(
+        sd,
+        [
+            {
+                "sessionUpdate": "scheduled_task_deleted",
+                "task_id": "01a00e101f74",
+                "reason": "deleted",
+            },
+            {
+                "sessionUpdate": "scheduled_task_fired",
+                "task_id": "01a00e101f74",
+                "human_schedule": "every 1 hour",
+            },
+        ],
+    )
+    types = [e.event_type for e in parse_timeline(sd)]
+    assert "scheduled_task_deleted" in types
+    assert "scheduled_task_fired" in types
+    deleted = next(e for e in parse_timeline(sd) if e.event_type == "scheduled_task_deleted")
+    assert deleted.raw_input.as_str("task_id") == "01a00e101f74"
+    assert deleted.raw_input.as_str("reason") == "deleted"
+
+
+def test_timeline_task_backgrounded_fields_are_not_only_content(tmp_path: Path) -> None:
+    sd = tmp_path / "bg"
+    sd.mkdir()
+    _write_updates(
+        sd,
+        [
+            {
+                "sessionUpdate": "task_backgrounded",
+                "tool_call_id": "call-abcb948b-1131-4adc-b6bf-ec687bb4dc7a-11",
+                "task_id": "01a016e8-b83c-7493-acb9-b9145526a4f8",
+                "command": "bash /home/ali/.groket/vissue-board-watch.sh",
+                "cwd": "/mnt/dev/_git/groket",
+                "output_file": "/tmp/monitor-call.log",
+                "description": "Live groket/icedtea vissue board watch",
+                "monitor_description": "Live groket/icedtea vissue board watch",
+            }
+        ],
+    )
+    ev = next(e for e in parse_timeline(sd) if e.event_type == "task_backgrounded")
+    assert ev.tool_call_id == "call-abcb948b-1131-4adc-b6bf-ec687bb4dc7a-11"
+    assert ev.raw_input.as_str("task_id") == "01a016e8-b83c-7493-acb9-b9145526a4f8"
+    assert ev.raw_input.as_str("command").endswith("vissue-board-watch.sh")
+    assert ev.raw_input.as_str("cwd") == "/mnt/dev/_git/groket"
+    assert ev.raw_input.as_str("output_file") == "/tmp/monitor-call.log"
+    assert ev.raw_input.as_str("description") == "Live groket/icedtea vissue board watch"
+    assert ev.event_type != "subagent_spawned"
+
+
+def test_timeline_task_completed_flattens_snapshot(tmp_path: Path) -> None:
+    sd = tmp_path / "done"
+    sd.mkdir()
+    _write_updates(
+        sd,
+        [
+            {
+                "sessionUpdate": "task_completed",
+                "will_wake": False,
+                "task_snapshot": {
+                    "task_id": "01a016e8-b83c-7493-acb9-b9145526a4f8",
+                    "command": "bash watch.sh",
+                    "cwd": "/mnt/dev/_git/groket",
+                    "output_file": "/tmp/monitor-call.log",
+                    "description": "Live groket/icedtea vissue board watch",
+                    "output": "DONE\n",
+                    "start_time": {"secs_since_epoch": 1787090745, "nanos_since_epoch": 1},
+                    "end_time": {"secs_since_epoch": 1787090763, "nanos_since_epoch": 2},
+                    "kind": "monitor",
+                    "completed": True,
+                },
+            }
+        ],
+    )
+    ev = next(e for e in parse_timeline(sd) if e.event_type == "task_completed")
+    assert ev.raw_input.as_str("task_id") == "01a016e8-b83c-7493-acb9-b9145526a4f8"
+    assert ev.raw_input.as_str("command") == "bash watch.sh"
+    assert ev.raw_input.as_str("cwd") == "/mnt/dev/_git/groket"
+    assert ev.raw_input.as_str("output_file") == "/tmp/monitor-call.log"
+    assert ev.raw_input.as_str("description").startswith("Live groket")
+    assert "DONE" in ev.raw_input.as_str("output")
+    assert ev.raw_input.get("start_time") is not None
+    assert ev.raw_input.get("end_time") is not None
+    assert ev.raw_input.get("will_wake") is False
+    assert ev.event_type != "subagent_finished"
 
 
 def test_timeline_goal_updated_coalesces_same_goal_id(tmp_path: Path):

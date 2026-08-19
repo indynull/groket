@@ -9,13 +9,17 @@ use icedtea::variant::Variant;
 use crate::app::{ExtractKey, Hud, Message};
 use crate::brand;
 use crate::format::{
-    body_paint_for, capped_display, display_tool_output, event_brand_role, fmt_duration,
-    format_note_time, format_tool_display, human_event_type_label, image_result_path,
-    is_chat_message, is_tool_identity, list_event_detail, list_status_label, note_fields_view,
-    origin_label, overview_fields, path_hint_from_raw, sanitize_console_text,
-    session_duration_chip, status_tone, syntax_for_tool_field, syntax_for_tool_output,
+    body_paint_for, capped_display, display_tool_output, event_brand_role, event_is_monitor,
+    fmt_duration, format_note_time, format_tool_display, human_event_type_label, image_result_path,
+    is_chat_message, is_tool_identity, job_command, job_description, job_event_id, job_event_label,
+    job_exit_code, job_inspect_blocks, job_list_preview, job_log_tail, job_output_path, job_status,
+    list_event_detail, list_status_label, looks_like_markdown, note_fields_view, origin_label,
+    overview_fields, overview_job_fields, path_hint_from_raw, sanitize_console_text,
+    schedule_inspect_blocks, schedule_last_fire, session_duration_chip, status_tone,
+    subagent_inspect_blocks, subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output,
     timeline_body_text, timeline_count_caption, timeline_query_hit, tool_brand_role,
-    tool_fields_from_raw, BodyPaint, BrandRole, ToolField,
+    tool_fields_from_raw, workflow_for_event, workflow_name_from_raw, BodyPaint, BrandRole,
+    ToolField,
 };
 use crate::kit;
 use crate::live::{
@@ -940,6 +944,21 @@ fn overview_tab(hud: &Hud) -> Element<'_, Message> {
     for field in overview_fields(meta, &o.turns) {
         col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
     }
+    for field in overview_job_fields(&o.background_jobs, &o.schedules, &o.workflows) {
+        col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
+    }
+    for jump in crate::format::overview_run_jumps(&o.background_jobs, &o.workflows) {
+        let ix = jump.event_index;
+        let label = jump.label;
+        col = col.push(
+            mouse_area(icedtea::widget::meta(
+                label.clone(),
+                hud.tokens(),
+                A11y::new(label, Role::Button),
+            ))
+            .on_press(Message::JumpTimeline(ix)),
+        );
+    }
     col.into()
 }
 
@@ -1297,7 +1316,12 @@ fn event_note(ev: &TimelineEvent) -> Message {
 }
 
 fn event_type_human(ev: &TimelineEvent) -> String {
-    human_event_type_label(&ev.event_type, &ev.type_label, &ev.kind)
+    human_event_type_label(
+        &ev.event_type,
+        &ev.type_label,
+        &ev.kind,
+        event_is_monitor(&ev.raw_input),
+    )
 }
 
 /// Human type + brand role for the heading badge next to ``#index``.
@@ -1353,7 +1377,18 @@ fn event_face(ev: &TimelineEvent, tea: icedtea::theme::Tokens) -> Element<'stati
     } else {
         raw_preview
     };
-    let preview = if tool_row {
+    let preview = if job_event_label(&ev.event_type, event_is_monitor(&ev.raw_input)).is_some() {
+        job_list_preview(&ev.event_type, &ev.raw_input, raw_preview)
+    } else if ev.tool_name == "workflow" {
+        let name = workflow_name_from_raw(&ev.raw_input);
+        if name.is_empty() {
+            raw_preview.to_string()
+        } else {
+            name
+        }
+    } else if ev.event_type.starts_with("subagent_") {
+        subagent_list_preview(&ev.event_type, &ev.raw_input, raw_preview)
+    } else if tool_row {
         list_event_detail(raw_preview, &ev.tool_name)
     } else {
         raw_preview.to_string()
@@ -1383,10 +1418,20 @@ fn event_body<'a>(
 ) -> Element<'a, Message> {
     let tok = hud.tokens();
     let mut col = column![].spacing(6);
-    if !ev.child_session_id.is_empty() {
-        let mut chips = row![status_chip(String::from("subagent"), "", tok)]
-            .spacing(8)
-            .align_y(Alignment::Center);
+    if ev.event_type.starts_with("subagent_") || !ev.child_session_id.is_empty() {
+        let typ = ev
+            .raw_input
+            .get("subagentType")
+            .and_then(|v| v.as_str())
+            .or_else(|| ev.raw_input.get("subagent_type").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let preview = subagent_list_preview(&ev.event_type, &ev.raw_input, &ev.content);
+        let mut chips = row![].spacing(8).align_y(Alignment::Center);
+        if !typ.is_empty() {
+            chips = chips.push(status_chip(typ.clone(), "", tok));
+        }
         if !ev.subagent_status.is_empty() {
             chips = chips.push(status_chip(
                 list_status_label(&ev.subagent_status, &ev.subagent_status),
@@ -1395,14 +1440,41 @@ fn event_body<'a>(
             ));
         }
         if let Some(ms) = ev.duration_ms {
-            chips = chips.push(status_chip(format!("{ms} ms"), "", tok));
+            chips = chips.push(status_chip(fmt_duration(ms as f64 / 1000.0), "", tok));
         }
-        chips = chips.push(icedtea::widget::meta(
-            ev.child_session_id.clone(),
-            tok,
-            A11y::new(ev.child_session_id.clone(), Role::Status),
-        ));
         col = col.push(chips);
+        let happened = {
+            let mut bits = Vec::new();
+            if !typ.is_empty() {
+                bits.push(typ.as_str());
+            }
+            if !ev.subagent_status.is_empty() {
+                bits.push(ev.subagent_status.as_str());
+            }
+            bits.join("  ·  ")
+        };
+        let failed = if matches!(
+            ev.subagent_status.as_str(),
+            "failed" | "error" | "cancelled"
+        ) {
+            ev.subagent_status.as_str()
+        } else {
+            ""
+        };
+        for block in subagent_inspect_blocks(&preview, &happened, failed) {
+            col = col.push(icedtea::widget::meta(
+                block.label,
+                tok,
+                A11y::new(block.label, Role::Header),
+            ));
+            col = col.push(select_bound(
+                hud,
+                format!("subagent.{}.{}", ev.index, block.label.to_ascii_lowercase()),
+                &block.body,
+                tok,
+                icedtea::typo::FontFace::Ui,
+            ));
+        }
     }
     if let Some(hit) = timeline_query_hit(ev, hud.timeline_query()) {
         col = col.push(icedtea::widget::meta(
@@ -1411,7 +1483,9 @@ fn event_body<'a>(
             A11y::new("search hit", Role::Status),
         ));
     }
-    col = col.push(event_payload(ev, true, hud));
+    if ev.child_session_id.is_empty() && !ev.event_type.starts_with("subagent_") {
+        col = col.push(event_payload(ev, true, hud));
+    }
     if ev.content_truncated {
         col = col.push(icedtea::widget::info_bar(
             ToastKind::Warning,
@@ -2303,6 +2377,310 @@ fn inspect_fields(call: &TimelineEvent) -> Vec<ToolField> {
     )
 }
 
+fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Message> {
+    let tok = hud.tokens();
+    let empty: [crate::wire::WorkflowRow; 0] = [];
+    let runs = hud
+        .overview()
+        .map(|o| o.workflows.as_slice())
+        .unwrap_or(&empty);
+    let run = workflow_for_event(runs, &ev.raw_input);
+    let mut col = column![].spacing(10);
+    let name = run
+        .map(|r| r.name.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| workflow_name_from_raw(&ev.raw_input));
+    if !name.is_empty() {
+        col = col.push(
+            text(name)
+                .size(tok.title())
+                .font(typo::UI_BOLD)
+                .color(tok.text),
+        );
+    }
+    let Some(run) = run else {
+        col = col.push(icedtea::widget::meta(
+            "No workflow run on disk",
+            tok,
+            A11y::new("workflow missing", Role::Status),
+        ));
+        return col.into();
+    };
+    let mut chips = row![].spacing(8).align_y(Alignment::Center);
+    chips = chips.push(status_chip(
+        list_status_label(&run.status, &run.status).to_string(),
+        status_tone(&run.status),
+        tok,
+    ));
+    if !run.phase.is_empty() {
+        chips = chips.push(status_chip(run.phase.clone(), "", tok));
+    }
+    if let Some(ms) = run.elapsed_ms {
+        if ms > 0 {
+            chips = chips.push(status_chip(fmt_duration(ms as f64 / 1000.0), "", tok));
+        }
+    }
+    col = col.push(chips);
+    if !run.objective.is_empty() {
+        col = col.push(icedtea::widget::meta(
+            "Asked",
+            tok,
+            A11y::new("Asked", Role::Header),
+        ));
+        col = col.push(select_bound(
+            hud,
+            format!("event.{}.wf.obj", ev.index),
+            &run.objective,
+            tok,
+            icedtea::typo::FontFace::Ui,
+        ));
+    }
+    col = col.push(icedtea::widget::meta(
+        "Happened",
+        tok,
+        A11y::new("Happened", Role::Header),
+    ));
+    if run.agents_used.is_some() || run.agent_budget.is_some() {
+        let used = run
+            .agents_used
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "—".into());
+        let budget = run
+            .agent_budget
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "—".into());
+        col = col.push(icedtea::widget::meta(
+            format!("{used}/{budget} agents"),
+            tok,
+            A11y::new("agents", Role::Status),
+        ));
+    }
+    if !run.pause_message.is_empty() {
+        col = col.push(icedtea::widget::meta(
+            "Failed",
+            tok,
+            A11y::new("Failed", Role::Header),
+        ));
+        col = col.push(select_bound(
+            hud,
+            format!("event.{}.wf.pause", ev.index),
+            &run.pause_message,
+            tok,
+            icedtea::typo::FontFace::Ui,
+        ));
+    }
+    if !run.children.is_empty() {
+        col = col.push(icedtea::widget::meta(
+            "Agents",
+            tok,
+            A11y::new("Agents", Role::Header),
+        ));
+        for (i, child) in run.children.iter().enumerate() {
+            let mark = if child.success { "ok" } else { "fail" };
+            let label = if child.label.is_empty() {
+                child.id.as_str()
+            } else {
+                child.label.as_str()
+            };
+            let line = format!("{mark}  {label}");
+            let body = select_bound(
+                hud,
+                format!("event.{}.wf.child.{i}", ev.index),
+                &line,
+                tok,
+                icedtea::typo::FontFace::Ui,
+            );
+            let sid = if child.session_id.is_empty() {
+                child.id.clone()
+            } else {
+                child.session_id.clone()
+            };
+            if !sid.is_empty() {
+                col = col.push(mouse_area(body).on_press(Message::OpenChild {
+                    path: child.path.clone(),
+                    sid,
+                }));
+            } else {
+                col = col.push(body);
+            }
+        }
+    }
+    col.into()
+}
+
+fn job_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Message> {
+    let tok = hud.tokens();
+    let mut col = column![].spacing(8);
+    if ev.event_type.starts_with("scheduled_task_") {
+        let human = ev
+            .raw_input
+            .get("human_schedule")
+            .and_then(|v| v.as_str())
+            .or_else(|| ev.raw_input.get("humanSchedule").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .trim();
+        let prompt = ev
+            .raw_input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let next = ev
+            .raw_input
+            .get("next_fire_at")
+            .and_then(|v| v.as_str())
+            .or_else(|| ev.raw_input.get("nextFireAt").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .trim();
+        let tid = job_event_id(&ev.raw_input, &ev.tool_call_id);
+        let (last, child) = hud
+            .overview()
+            .and_then(|o| schedule_last_fire(&o.schedules, &tid))
+            .unwrap_or(("", ""));
+        let last = last.trim();
+        let child = child.trim();
+        for block in schedule_inspect_blocks(prompt, human, next, last, child) {
+            col = col.push(icedtea::widget::meta(
+                block.label,
+                tok,
+                A11y::new(block.label, Role::Header),
+            ));
+            let key = format!(
+                "event.{}.sched.{}",
+                ev.index,
+                block.label.to_ascii_lowercase()
+            );
+            if block.label == "Asked" && looks_like_markdown(&block.body) {
+                col = col.push(markdown_bound(hud, key, &block.body, tok));
+            } else {
+                col = col.push(select_bound(
+                    hud,
+                    key,
+                    &block.body,
+                    tok,
+                    icedtea::typo::FontFace::Ui,
+                ));
+            }
+        }
+        return col.into();
+    }
+    let desc = job_description(&ev.raw_input);
+    let cmd = job_command(&ev.raw_input, &ev.content);
+    let mut path = job_output_path(&ev.raw_input);
+    let tid = job_event_id(&ev.raw_input, &ev.tool_call_id);
+    let want = match ev.event_type.as_str() {
+        "task_backgrounded" => "task_completed",
+        "task_completed" => "task_backgrounded",
+        _ => "",
+    };
+    let mate = if tid.is_empty() || want.is_empty() {
+        None
+    } else {
+        hud.timeline_events().iter().find(|other| {
+            other.index != ev.index
+                && other.event_type == want
+                && job_event_id(&other.raw_input, &other.tool_call_id) == tid
+        })
+    };
+    if path.is_empty() {
+        if let Some(m) = mate {
+            path = job_output_path(&m.raw_input);
+        }
+    }
+    let tail = job_log_tail(&path);
+    let status_raw = if ev.event_type == "task_completed" {
+        &ev.raw_input
+    } else {
+        mate.map(|m| &m.raw_input).unwrap_or(&ev.raw_input)
+    };
+    let status = job_status(status_raw, &ev.content, &tail);
+    let asked = if !desc.is_empty() {
+        desc.clone()
+    } else {
+        cmd.clone()
+    };
+    let mut happen_bits = vec![list_status_label(status, status).to_string()];
+    if let Some(code) = job_exit_code(&ev.event_type, &ev.raw_input, mate.map(|m| &m.raw_input)) {
+        happen_bits.push(format!("exit {code}"));
+    }
+    let ts = |v: &serde_json::Value| v.as_i64().or_else(|| v.as_u64().map(|n| n as i64));
+    let start_ts = if ev.event_type == "task_backgrounded" {
+        ts(&ev.timestamp)
+    } else {
+        mate.and_then(|m| ts(&m.timestamp))
+    };
+    let end_ts = if ev.event_type == "task_completed" {
+        ts(&ev.timestamp)
+    } else {
+        mate.and_then(|m| ts(&m.timestamp))
+    };
+    if let (Some(start), Some(end)) = (start_ts, end_ts) {
+        if end >= start {
+            happen_bits.push(fmt_duration((end - start) as f64));
+        }
+    }
+    let happened = happen_bits.join("  ·  ");
+    let failed = if matches!(status, "failed" | "error" | "cancelled" | "interrupted") {
+        tail.lines().last().unwrap_or("").trim().to_string()
+    } else {
+        String::new()
+    };
+    for block in job_inspect_blocks(&asked, &happened, &failed) {
+        col = col.push(icedtea::widget::meta(
+            block.label,
+            tok,
+            A11y::new(block.label, Role::Header),
+        ));
+        if block.label == "Asked" && !cmd.is_empty() {
+            if !desc.is_empty() {
+                col = col.push(select_bound(
+                    hud,
+                    format!("event.{}.desc", ev.index),
+                    &desc,
+                    tok,
+                    icedtea::typo::FontFace::Ui,
+                ));
+            }
+            col = col.push(code_inset(
+                hud,
+                &format!("event.{}.cmd", ev.index),
+                &cmd,
+                "bash",
+                true,
+                tok,
+            ));
+        } else {
+            col = col.push(select_bound(
+                hud,
+                format!("event.{}.{}", ev.index, block.label.to_ascii_lowercase()),
+                &block.body,
+                tok,
+                icedtea::typo::FontFace::Ui,
+            ));
+        }
+    }
+    if !tail.trim().is_empty() {
+        col = col.push(icedtea::widget::meta(
+            "Log",
+            tok,
+            A11y::new("Log", Role::Header),
+        ));
+        col = col.push(code_inset(
+            hud,
+            &format!("event.{}.log", ev.index),
+            &tail,
+            "txt",
+            true,
+            tok,
+        ));
+    }
+    if desc.is_empty() && cmd.is_empty() && tail.trim().is_empty() {
+        col = col.push(text("—").size(tok.body()).color(tok.muted));
+    }
+    col.into()
+}
+
 fn event_payload<'a>(ev: &'a TimelineEvent, selected: bool, hud: &'a Hud) -> Element<'a, Message> {
     let kind = ev.kind.clone();
     let event_type = ev.event_type.clone();
@@ -2315,6 +2693,12 @@ fn event_payload<'a>(ev: &'a TimelineEvent, selected: bool, hud: &'a Hud) -> Ele
     let field_id = ExtractKey::Event(ev.index).id();
     if !selected {
         return render_payload_text(&body, &kind, &event_type, hud, false, &field_id, "");
+    }
+    if ev.tool_name == "workflow" {
+        return workflow_event_inspect(hud, ev);
+    }
+    if job_event_label(&event_type, event_is_monitor(&ev.raw_input)).is_some() {
+        return job_event_inspect(hud, ev);
     }
     let mut col = column![].spacing(8);
     let call_id = ev.tool_call_id.clone();
@@ -2888,6 +3272,9 @@ mod tests {
         assert!(!prod.contains("kit::search_field"));
         assert!(prod.contains("pattern::status_bar"));
         assert!(!prod.contains("kit::status_footer"));
+        assert!(prod.contains("overview_job_fields"));
+        assert!(!prod.contains("Message::ShowJobLog"));
+        assert!(!prod.contains("job.inspect"));
         assert!(prod.contains("kit::help_modal"));
         assert!(prod.contains("pattern::drawer"));
         assert!(prod.contains("kit::status_empty"));
@@ -3031,7 +3418,46 @@ mod tests {
             .split("fn field_body")
             .next()
             .expect("payload body");
+        assert!(payload.contains("job_event_inspect"));
+        assert!(payload.contains("workflow_event_inspect"));
         assert!(payload.contains("label_badge("));
+        let wf_card = prod
+            .split("fn workflow_event_inspect")
+            .nth(1)
+            .expect("workflow_event_inspect")
+            .split("fn job_event_inspect")
+            .next()
+            .expect("workflow card");
+        assert!(wf_card.contains("wf.child"));
+        assert!(wf_card.contains("Asked"));
+        assert!(wf_card.contains("Happened"));
+        assert!(wf_card.contains("Failed"));
+        assert!(wf_card.contains("select_bound"));
+        assert!(wf_card.contains("OpenChild"));
+        let job_card = prod
+            .split("fn job_event_inspect")
+            .nth(1)
+            .expect("job_event_inspect")
+            .split("fn event_payload")
+            .next()
+            .expect("job card");
+        assert!(job_card.contains("code_inset"));
+        assert!(job_card.contains("\"bash\""));
+        assert!(job_card.contains("job_status"));
+        assert!(job_card.contains("job_event_id"));
+        assert!(job_card.contains("job_exit_code"));
+        assert!(job_card.contains("job_inspect_blocks"));
+        assert!(job_card.contains("schedule_inspect_blocks"));
+        let sub_card = prod
+            .split("fn event_body")
+            .nth(1)
+            .expect("event_body")
+            .split("fn event_payload")
+            .next()
+            .expect("event_body slice");
+        assert!(sub_card.contains("subagent_inspect_blocks"));
+        assert!(job_card.contains("schedule_last_fire"));
+        assert!(!job_card.contains("get(\"last_fired_at\")"));
         assert!(payload.contains("\"Input\""));
         assert!(!payload.contains("text(format_tool_display"));
         let stats = prod

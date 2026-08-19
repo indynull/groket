@@ -38,7 +38,7 @@ from ...analysis.base import AnalysisResult, Finding
 from ...analysis.order import order_report_markdown_by_turn, sort_findings_by_turn
 from ...flags import load_flags, save_flags
 from ...integrations.control import ControlError
-from ...models import Flag, SessionMeta, ToolInputBag, TraceEvent
+from ...models import Flag, JsonObject, SessionMeta, ToolInputBag, TraceEvent, as_json_object
 from ...notes import (
     NoteEntry,
     NotesConflict,
@@ -50,15 +50,22 @@ from ...notes import (
     upsert_note,
 )
 from ...parser import load_session_meta, parse_timeline
+from ...session.jobs import SessionJobs, schedule_for_event, session_jobs_for_view
 from ...session.subagents import (
     SubagentRun,
     compact_child_chrome,
     is_subagent_session_dir,
     parent_session_dir,
     read_session_kind,
-    subagent_runs_for_session,
+    resolve_child_session_path,
+    subagent_runs_for_view,
 )
 from ...session.turns import event_display_turn_map, segment_timeline_turns
+from ...session.workflows import (
+    WorkflowRun,
+    workflow_event_index,
+    workflow_for_event,
+)
 from ...session.workspace_diff import WorkspaceDiff, load_workspace_diff_doc
 from ...utils import fmt_duration
 from .. import text as U
@@ -210,6 +217,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
         self._context_samples = ContextSampleStore()
         self._subagent_runs: list[SubagentRun] = []
+        self._session_jobs = SessionJobs(jobs=[], schedules=[])
+        self._overview_payload: JsonObject | None = None
         self._summary_turn_first: dict[int, int] = {}
         self._event_reader: bool = False
 
@@ -265,6 +274,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                                     (U.assistant_messages(), "asst"),
                                     (U.session_markers(), "sess"),
                                     (t("ui-subagents-filter"), "subagents"),
+                                    (t("ui-background-filter"), "background"),
+                                    (t("ui-workflows-filter"), "workflows"),
                                     (U.errors_only(), "errors"),
                                 ],
                                 value="all",
@@ -308,6 +319,12 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                         with Vertical(id="summary-subagents-card", classes="panel-card"):
                             yield Static(t("ui-subagent-runs"), classes="panel-card-title")
                             yield DataTable(id="stats-subagents-table")
+                    with Vertical(id="summary-jobs-card", classes="panel-card"):
+                        yield Static(t("ui-background-jobs"), classes="panel-card-title")
+                        yield DataTable(id="stats-jobs-table")
+                    with Vertical(id="summary-workflows-card", classes="panel-card"):
+                        yield Static(t("ui-workflows"), classes="panel-card-title")
+                        yield DataTable(id="stats-workflows-table")
                     with Horizontal(id="summary-stats-pair", classes="summary-pair"):
                         with Vertical(classes="panel-card"):
                             yield Static(U.event_types(), classes="panel-card-title")
@@ -369,6 +386,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             for tid in (
                 "#stats-turns-table",
                 "#stats-subagents-table",
+                "#stats-jobs-table",
+                "#stats-workflows-table",
                 "#stats-events-table",
                 "#stats-tools-table",
                 "#stats-phases-table",
@@ -1132,7 +1151,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return await session_overview(ref)
 
         overview = asyncio.run(_ov())
-        ov = overview if isinstance(overview, dict) else {}
+        ov = as_json_object(overview) if isinstance(overview, dict) else {}
+        self._overview_payload = ov
         meta = session_meta_from_overview(ov, fallback_dir=Path(self.session_dir))
         first, total = asyncio.run(fetch_timeline_page(access, ref, page_limit=TIMELINE_RPC_LIMIT))
         self.meta = meta
@@ -1173,6 +1193,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         """Parse the session from disk (``--no-socket``)."""
         from ...parser import session_timeline_stamp
 
+        self._overview_payload = None
         self.meta = load_session_meta(self.session_dir, include_timeline_count=False)
         self.timeline = parse_timeline(self.session_dir)
         if self.meta is not None:
@@ -1230,6 +1251,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             if self._uses_control_data():
                 prev_n = len(self.timeline or [])
                 prev_status = self.meta.list_status_label() if self.meta is not None else ""
+                prev_jobs = self._jobs_status_key()
                 # Always refresh meta/context via overview (serve-side stamp cache).
                 app = resolve_ui_app(self)
                 access = getattr(app, "session_access", lambda: None)()
@@ -1245,11 +1267,15 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 overview = asyncio.run(_ov())
                 from ...session.wire_timeline import session_meta_from_overview
 
+                ov = as_json_object(overview) if isinstance(overview, dict) else {}
+                self._overview_payload = ov
                 meta = session_meta_from_overview(
-                    overview if isinstance(overview, dict) else {},
+                    ov,
                     fallback_dir=Path(self.session_dir),
                 )
                 self.meta = meta
+                self._rebuild_session_jobs()
+                self._rebuild_subagent_runs()
                 new_n = int(meta.num_events or 0)
                 new_status = meta.list_status_label()
                 timeline_updated = False
@@ -1272,6 +1298,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 need_ui = (
                     timeline_updated
                     or new_status != prev_status
+                    or prev_jobs != self._jobs_status_key()
                     or bool(getattr(self, "_light_refresh_heartbeat", False))
                 )
                 if not need_ui:
@@ -1350,6 +1377,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             meta.duration_seconds if meta else None,
             meta.context_usage_compact if meta else None,
             meta.context_tokens_used if meta else None,
+            self._jobs_status_key(),
         )
 
     def _reapply_timeline_view_filter(self) -> None:
@@ -1386,6 +1414,18 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         elif mode == "subagents":
             self._apply_filter(
                 event_types=set(et.SUBAGENT_TYPES),
+                errors_only=False,
+                search_query=search,
+            )
+        elif mode == "background":
+            self._apply_filter(
+                event_types=set(et.TASK_TYPES),
+                errors_only=False,
+                search_query=search,
+            )
+        elif mode == "workflows":
+            self._apply_filter(
+                tool_name="workflow",
                 errors_only=False,
                 search_query=search,
             )
@@ -1838,25 +1878,51 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 if cid not in self._findings_by_call:
                     self._findings_by_call[cid] = finding
         self._rebuild_subagent_runs()
+        self._rebuild_session_jobs()
+
+    def _jobs_status_key(self) -> str:
+        """Stable job/schedule identity for light-refresh paint and fingerprint."""
+        jobs = ",".join(f"{j.job_id}:{j.status}" for j in self._session_jobs.jobs)
+        scheds = ",".join(
+            f"{s.task_id}:{s.next_fire_at}:{s.last_fired_at}" for s in self._session_jobs.schedules
+        )
+        wfs = ",".join(f"{w.run_id}:{w.status}:{w.phase}" for w in self._session_jobs.workflows)
+        return f"{jobs}|{scheds}|{wfs}"
+
+    def _rebuild_session_jobs(self) -> None:
+        """Refresh jobs from the owner overview when attached, else disk."""
+        if not self.session_dir:
+            self._session_jobs = SessionJobs(jobs=[], schedules=[])
+            return
+        self._session_jobs = session_jobs_for_view(
+            self._overview_payload, self.session_dir, self.timeline
+        )
 
     def _rebuild_subagent_runs(self) -> None:
-        """Refresh turn-linked runs from the current parent timeline."""
+        """Refresh runs from the owner overview when attached, else disk."""
+        if self._overview_payload is not None:
+            self._subagent_runs = subagent_runs_for_view(
+                self._overview_payload, self.session_dir, self.timeline or [], [], {}
+            )
+            return
         if not self.timeline:
             self._subagent_runs = []
             return
         segs = segment_timeline_turns(self.timeline)
         turn_by_index = event_display_turn_map(segs)
-        self._subagent_runs = subagent_runs_for_session(
-            self.session_dir, self.timeline, segs, turn_by_index
+        self._subagent_runs = subagent_runs_for_view(
+            None, self.session_dir, self.timeline, segs, turn_by_index
         )
 
-    def _subagent_status_label(self, status: str) -> str:
+    def _status_label(self, status: str) -> str:
         key = {
             "running": "ui-status-running",
             "completed": "status-complete",
+            "complete": "status-complete",
             "done": "status-complete",
             "cancelled": "status-cancelled",
             "failed": "ui-status-failed",
+            "interrupted": "ui-status-interrupted",
         }.get(status, "")
         return t(key) if key else (status or "—")
 
@@ -1886,10 +1952,90 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 turn,
                 run.subagent_type or "—",
                 run.description or run.child_session_id or run.subagent_id or "—",
-                self._subagent_status_label(run.status),
+                self._status_label(run.status),
                 dur,
                 tools,
                 key=f"sub-{i}",
+            )
+
+    def _update_jobs_table(self) -> None:
+        try:
+            table = self.query_one("#stats-jobs-table", DataTable)
+        except Exception:
+            return
+        style_data_table(table)
+        table.clear(columns=True)
+        table.add_columns(
+            t("col-kind"),
+            t("col-status"),
+            t("ui-label"),
+            t("col-started"),
+            t("ui-dur"),
+            t("col-log"),
+        )
+        jobs = self._session_jobs.jobs
+        schedules = self._session_jobs.schedules
+        if not jobs and not schedules:
+            table.add_row("—", "—", t("ui-background-none"), "—", "—", "—")
+            return
+        for i, job in enumerate(jobs):
+            dur = "—"
+            if job.started_at is not None and job.ended_at is not None:
+                dur = self._fmt_dur(float(job.ended_at - job.started_at))
+            log_name = Path(job.output_path).name if job.output_path else "—"
+            table.add_row(
+                job.kind or "—",
+                self._status_label(job.status),
+                job.description or job.command or job.job_id,
+                str(job.started_at) if job.started_at is not None else "—",
+                dur,
+                log_name,
+                key=f"job-{i}",
+            )
+        for i, sch in enumerate(schedules):
+            table.add_row(
+                t("ui-schedule"),
+                t("ui-scheduled"),
+                sch.prompt_preview or sch.human_schedule or sch.task_id,
+                sch.next_fire_at or "—",
+                sch.human_schedule or "—",
+                "—",
+                key=f"sched-{i}",
+            )
+
+    def _update_workflows_table(self) -> None:
+        try:
+            table = self.query_one("#stats-workflows-table", DataTable)
+        except Exception:
+            return
+        style_data_table(table)
+        table.clear(columns=True)
+        table.add_columns(
+            t("ui-label"),
+            t("col-status"),
+            t("ui-phase"),
+            t("ui-agents"),
+            t("ui-dur"),
+        )
+        runs = self._session_jobs.workflows
+        if not runs:
+            table.add_row(t("ui-workflows-none"), "—", "—", "—", "—")
+            return
+        for i, run in enumerate(runs):
+            used = "—" if run.agents_used is None else str(run.agents_used)
+            budget = "—" if run.agent_budget is None else str(run.agent_budget)
+            dur = (
+                self._fmt_dur(run.elapsed_ms / 1000.0)
+                if run.elapsed_ms is not None and run.elapsed_ms > 0
+                else "—"
+            )
+            table.add_row(
+                run.name or run.run_id,
+                self._status_label(run.status),
+                run.phase or "—",
+                f"{used}/{budget}",
+                dur,
+                key=f"wf-{i}",
             )
 
     def _focused_subagent_run(self) -> SubagentRun | None:
@@ -1933,6 +2079,26 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         opener(run.child_path)
         self.notify(t("ui-subagent-opened"))
 
+    def _open_workflow_child(self, agent_id: str) -> None:
+        """Open a workflow child session (same return path as a subagent bookend)."""
+        cid = (agent_id or "").strip()
+        if not cid:
+            self.notify(t("ui-subagent-missing"))
+            return
+        path = resolve_child_session_path(self.session_dir, cid)
+        if path is None:
+            self.notify(t("ui-subagent-missing"))
+            return
+        opener = getattr(self.app, "open_session_path", None)
+        if not callable(opener):
+            return
+        opener(path)
+        self.notify(t("ui-subagent-opened"))
+
+    @on(DetailView.ChildActivated)
+    def _on_workflow_child_activated(self, event: DetailView.ChildActivated) -> None:
+        self._open_workflow_child(event.child.agent_id)
+
     def _focused_subagent_path(self) -> Path | None:
         run = self._focused_subagent_run()
         if run is None or not run.openable or run.child_path is None:
@@ -1962,6 +2128,80 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         if callable(opener):
             opener(run.child_path)
 
+    def _focus_task_event(self, task_id: str, tool_call_id: str = "") -> None:
+        """Select the matching task / schedule bookend on Timeline."""
+        wanted = (task_id or "").strip()
+        call = (tool_call_id or "").strip()
+        hit: TraceEvent | None = None
+        for ev in self.timeline:
+            if ev.event_type not in et.TASK_TYPES and not ev.event_type.startswith(
+                "scheduled_task_"
+            ):
+                continue
+            bag = ev.raw_input if isinstance(ev.raw_input, ToolInputBag) else None
+            ev_id = bag.as_str("task_id") if bag is not None else ""
+            ev_call = ev.tool_call_id or (bag.as_str("tool_call_id") if bag is not None else "")
+            if wanted and ev_id == wanted:
+                hit = ev
+                if ev.event_type in {"task_backgrounded", "scheduled_task_created"}:
+                    break
+            elif call and ev_call == call:
+                hit = ev
+        if hit is None:
+            return
+        self._jump_timeline_to_event(hit.index)
+
+    @on(DataTable.RowSelected, "#stats-jobs-table")
+    def _on_jobs_row_selected(self, event: DataTable.RowSelected) -> None:
+        raw = str(event.row_key.value) if event.row_key is not None else ""
+        if raw.startswith("job-"):
+            try:
+                idx = int(raw.split("-", 1)[1])
+            except ValueError:
+                return
+            if 0 <= idx < len(self._session_jobs.jobs):
+                job = self._session_jobs.jobs[idx]
+                self._focus_task_event(job.job_id, job.tool_call_id)
+            return
+        if raw.startswith("sched-"):
+            try:
+                idx = int(raw.split("-", 1)[1])
+            except ValueError:
+                return
+            if 0 <= idx < len(self._session_jobs.schedules):
+                self._focus_task_event(self._session_jobs.schedules[idx].task_id)
+
+    @on(DataTable.RowSelected, "#stats-workflows-table")
+    def _on_workflows_row_selected(self, event: DataTable.RowSelected) -> None:
+        raw = str(event.row_key.value) if event.row_key is not None else ""
+        if not raw.startswith("wf-"):
+            return
+        try:
+            idx = int(raw.split("-", 1)[1])
+        except ValueError:
+            return
+        if 0 <= idx < len(self._session_jobs.workflows):
+            self._focus_workflow_run(self._session_jobs.workflows[idx])
+
+    def _timeline_event_for_workflow(self, run: WorkflowRun) -> TraceEvent | None:
+        """Bookend for *run*: ``run_id`` on the bag or body, else name / stem."""
+        idx = workflow_event_index(run, self.timeline or [])
+        if idx is None:
+            return None
+        return next((ev for ev in (self.timeline or []) if int(ev.index) == idx), None)
+
+    def _focus_workflow_run(self, run: WorkflowRun) -> None:
+        """Inspect this merged run: jump to its bookend, or paint the row."""
+        hit = self._timeline_event_for_workflow(run)
+        if hit is not None:
+            self._jump_timeline_to_event(hit.index)
+            return
+        self._ensure_timeline_tab()
+        try:
+            self.query_one("#detail-panel", DetailView).show_workflow(run)
+        except Exception:
+            return
+
     @on(DataTable.RowSelected, "#stats-turns-table")
     def _on_turn_row_selected(self, event: DataTable.RowSelected) -> None:
         raw = str(event.row_key.value) if event.row_key is not None else ""
@@ -1976,6 +2216,44 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return
         self._jump_timeline_to_event(first, turn_index=turn_i)
 
+    def _reveal_timeline_event(self, event_index: int) -> None:
+        """Drop Turn / View filters that would hide *event_index*."""
+        idxs = self._turn_event_indices()
+        if idxs is not None and int(event_index) not in idxs:
+            self._turn_filter = "all"
+            with suppress(Exception):
+                sel = self.query_one("#timeline-turn-select", Select)
+                if sel.display:
+                    sel.value = "all"
+        ev = next((e for e in (self.timeline or []) if int(e.index) == int(event_index)), None)
+        if ev is None:
+            return
+        mode = getattr(self, "_timeline_filter", "all") or "all"
+        if mode in ("all", "") or self._event_matches_timeline_view(ev, mode):
+            return
+        self._timeline_filter = "all"
+        self._sync_timeline_view_select("all")
+
+    def _event_matches_timeline_view(self, ev: TraceEvent, mode: str) -> bool:
+        """True when *ev* stays visible under Timeline View *mode*."""
+        if mode == "workflows":
+            return (ev.tool_name or "") == "workflow"
+        if mode == "tools":
+            return ev.event_type in et.TOOL_TYPES
+        if mode == "user":
+            return ev.event_type in et.USER_TYPES
+        if mode == "asst":
+            return ev.event_type in (et.AGENT_TYPES | et.THOUGHT_TYPES)
+        if mode == "sess":
+            return ev.event_type in et.SESSION_CHROME_TYPES
+        if mode == "subagents":
+            return ev.event_type in et.SUBAGENT_TYPES
+        if mode == "background":
+            return ev.event_type in et.TASK_TYPES
+        if mode == "errors":
+            return bool(ev.is_error or ev.event_type in et.ERROR_TYPES)
+        return True
+
     def _jump_timeline_to_event(self, event_index: int, *, turn_index: int | None = None) -> None:
         """Open Timeline and place the cursor on *event_index*."""
         if turn_index is not None:
@@ -1984,7 +2262,9 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 sel = self.query_one("#timeline-turn-select", Select)
                 if sel.display:
                     sel.value = str(turn_index)
-        self._ensure_timeline_tab()
+        else:
+            self._reveal_timeline_event(event_index)
+        self._ensure_timeline_tab(focus_list=False)
         self._apply_timeline_filters()
 
         def _place() -> None:
@@ -2951,6 +3231,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         except Exception:
             turn_rows = []
         self._update_subagents_table()
+        self._update_jobs_table()
+        self._update_workflows_table()
         try:
             turns_table = self.query_one("#stats-turns-table", DataTable)
             style_data_table(turns_table)
@@ -3001,10 +3283,14 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             pass
         show_turns = len(turn_rows) > 1
         show_subs = bool(self._subagent_runs)
+        show_jobs = bool(self._session_jobs.jobs or self._session_jobs.schedules)
+        show_wfs = bool(self._session_jobs.workflows)
         try:
             self.query_one("#summary-turns-card").display = show_turns
             self.query_one("#summary-subagents-card").display = show_subs
             self.query_one("#summary-turns-pair").display = show_turns or show_subs
+            self.query_one("#summary-jobs-card").display = show_jobs
+            self.query_one("#summary-workflows-card").display = show_wfs
         except Exception:
             pass
         ev_table = self.query_one("#stats-events-table", DataTable)
@@ -3068,8 +3354,12 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             "plan": t("ui-planning"),
             "subagent_spawned": t("ui-subagent"),
             "subagent_finished": t("ui-subagent"),
-            "task_backgrounded": t("ui-subagent"),
-            "task_completed": t("ui-subagent"),
+            "task_backgrounded": t("ui-background-jobs"),
+            "task_completed": t("ui-background-jobs"),
+            "scheduled_task_created": t("ui-schedule"),
+            "scheduled_task_updated": t("ui-schedule"),
+            "scheduled_task_fired": t("ui-schedule"),
+            "scheduled_task_deleted": t("ui-schedule"),
         }
         for ev in self.timeline:
             dur = durations.get(ev.index)
@@ -3148,6 +3438,14 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             paired_call=timeline_table.get_paired_call(ev),
             paired_result=timeline_table.get_paired_result(ev),
             turn_index=timeline_table.turn_index_for(ev.index),
+            subagent_run=self._run_for_bookend_event(ev),
+            job_mate=timeline_table.job_mate(ev),
+            schedule=schedule_for_event(ev, self._session_jobs.schedules),
+            workflow=workflow_for_event(
+                ev,
+                self._session_jobs.workflows,
+                mate=timeline_table.get_paired_result(ev) or timeline_table.get_paired_call(ev),
+            ),
         )
         return timeline_table
 
@@ -3254,6 +3552,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         "asst",
         "sess",
         "subagents",
+        "background",
+        "workflows",
         "errors",
     )
 
@@ -3265,14 +3565,19 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         except Exception:
             pass
 
-    def _ensure_timeline_tab(self) -> None:
-        """Timeline view only applies on pane 1 — switch there first."""
+    def _ensure_timeline_tab(self, *, focus_list: bool = True) -> None:
+        """Timeline view only applies on pane 1 — switch there first.
+
+        Jump callers pass ``focus_list=False`` so tab activation does not
+        focus row 0 before the cursor lands on the target event.
+        """
+        selector = "#timeline-list" if focus_list else ""
         try:
             tabs = self.query_one("#browser-tabs", TabbedContent)
             if tabs.active != "tab-timeline":
-                self.activate_tab_pane("tab-timeline")
+                self.activate_tab_pane("tab-timeline", focus_selector=selector)
         except Exception:
-            self.activate_tab_pane("tab-timeline")
+            self.activate_tab_pane("tab-timeline", focus_selector=selector)
 
     def _apply_timeline_mode(self, mode: str) -> None:
         """Apply View dropdown mode; keyboard and Select stay aligned."""
@@ -4204,6 +4509,14 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 paired_call=timeline_table.get_paired_call(ev),
                 paired_result=timeline_table.get_paired_result(ev),
                 turn_index=timeline_table.turn_index_for(ev.index),
+                subagent_run=self._run_for_bookend_event(ev),
+                job_mate=timeline_table.job_mate(ev),
+                schedule=schedule_for_event(ev, self._session_jobs.schedules),
+                workflow=workflow_for_event(
+                    ev,
+                    self._session_jobs.workflows,
+                    mate=timeline_table.get_paired_result(ev) or timeline_table.get_paired_call(ev),
+                ),
             )
         except Exception:
             pass

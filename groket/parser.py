@@ -38,7 +38,7 @@ from .models import (
 from .paths import RUN_PREFIXES, is_run_dir_name, strip_run_prefix
 from .scan import find_sessions as walk_sessions
 from .scan import keep_updates_line, skip_dir_name
-from .tool_display import web_search_from_raw_output
+from .tool_display import job_list_preview, web_search_from_raw_output
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +515,27 @@ def _merge_search_into_bag(bag: ToolInputBag, query: str, url: str = "") -> Tool
     return ToolInputBag(data) if changed else bag
 
 
+def _merge_workflow_output_ids(
+    bag: ToolInputBag, raw_output: object, *, tool_name: str = ""
+) -> ToolInputBag:
+    """Copy ``run_id`` / ``name`` from a Workflow ``rawOutput`` onto the tool bag."""
+    if not isinstance(raw_output, dict):
+        return bag
+    kind = json_as_str(raw_output.get("type")).strip()
+    if (tool_name or "") != "workflow" and kind != "Workflow":
+        return bag
+    rid = json_as_str(raw_output.get("run_id")).strip()
+    if not rid:
+        return bag
+    data = dict(bag.raw())
+    if not json_as_str(data.get("run_id")).strip():
+        data["run_id"] = rid
+    name = json_as_str(raw_output.get("name")).strip()
+    if name and not json_as_str(data.get("name")).strip():
+        data["name"] = name
+    return ToolInputBag(data)
+
+
 def _apply_tool_result_meta(tc: ToolCall, update: dict) -> None:
     """Apply rawOutput metadata and error status from a tool_call_update."""
     raw_output = update.get("rawOutput")
@@ -730,6 +751,10 @@ def _coalesce_tool_result(
         if failed:
             pending.is_error = True
 
+    call_input = _merge_workflow_output_ids(call_input, raw_output, tool_name=tool_name)
+    if call_id in pending_tools:
+        pending_tools[call_id].raw_input = call_input
+
     if call_id in result_by_call:
         ev = events[result_by_call[call_id]]
         if result_text and (len(result_text) >= len(ev.content or "") or terminal):
@@ -743,6 +768,12 @@ def _coalesce_tool_result(
             ev.tool_name = tool_name
         if call_input.raw() and not ev.raw_input.raw():
             ev.raw_input = call_input
+        else:
+            ev.raw_input = _merge_workflow_output_ids(
+                ev.raw_input if isinstance(ev.raw_input, ToolInputBag) else call_input,
+                raw_output,
+                tool_name=tool_name or ev.tool_name,
+            )
     elif result_text or failed:
         ev = TraceEvent(
             index=idx,
@@ -1146,9 +1177,10 @@ def _consume_updates_line(line: bytes, line_no: int, state: _UpdatesScanState) -
         )
         state.idx = idx + 1
 
+    elif _is_task_family_update(etype):
+        _append_task_family_update(state, etype, update, ts, line_no)
+
     elif etype in (
-        "task_backgrounded",
-        "task_completed",
         "turn_completed",
         "current_mode_update",
         "retry_state",
@@ -1166,9 +1198,6 @@ def _consume_updates_line(line: bytes, line_no: int, state: _UpdatesScanState) -
             val = update.get(key)
             if val is not None and str(val).strip():
                 bits.append(f"{key}={val}")
-        snap = update.get("task_snapshot")
-        if isinstance(snap, dict) and snap:
-            bits.append(json.dumps(snap)[:400])
         events.append(
             TraceEvent(
                 index=idx,
@@ -1182,45 +1211,33 @@ def _consume_updates_line(line: bytes, line_no: int, state: _UpdatesScanState) -
         state.idx = idx + 1
 
     elif etype == "subagent_spawned":
-        desc = json_as_str(update.get("description"))
-        agent_type = json_as_str(update.get("subagentType") or update.get("subagent_type"))
-        child = json_as_str(update.get("childSessionId") or update.get("child_session_id"))
-        bits = [f"Spawned {agent_type}: {desc}".strip()]
-        if child:
-            bits.append(child)
+        from .session.subagents import subagent_list_preview
+
+        bag = ToolInputBag(as_json_object(update))
         events.append(
             TraceEvent(
                 index=idx,
                 event_type="subagent_spawned",
                 timestamp=ts,
                 update_index=line_no,
-                content="  ".join(b for b in bits if b),
-                raw_input=ToolInputBag(as_json_object(update)),
+                content=subagent_list_preview(etype, bag.raw()),
+                raw_input=bag,
             )
         )
         state.idx = idx + 1
 
     elif etype == "subagent_finished":
-        child = json_as_str(update.get("childSessionId") or update.get("child_session_id"))
-        status = json_as_str(update.get("status"))
-        dur = update.get("durationMs")
-        if dur is None:
-            dur = update.get("duration_ms")
-        bits = ["Subagent finished"]
-        if child:
-            bits.append(child)
-        if status:
-            bits.append(status)
-        if dur is not None and str(dur).strip() != "":
-            bits.append(f"duration_ms={dur}")
+        from .session.subagents import subagent_list_preview
+
+        bag = ToolInputBag(as_json_object(update))
         events.append(
             TraceEvent(
                 index=idx,
                 event_type="subagent_finished",
                 timestamp=ts,
                 update_index=line_no,
-                content="  ".join(bits),
-                raw_input=ToolInputBag(as_json_object(update)),
+                content=subagent_list_preview(etype, bag.raw()),
+                raw_input=bag,
             )
         )
         state.idx = idx + 1
@@ -1347,6 +1364,93 @@ def _apply_goal_updated(
             update_index=line_no,
             content=content,
             raw_input=bag,
+        )
+    )
+    state.idx += 1
+
+
+_TASK_FIELD_KEYS = (
+    "task_id",
+    "tool_call_id",
+    "command",
+    "cwd",
+    "output_file",
+    "description",
+    "monitor_description",
+    "human_schedule",
+    "next_fire_at",
+    "prompt",
+    "reason",
+    "will_wake",
+    "start_time",
+    "end_time",
+    "output",
+    "kind",
+    "display_command",
+    "signal",
+    "exit_code",
+    "completed",
+)
+
+
+def _is_task_family_update(etype: str) -> bool:
+    """True for background/monitor bookends and any ``scheduled_task_*``."""
+    return etype.startswith("scheduled_task_") or etype in {
+        "task_backgrounded",
+        "task_completed",
+    }
+
+
+def _task_family_bag(update: JsonObject) -> ToolInputBag:
+    """Flatten top-level and ``task_snapshot`` fields onto ``raw_input``."""
+    merged: JsonObject = {}
+    snap = update.get("task_snapshot")
+    if isinstance(snap, dict):
+        merged.update(as_json_object(snap))
+    merged.update(update)
+    bag: JsonObject = {}
+    for key in _TASK_FIELD_KEYS:
+        if key in merged and merged[key] is not None:
+            bag[key] = merged[key]
+    if isinstance(snap, dict):
+        bag["task_snapshot"] = as_json_object(snap)
+    return ToolInputBag(bag)
+
+
+def _one_line_preview(text: str, limit: int = 160) -> str:
+    return text.replace("\n", " ").strip()[:limit]
+
+
+def _task_family_content(etype: str, bag: ToolInputBag) -> str:
+    """Short list preview; structured fields live on ``raw_input``."""
+    preview = job_list_preview(etype, bag.raw(), max_chars=160)
+    if preview:
+        return preview
+    if etype == "task_completed":
+        out = _one_line_preview(bag.as_str("output"))
+        if out:
+            return out
+    return etype
+
+
+def _append_task_family_update(
+    state: _UpdatesScanState,
+    etype: str,
+    update: JsonObject,
+    ts: int | None,
+    line_no: int,
+) -> None:
+    """Materialize a task or schedule sessionUpdate as one timeline row."""
+    bag = _task_family_bag(update)
+    state.events.append(
+        TraceEvent(
+            index=state.idx,
+            event_type=etype,
+            timestamp=ts,
+            content=_task_family_content(etype, bag),
+            tool_call_id=bag.as_str("tool_call_id"),
+            raw_input=bag,
+            update_index=line_no,
         )
     )
     state.idx += 1

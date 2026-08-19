@@ -2038,6 +2038,54 @@ impl Hud {
             keep.insert(id.clone());
             self.bind_field(id, &Self::bind_display(&out));
         }
+        let (raw, content, etype) = {
+            let ev = &self.timeline[pos];
+            (
+                ev.raw_input.clone(),
+                ev.content.clone(),
+                ev.event_type.clone(),
+            )
+        };
+        if crate::format::job_event_label(&etype, crate::format::event_is_monitor(&raw)).is_some() {
+            let cmd = crate::format::job_command(&raw, &content);
+            if !cmd.is_empty() {
+                let id = format!("event.{index}.cmd");
+                keep.insert(id.clone());
+                self.bind_field(id, &cmd);
+            }
+            let desc = crate::format::job_description(&raw);
+            if !desc.is_empty() {
+                let id = format!("event.{index}.desc");
+                keep.insert(id.clone());
+                if crate::format::looks_like_markdown(&desc) {
+                    self.bind_markdown(&id, &desc);
+                } else {
+                    self.bind_field(id, &desc);
+                }
+            }
+            let tail = crate::format::sanitize_console_text(&crate::format::job_log_tail(
+                &crate::format::job_output_path(&raw),
+            ));
+            if !tail.trim().is_empty() {
+                let id = format!("event.{index}.log");
+                keep.insert(id.clone());
+                self.bind_field(id, &tail);
+            }
+            let prompt = raw
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !prompt.is_empty() {
+                let id = format!("event.{index}.prompt");
+                keep.insert(id.clone());
+                if crate::format::looks_like_markdown(&prompt) {
+                    self.bind_markdown(&id, &prompt);
+                } else {
+                    self.bind_field(id, &prompt);
+                }
+            }
+        }
         let prefix = format!("event.{index}");
         let prefix_dot = format!("{prefix}.");
         self.fields.retain(|id| {
@@ -5730,6 +5778,37 @@ mod tests {
     }
 
     #[test]
+    fn overview_jobs_are_glance_counts() {
+        use crate::format::overview_job_fields;
+        use crate::wire::{BackgroundJobRow, ScheduleRow};
+        let jobs = vec![
+            BackgroundJobRow {
+                id: "a".into(),
+                status: "running".into(),
+                ..BackgroundJobRow::default()
+            },
+            BackgroundJobRow {
+                id: "b".into(),
+                status: "done".into(),
+                ..BackgroundJobRow::default()
+            },
+        ];
+        let schedules = vec![ScheduleRow {
+            id: "s".into(),
+            human_schedule: "every 1 hour".into(),
+            ..ScheduleRow::default()
+        }];
+        let rows = overview_job_fields(&jobs, &schedules, &[]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].key, "background");
+        assert_eq!(rows[0].value, "1 running · 1 complete");
+        assert_eq!(rows[1].key, "schedules");
+        assert_eq!(rows[1].value, "every 1 hour");
+        assert!(!rows.iter().any(|r| r.value.contains("DONE")));
+        assert!(!rows.iter().any(|r| r.value.contains('\n')));
+    }
+
+    #[test]
     fn focus_search_after_pick_stays_in_browse() {
         let mut hud = Hud {
             visible: true,
@@ -7860,6 +7939,72 @@ mod tests {
         assert!(hud.timeline_open().is_none());
         let req = hud.last_timeline().expect("turn-scoped");
         assert_eq!(req.prompt_index, Some(1));
+    }
+
+    #[test]
+    fn overview_named_workflow_jump_lands_timeline() {
+        use crate::format::overview_run_jumps;
+        use crate::wire::{Overview, WorkflowRow};
+        let mut hud = hud_with_session();
+        load_page(
+            &mut hud,
+            0,
+            false,
+            true,
+            vec![ev_json(0, "a"), ev_json(12, "workflow")],
+            20,
+            0,
+        );
+        hud.overview = Some(Overview {
+            workflows: vec![WorkflowRow {
+                id: "wf_sprint8".into(),
+                name: "sprint-8".into(),
+                event_index: Some(12),
+                ..WorkflowRow::default()
+            }],
+            ..Overview::default()
+        });
+        let jumps = overview_run_jumps(
+            &hud.overview.as_ref().unwrap().background_jobs,
+            &hud.overview.as_ref().unwrap().workflows,
+        );
+        assert_eq!(jumps[0].event_index, 12);
+        let _ = hud.update(Message::JumpTimeline(jumps[0].event_index));
+        assert_eq!(hud.tab(), Tab::Timeline);
+        assert_eq!(hud.timeline_focus(), Some(12));
+        assert!(hud.is_timeline_open(12));
+    }
+
+    #[test]
+    fn failed_workflow_finding_is_on_findings() {
+        use crate::wire::{FindingRow, FindingsBlock, Overview};
+        let mut hud = hud_with_session();
+        hud.overview = Some(Overview {
+            findings: FindingsBlock {
+                findings: vec![FindingRow {
+                    id: "workflow:wf_sprint8".into(),
+                    plugin_id: "basic".into(),
+                    title: "Workflow sprint-8 failed".into(),
+                    event_indices: vec![12],
+                    ..FindingRow::default()
+                }],
+                ..FindingsBlock::default()
+            },
+            ..Overview::default()
+        });
+        let _ = hud.update(Message::SetTab(Tab::Findings));
+        assert_eq!(hud.tab(), Tab::Findings);
+        let titles: Vec<String> = hud
+            .overview()
+            .map(|o| {
+                o.findings
+                    .findings
+                    .iter()
+                    .map(|f| f.title.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(titles.iter().any(|t| t.contains("sprint-8")));
     }
 
     #[test]

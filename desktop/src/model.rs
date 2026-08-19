@@ -52,17 +52,21 @@ pub enum KindFilter {
     Asst,
     Sess,
     Subagents,
+    Background,
+    Workflows,
     Errors,
 }
 
 impl KindFilter {
-    pub const ALL: [KindFilter; 7] = [
+    pub const ALL: [KindFilter; 9] = [
         KindFilter::All,
         KindFilter::Tools,
         KindFilter::User,
         KindFilter::Asst,
         KindFilter::Sess,
         KindFilter::Subagents,
+        KindFilter::Background,
+        KindFilter::Workflows,
         KindFilter::Errors,
     ];
 
@@ -74,6 +78,8 @@ impl KindFilter {
             KindFilter::Asst => "Assistant messages",
             KindFilter::Sess => "Session markers",
             KindFilter::Subagents => "Subagents",
+            KindFilter::Background => "Background",
+            KindFilter::Workflows => "Workflows",
             KindFilter::Errors => "Errors only",
         }
     }
@@ -86,6 +92,8 @@ impl KindFilter {
             KindFilter::Asst => "Assistant",
             KindFilter::Sess => "Session",
             KindFilter::Subagents => "Subagents",
+            KindFilter::Background => "Background",
+            KindFilter::Workflows => "Workflows",
             KindFilter::Errors => "Errors",
         }
     }
@@ -98,6 +106,8 @@ impl KindFilter {
             KindFilter::Asst => "asst",
             KindFilter::Sess => "sess",
             KindFilter::Subagents => "subagents",
+            KindFilter::Background => "background",
+            KindFilter::Workflows => "workflows",
             KindFilter::Errors => "errors",
         }
     }

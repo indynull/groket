@@ -516,6 +516,112 @@ async def test_timeline_filter_by_types_set() -> None:
 
 
 @pytest.mark.asyncio
+async def test_timeline_task_bookends_are_not_labeled_subagent() -> None:
+    from groket import event_types as et
+
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        events = [
+            make_trace_event(
+                index=0,
+                event_type="task_backgrounded",
+                content="Watch board",
+                raw_input={
+                    "task_id": "j1",
+                    "description": "Watch board",
+                    "output_file": "/tmp/monitor-call.log",
+                },
+            ),
+            make_trace_event(
+                index=1,
+                event_type="scheduled_task_created",
+                content="every 1 hour",
+                raw_input={"task_id": "s1", "human_schedule": "every 1 hour"},
+            ),
+            make_trace_event(index=2, event_type="subagent_spawned", content="worker"),
+        ]
+        tl.load_events(events)
+        bg = " ".join(tl._row_cell_values(events[0])).lower()
+        sched = " ".join(tl._row_cell_values(events[1])).lower()
+        sub = " ".join(tl._row_cell_values(events[2])).lower()
+        assert "background" in bg or "monitor" in bg
+        assert "subagent" not in bg
+        assert "schedule" in sched
+        assert "subagent" in sub
+        tl.apply_filter(event_types=set(et.TASK_TYPES))
+        assert tl.row_count == 2
+
+
+@pytest.mark.asyncio
+async def test_timeline_background_row_shows_command_once() -> None:
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        ev = make_trace_event(
+            index=0,
+            event_type="task_backgrounded",
+            content=(
+                "task_backgrounded  tool_call_id=call-1  command=cd /tmp && just lint  cwd=/tmp"
+            ),
+            raw_input={},
+        )
+        cells = tl._row_cell_values(ev)
+        type_cell, tool_cell, summary = cells[4], cells[5], cells[6]
+        assert "background start" in type_cell.lower()
+        assert "background start" not in tool_cell.lower()
+        assert tool_cell == ""
+        assert "$ cd /tmp && just lint" in summary
+        assert "task_backgrounded" not in summary
+
+
+@pytest.mark.asyncio
+async def test_timeline_subagent_finish_summary_is_not_the_dump() -> None:
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        spawn = make_trace_event(
+            index=100,
+            event_type="subagent_spawned",
+            timestamp=900,
+            content="Investigate the bug",
+            raw_input={
+                "childSessionId": "01a016d1-4df7-7d30-b99f-65289aa0b417",
+                "subagentType": "coder",
+                "description": "Investigate the bug",
+            },
+        )
+        ev = make_trace_event(
+            index=206,
+            event_type="subagent_finished",
+            timestamp=1000,
+            content=(
+                "Subagent finished  01a016d1-4df7-7d30-b99f-65289aa0b417  "
+                "completed  duration_ms=96555"
+            ),
+            raw_input={
+                "childSessionId": "01a016d1-4df7-7d30-b99f-65289aa0b417",
+                "status": "completed",
+                "durationMs": 96555,
+            },
+        )
+        nxt = make_trace_event(
+            index=207,
+            event_type="agent_message_chunk",
+            content="ok",
+            timestamp=1000,
+        )
+        tl.load_events([spawn, ev, nxt])
+        cells = tl._row_cell_values(ev)
+        joined = " ".join(cells)
+        assert "Investigate the bug" in cells[6]
+        assert "coder" in cells[5]
+        assert "1m36s" in joined
+        assert "duration_ms" not in joined
+        assert "01a016d1" not in cells[6]
+
+
+@pytest.mark.asyncio
 async def test_timeline_filter_errors_only() -> None:
     app = _TimelineApp()
     async with app.run_test():
@@ -558,6 +664,24 @@ async def test_timeline_filter_tool_name() -> None:
         tl.load_events(events)
         tl.apply_filter(tool_name="read_file")
         assert tl.row_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_timeline_filter_workflow_tool() -> None:
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        events = _basic_events() + [
+            make_trace_event(
+                index=99,
+                event_type="tool_call",
+                tool_name="workflow",
+                raw_input={"script_path": "/repo/.grok/workflows/sprint.rhai"},
+            )
+        ]
+        tl.load_events(events)
+        tl.apply_filter(tool_name="workflow")
+        assert tl.row_count == 1
 
 
 @pytest.mark.asyncio

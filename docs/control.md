@@ -61,7 +61,7 @@ The owner accepts either and replies in the same frame the client used.
 | `initialize` | Handshake (owner reports `protocolVersion` `1.0.0`) |
 | `session/list` | Catalog page (see below) |
 | `session/get` | Session meta (status, context, counts, notes revision) |
-| `session/overview` | Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. |
+| `session/overview` | Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies). |
 | `session/timeline` | Paged events (`offset`, `limit`, `type`, `kind`, `query`, `promptIndex`, `aroundIndex`, `atIndex`, `contentChars`). Spawn/finish rows include `childSessionId` and finish stats. |
 | `session/turns` | Turn segments plus `subagentRuns` (turn-scoped child runs; `openable` + `childPath`). |
 | `session/usage` | Tool / MCP / skill usage |

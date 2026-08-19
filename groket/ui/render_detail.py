@@ -19,16 +19,41 @@ from textual.app import App
 from .. import event_types as et
 from ..analysis.base import Finding
 from ..models import Flag, JsonObject, JsonValue, ToolInputBag, TraceEvent
+from ..session.jobs import (
+    ScheduleTask,
+    event_job_kind,
+    job_duration_seconds,
+    job_status_for_event,
+    read_log_tail,
+)
+from ..session.subagents import (
+    SubagentInspect,
+    SubagentRun,
+    subagent_duration_seconds,
+    subagent_inspect,
+)
+from ..session.workflows import WorkflowRun, workflow_name_from_raw
 from ..tool_display import (
     display_tool_output,
     format_tool_display,
     image_result_message,
     image_result_path,
+    job_list_preview,
+    task_fields_from_content,
 )
 from ..utils import fmt_duration
 from .i18n import t
+from .panel_render import looks_like_markdown
+from .styles import (
+    COMPLETE,
+    FAILED,
+    RUNNING,
+    SYNTAX_THEME_DARK,
+    severity_style,
+    syntax_theme_for_app,
+    tool_style,
+)
 from .styles import EVENT_TYPE_STYLE as KIND_STYLES
-from .styles import SYNTAX_THEME_DARK, severity_style, syntax_theme_for_app, tool_style
 
 logger = logging.getLogger(__name__)
 # Regexes stay in Python (not Fluent — catalogs are for UI copy only).
@@ -688,7 +713,8 @@ def _render_tool_output(out: str, tname: str, path_hint: str, *, truncate: bool 
             out_disp = json.dumps(json.loads(out_disp), indent=2, ensure_ascii=False)
             lexer = "json"
     if not _prefer_syntax_output(tname, lexer or "text", out_disp, console_like=console_like):
-        parts.append(Text(out_disp))
+        # Console streams still use Syntax("text") so tails share tool code chrome.
+        parts.append(_syntax(out_disp, "text"))
         return parts
     # Unknown language still uses Syntax("text") for monospaced code chrome.
     use_lexer = lexer or "text"
@@ -883,6 +909,248 @@ def render_tool_detail_from_event(
     )
 
 
+def _prose_or_code(text: str) -> Text | Markdown | Syntax:
+    """Markdown, source Syntax, or plain text — same cues as tool/message bodies."""
+    body = text or ""
+    if looks_like_markdown(body):
+        return Markdown(body)
+    if _looks_like_source_code(body) or _looks_json(body):
+        lexer = "json" if _looks_json(body) else (_guess_source_lexer(body) or "text")
+        return _syntax(body, lexer)
+    return Text(body)
+
+
+def _line(text: str = "", *, style: str | None = None) -> Text:
+    """One selectable body line (Group children are concatenated without newlines)."""
+    body = text if text.endswith("\n") else f"{text}\n"
+    return Text(body, style=style) if style else Text(body)
+
+
+def _section(label: str) -> Text:
+    """Bold inspect label on its own line."""
+    return Text(f"{label}\n", style="bold")
+
+
+def _append_block(parts: list, block: Text | Markdown | Syntax) -> None:
+    """Append a body block and ensure a trailing newline for selectable layout."""
+    if isinstance(block, Text):
+        if block.plain and not block.plain.endswith("\n"):
+            block.append("\n")
+        parts.append(block)
+        return
+    parts.append(block)
+    parts.append(Text("\n"))
+
+
+def _task_detail_parts(
+    ev: TraceEvent,
+    *,
+    mate: TraceEvent | None = None,
+    schedule: ScheduleTask | None = None,
+) -> list:
+    """Status, command (bash Syntax), log tail (code chrome) — not a dump."""
+    command = ""
+    cwd = ""
+    output_path = ""
+    desc = ""
+    prompt = ""
+    human = ""
+    last_fire = schedule.last_fired_at if schedule is not None else ""
+    last_child = schedule.last_subagent_id if schedule is not None else ""
+    if isinstance(ev.raw_input, ToolInputBag):
+        command = ev.raw_input.as_str("command") or ev.raw_input.as_str("display_command")
+        cwd = ev.raw_input.as_str("cwd")
+        output_path = ev.raw_input.as_str("output_file")
+        desc = ev.raw_input.as_str("description") or ev.raw_input.as_str("monitor_description")
+        prompt = ev.raw_input.as_str("prompt")
+        human = ev.raw_input.as_str("human_schedule")
+    dump = task_fields_from_content(ev.content or "")
+    command = command or dump.get("command", "")
+    cwd = cwd or dump.get("cwd", "")
+    output_path = output_path or dump.get("output_file", "")
+    parts: list = [Text("\n")]
+    asked = prompt.strip() or desc.strip() or command.strip()
+    if asked:
+        parts.append(_section(t("ui-inspect-asked")))
+        if prompt.strip():
+            _append_block(parts, _prose_or_code(prompt))
+        elif desc.strip() and desc.strip() != command.strip():
+            _append_block(parts, _prose_or_code(desc))
+        if command.strip() and command.strip() != asked:
+            _append_block(parts, _syntax(command, "bash"))
+        elif command.strip() and not prompt.strip() and not desc.strip():
+            _append_block(parts, _syntax(command, "bash"))
+    status = job_status_for_event(ev, mate=mate)
+    happen_bits: list[str] = []
+    if ev.event_type in {"task_backgrounded", "task_completed"}:
+        happen_bits.append(_subagent_status_word(status))
+    if human.strip():
+        happen_bits.append(human.strip())
+    finish = ev if ev.event_type == "task_completed" else mate
+    exit_s = ""
+    if finish is not None and isinstance(finish.raw_input, ToolInputBag):
+        code = finish.raw_input.raw().get("exit_code")
+        if isinstance(code, int):
+            exit_s = f"exit {code}"
+    if last_fire.strip():
+        happen_bits.append(last_fire.strip())
+    if last_child.strip():
+        happen_bits.append(last_child.strip())
+    if happen_bits:
+        parts.append(_section(t("ui-inspect-happened")))
+        parts.append(_line("  ·  ".join(happen_bits)))
+    if exit_s:
+        parts.append(_line(exit_s, style="dim"))
+    if cwd.strip():
+        parts.append(_line(cwd, style="dim"))
+    failed = (status or "").strip().lower() in {"failed", "error", "cancelled", "interrupted"}
+    if output_path:
+        tail = read_log_tail(Path(output_path), max_chars=2_000)
+        lines = tail.splitlines()
+        if len(lines) > 24:
+            tail = "\n".join(lines[-24:])
+        tail = sanitize_console_text(tail)
+        if failed and tail.strip():
+            parts.append(Text("\n"))
+            parts.append(_section(t("ui-inspect-failed")))
+            last = tail.splitlines()[-1] if tail.splitlines() else tail
+            parts.append(_line(last, style=f"bold {FAILED}"))
+        parts.append(Text("\n"))
+        parts.append(Rule(t("col-log"), style="bright_black"))
+        if tail.strip():
+            _append_block(parts, _syntax(tail, "text"))
+        else:
+            parts.append(_line(output_path, style="dim"))
+    elif failed:
+        parts.append(_section(t("ui-inspect-failed")))
+        parts.append(_line(_subagent_status_word(status), style=f"bold {FAILED}"))
+    if len(parts) == 1:
+        bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+        preview = job_list_preview(ev.event_type, bag, ev.content)
+        parts.append(_line(preview) if preview else _line("(empty)", style="dim"))
+    return parts
+
+
+def render_workflow_detail(run: WorkflowRun | None, *, ev: TraceEvent | None = None) -> Group:
+    """Merged workflow inspect: status, phase, fail text, children — not the script.
+
+    Each line ends with ``\\n`` so :func:`~groket.ui.selectable_static.to_display_content`
+    keeps fields on separate rows (Group children are concatenated).
+    """
+    head = Text()
+    if ev is not None:
+        head.append(f"#{ev.index} ", style="dim")
+    name = (
+        run.name
+        if run is not None
+        else (workflow_name_from_raw(ev.raw_input) if ev is not None else "")
+    )
+    head.append(name or t("ui-workflow"), style=f"bold {RUNNING}")
+    head.append("\n")
+    if run is None:
+        head.append(t("ui-workflow-missing"), style="dim")
+        head.append("\n")
+        return Group(head)
+
+    parts: list = [head]
+    if run.objective.strip():
+        parts.append(_section(t("ui-inspect-asked")))
+        obj = _prose_or_code(run.objective)
+        if isinstance(obj, Text) and not obj.plain.endswith("\n"):
+            obj.append("\n")
+        parts.append(obj)
+        parts.append(Text("\n"))
+    happened = _subagent_status_word(run.status)
+    if run.phase:
+        happened = f"{happened}  ·  {run.phase}"
+    if run.elapsed_ms is not None and run.elapsed_ms > 0:
+        happened = f"{happened}  ·  {fmt_duration(run.elapsed_ms / 1000.0)}"
+    parts.append(_section(t("ui-inspect-happened")))
+    st_style = {
+        "complete": COMPLETE,
+        "running": RUNNING,
+        "failed": f"bold {FAILED}",
+        "cancelled": "dim",
+        "interrupted": "dim",
+    }.get(run.status, "")
+    parts.append(_line(happened, style=st_style or None))
+    if run.agents_used is not None or run.agent_budget is not None:
+        used = "—" if run.agents_used is None else str(run.agents_used)
+        budget = "—" if run.agent_budget is None else str(run.agent_budget)
+        parts.append(
+            Text(
+                t("ui-workflow-agent-count", used=used, budget=budget) + "\n",
+                style="dim",
+            )
+        )
+    if run.pause_message.strip():
+        parts.append(Text("\n"))
+        parts.append(_section(t("ui-inspect-failed")))
+        pause_style = f"bold {FAILED}" if run.status == "failed" else "dim"
+        parts.append(Text(run.pause_message.rstrip() + "\n", style=pause_style))
+    if run.children:
+        parts.append(Text("\n"))
+        parts.append(_section(t("ui-agents")))
+        kids = Text()
+        for child in run.children:
+            if child.success:
+                kids.append("ok", style=COMPLETE)
+            else:
+                kids.append("fail", style=f"bold {FAILED}")
+            kids.append(f"  {child.label}\n")
+        parts.append(kids)
+    return Group(*parts)
+
+
+def _subagent_status_word(status: str) -> str:
+    key = {
+        "running": "ui-status-running",
+        "completed": "status-complete",
+        "complete": "status-complete",
+        "done": "status-complete",
+        "cancelled": "status-cancelled",
+        "failed": "ui-status-failed",
+        "interrupted": "ui-status-interrupted",
+    }.get(status, "")
+    return t(key) if key else status
+
+
+def _subagent_detail_parts(
+    ev: TraceEvent, *, run: SubagentRun | None = None, mate: TraceEvent | None = None
+) -> list:
+    """Type, what it was asked to do, outcome. Duration stays on the heading."""
+    info: SubagentInspect = subagent_inspect(ev, mate=mate, run=run)
+    parts: list = [Text("\n")]
+    asked = info.description
+    if (
+        not asked
+        and (ev.content or "").strip()
+        and not (ev.content or "").lower().startswith(("subagent finished", "spawned "))
+    ):
+        asked = ev.content
+    if asked:
+        parts.append(_section(t("ui-inspect-asked")))
+        _append_block(parts, _prose_or_code(asked))
+    happen_bits: list[str] = []
+    if info.kind:
+        happen_bits.append(info.kind)
+    if ev.event_type == "subagent_finished" and info.status:
+        happen_bits.append(_subagent_status_word(info.status))
+    if happen_bits:
+        parts.append(_section(t("ui-inspect-happened")))
+        parts.append(_line("  ·  ".join(happen_bits)))
+    if ev.event_type == "subagent_finished" and (info.status or "").lower() in {
+        "failed",
+        "error",
+        "cancelled",
+    }:
+        parts.append(_section(t("ui-inspect-failed")))
+        parts.append(_line(_subagent_status_word(info.status), style=f"bold {FAILED}"))
+    if len(parts) == 1:
+        parts.append(_line("(empty)", style="dim"))
+    return parts
+
+
 def render_event_detail(
     ev: TraceEvent,
     *,
@@ -893,6 +1161,10 @@ def render_event_detail(
     paired_result: TraceEvent | None = None,
     truncate: bool = True,
     turn_index: int | None = None,
+    subagent_run: SubagentRun | None = None,
+    job_mate: TraceEvent | None = None,
+    schedule: ScheduleTask | None = None,
+    workflow: WorkflowRun | None = None,
 ) -> RenderableType:
     """Full detail pane for any TraceEvent (trace_viewer render_event_detail + banners).
 
@@ -918,14 +1190,17 @@ def render_event_detail(
         it.append(f"  {detail}", style="dim")
         banners.append(it)
     if ev.event_type in et.TOOL_TYPES:
-        core = render_tool_detail_from_event(
-            ev,
-            paired_call=paired_call,
-            paired_result=paired_result,
-            duration=duration,
-            truncate=truncate,
-            turn_index=turn_index,
-        )
+        if ev.tool_name == "workflow":
+            core = render_workflow_detail(workflow, ev=ev)
+        else:
+            core = render_tool_detail_from_event(
+                ev,
+                paired_call=paired_call,
+                paired_result=paired_result,
+                duration=duration,
+                truncate=truncate,
+                turn_index=turn_index,
+            )
         if banners:
             return Group(*banners, Text(""), core)
         return core
@@ -938,10 +1213,13 @@ def render_event_detail(
         style = "bold magenta"
     if ev.is_error and ev.event_type in et.SESSION_CHROME_TYPES:
         style = "bold red"
+    job_title = et.job_event_label(ev.event_type, kind=event_job_kind(ev))
     head = Text()
     head.append(f"#{ev.index} ", style="dim")
     head.append(
-        chrome_heading if chrome_heading is not None else (ev.type_label or ev.event_type),
+        chrome_heading
+        if chrome_heading is not None
+        else (job_title or ev.type_label or ev.event_type),
         style=style,
     )
     if ev.is_error:
@@ -952,10 +1230,17 @@ def render_event_detail(
         meta_parts.append(t("ui-turn-number", turn=int(turn_index)))
     if ev.time_str:
         meta_parts.append(ev.time_str)
-    if duration is not None:
-        meta_parts.append(fmt_duration(duration))
+    info = subagent_inspect(ev, run=subagent_run) if ev.event_type in et.SUBAGENT_TYPES else None
+    own_dur = info.duration_s if info is not None else subagent_duration_seconds(ev)
+    if ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
+        shown_dur = job_duration_seconds(ev, mate=job_mate)
+    else:
+        shown_dur = own_dur if own_dur is not None else duration
+    if shown_dur is not None:
+        meta_parts.append(fmt_duration(shown_dur))
     if meta_parts:
         head.append("  ·  ".join(meta_parts), style="dim")
+        head.append("\n")
     body = _content_str(
         unwrap_for_display(ev.content or ""),
         sanitize=True,
@@ -980,20 +1265,16 @@ def render_event_detail(
             Text(body, style="dim italic"),
         ]
     elif ev.event_type == "plan":
-        chunks += [Text(""), Rule(t("ui-plan"), style="bright_black"), Text(body, style="magenta")]
+        chunks += [Text(""), Rule(t("ui-plan"), style="bright_black"), _prose_or_code(body)]
+    elif ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
+        chunks.extend(_task_detail_parts(ev, mate=job_mate, schedule=schedule))
     elif ev.event_type in et.SUBAGENT_TYPES:
-        chunks += [
-            Text(""),
-            Rule(t("ui-subagent"), style="bright_black"),
-            Text(body) if body.strip() else Text("(empty)", style="dim"),
-            Text(""),
-            Text(t("ui-open-child-enter"), style="bold"),
-        ]
+        chunks.extend(_subagent_detail_parts(ev, run=subagent_run))
     elif ev.event_type == "subagent" and body.strip():
         chunks += [
             Text(""),
             Rule(t("ui-subagent"), style="bright_black"),
-            Markdown(body) if "#" in body[:200] or "\n" in body else Text(body, style="yellow"),
+            _prose_or_code(body),
         ]
     elif ev.event_type in et.SESSION_CHROME_TYPES:
         chunks += [
@@ -1001,7 +1282,7 @@ def render_event_detail(
             Text(body or "(empty)", style="bold red" if ev.is_error else "yellow"),
         ]
     elif body.strip():
-        chunks += [Text(""), Text(body)]
+        chunks += [Text(""), _prose_or_code(body)]
     else:
         chunks += [Text(""), Text("(empty)", style="dim")]
     return Group(*chunks)

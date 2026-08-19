@@ -19,6 +19,10 @@ TOOL_CALL_UPDATE = "tool_call_update"
 PLAN = "plan"
 TASK_BACKGROUNDED = "task_backgrounded"
 TASK_COMPLETED = "task_completed"
+SCHEDULED_TASK_CREATED = "scheduled_task_created"
+SCHEDULED_TASK_UPDATED = "scheduled_task_updated"
+SCHEDULED_TASK_FIRED = "scheduled_task_fired"
+SCHEDULED_TASK_DELETED = "scheduled_task_deleted"
 TURN_COMPLETED = "turn_completed"
 SUBAGENT_SPAWNED = "subagent_spawned"
 SUBAGENT_FINISHED = "subagent_finished"
@@ -52,7 +56,15 @@ TOOL_CALL_TYPES = frozenset({TOOL_CALL})
 TOOL_UPDATE_TYPES = frozenset({TOOL_CALL_UPDATE})
 TOOL_TYPES = TOOL_CALL_TYPES | TOOL_UPDATE_TYPES
 PLAN_TYPES = frozenset({PLAN})
-TASK_TYPES = frozenset({TASK_BACKGROUNDED, TASK_COMPLETED})
+SCHEDULED_TASK_TYPES = frozenset(
+    {
+        SCHEDULED_TASK_CREATED,
+        SCHEDULED_TASK_UPDATED,
+        SCHEDULED_TASK_FIRED,
+        SCHEDULED_TASK_DELETED,
+    }
+)
+TASK_TYPES = frozenset({TASK_BACKGROUNDED, TASK_COMPLETED}) | SCHEDULED_TASK_TYPES
 SUBAGENT_TYPES = frozenset({SUBAGENT_SPAWNED, SUBAGENT_FINISHED})
 TURN_BOUNDARY_TYPES = frozenset({TURN_STARTED, TURN_ENDED, TURN_COMPLETED})
 TURN_STARTED_TYPES = frozenset({TURN_STARTED})
@@ -86,6 +98,10 @@ SESSION_UPDATE_TIMELINE_TYPES = frozenset(
         PLAN,
         TASK_BACKGROUNDED,
         TASK_COMPLETED,
+        SCHEDULED_TASK_CREATED,
+        SCHEDULED_TASK_UPDATED,
+        SCHEDULED_TASK_FIRED,
+        SCHEDULED_TASK_DELETED,
         TURN_COMPLETED,
         SUBAGENT_SPAWNED,
         SUBAGENT_FINISHED,
@@ -108,6 +124,27 @@ def type_label(event_type: str) -> str:
     if not et:
         return "?"
     return et.replace("_", " ")
+
+
+def job_event_label(event_type: str, *, kind: str = "") -> str:
+    """Honest timeline words for task / schedule bookends (not “subagent”)."""
+    et = (event_type or "").strip()
+    monitor = kind == "monitor"
+    if et == TASK_BACKGROUNDED:
+        return "monitor" if monitor else "background start"
+    if et == TASK_COMPLETED:
+        return "monitor done" if monitor else "background done"
+    if et == SCHEDULED_TASK_CREATED:
+        return "schedule created"
+    if et == SCHEDULED_TASK_UPDATED:
+        return "schedule updated"
+    if et == SCHEDULED_TASK_FIRED:
+        return "schedule fired"
+    if et == SCHEDULED_TASK_DELETED:
+        return "schedule deleted"
+    if et.startswith("scheduled_task_"):
+        return et.replace("_", " ")
+    return ""
 
 
 def event_kind(event_type: str) -> str:
@@ -133,6 +170,6 @@ def event_kind(event_type: str) -> str:
         return "system"
     if et in SUBAGENT_TYPES or et == "subagent":
         return "subagent"
-    if et in TASK_TYPES:
+    if et in TASK_TYPES or et.startswith("scheduled_task_"):
         return "task"
     return "other"

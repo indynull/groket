@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..models import JsonObject, JsonValue, ToolInputBag, TraceEvent, as_json_object
+from ..models import JsonObject, JsonValue, ToolInputBag, TraceEvent, as_json_object, json_as_str
 from .turns import TurnSegment
 
 _KIND_KEYS = ("session_kind", "sessionKind")
@@ -325,6 +325,9 @@ def event_subagent_fields(event: TraceEvent) -> JsonObject:
     typ = _first_str(bag, _SPAWN_TYPE_KEYS)
     if typ:
         out["subagentType"] = typ
+    desc = _first_str(bag, _SPAWN_DESC_KEYS)
+    if desc:
+        out["description"] = desc
     st = _first_str(bag, _FINISH_STATUS_KEYS)
     if st:
         out["subagentStatus"] = normalize_run_status(
@@ -339,6 +342,162 @@ def event_subagent_fields(event: TraceEvent) -> JsonObject:
     tokens = _first_int(bag, _FINISH_TOKENS_KEYS)
     if tokens is not None:
         out["tokensUsed"] = tokens
+    return out
+
+
+def event_child_session_id(event: TraceEvent) -> str:
+    """Child session id from a spawn/finish bookend, or empty."""
+    bag = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
+    child = _first_str(bag, _SPAWN_CHILD_KEYS) if isinstance(bag, dict) else ""
+    if child:
+        return child
+    dumped = _finish_from_content(event.content or "").get("child_session_id")
+    return dumped if isinstance(dumped, str) else ""
+
+
+@dataclass(frozen=True)
+class SubagentInspect:
+    """What the operator should read on a spawn/finish bookend."""
+
+    kind: str
+    description: str
+    status: str
+    duration_s: float | None
+
+
+def subagent_inspect(
+    event: TraceEvent,
+    *,
+    mate: TraceEvent | None = None,
+    run: SubagentRun | None = None,
+) -> SubagentInspect:
+    """Identity from the spawn/run; outcome from the finish bookend."""
+    bags: list[Mapping[str, JsonValue]] = []
+    if run is not None:
+        bags.append(
+            {
+                "subagentType": run.subagent_type,
+                "description": run.description,
+                "status": run.status,
+                "duration_ms": run.duration_ms,
+            }
+        )
+    for ev in (event, mate):
+        if ev is None:
+            continue
+        bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+        if isinstance(bag, dict) and bag:
+            bags.append(bag)
+        if ev.event_type == "subagent_spawned":
+            rec = _spawn_from_content(ev.content or "")
+            if rec:
+                bags.append(rec)
+        elif ev.event_type == "subagent_finished":
+            rec_f = _finish_from_content(ev.content or "")
+            if rec_f:
+                bags.append(rec_f)
+    kind = ""
+    description = ""
+    status = ""
+    duration_s: float | None = None
+    for item in bags:
+        if not kind:
+            kind = _first_str(item, _SPAWN_TYPE_KEYS)
+        if not description:
+            description = _first_str(item, _SPAWN_DESC_KEYS)
+        if not status:
+            raw_st = _first_str(item, _FINISH_STATUS_KEYS)
+            if raw_st:
+                status = normalize_run_status(
+                    raw_st, finished=event.event_type == "subagent_finished"
+                )
+        if duration_s is None:
+            ms = _first_int(item, _FINISH_DUR_KEYS)
+            if ms is not None and ms >= 0:
+                duration_s = ms / 1000.0
+    return SubagentInspect(kind=kind, description=description, status=status, duration_s=duration_s)
+
+
+def subagent_duration_seconds(event: TraceEvent) -> float | None:
+    """Harness run length for a finish bookend, or None."""
+    bag = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
+    ms = _first_int(bag, _FINISH_DUR_KEYS) if isinstance(bag, dict) else None
+    if ms is None:
+        dumped = _finish_from_content(event.content or "").get("duration_ms")
+        ms = dumped if isinstance(dumped, int) else None
+    if isinstance(ms, int) and ms >= 0:
+        return ms / 1000.0
+    return None
+
+
+def subagent_list_preview(
+    event_type: str,
+    raw: Mapping[str, JsonValue] | None,
+    content: str = "",
+    *,
+    max_chars: int = 80,
+) -> str:
+    """Summary text for a spawn/finish bookend (not the dump line)."""
+    bag = as_json_object(raw) if isinstance(raw, dict) else {}
+    if event_type == "subagent_spawned":
+        fields = spawn_fields(bag)
+        if not fields["subagent_type"] and not fields["description"]:
+            rec = _spawn_from_content(content)
+            fields = {**fields, **{k: v for k, v in rec.items() if v}}
+        text = fields.get("description") or fields.get("subagent_type") or ""
+        return _clip_preview(text, max_chars)
+    if event_type == "subagent_finished":
+        desc = json_as_str(bag.get("description")).strip()
+        if desc:
+            return _clip_preview(desc, max_chars)
+        fin = finish_fields(bag)
+        status = json_as_str(fin.get("status"))
+        if not status:
+            dumped_fin = _finish_from_content(content)
+            raw_status = dumped_fin.get("status")
+            status = raw_status if isinstance(raw_status, str) else ""
+        if status:
+            return _clip_preview(normalize_run_status(status, finished=True), max_chars)
+        return ""
+    return ""
+
+
+def _clip_preview(text: str, max_chars: int) -> str:
+    one = (text or "").replace("\n", " ").strip()
+    if max_chars <= 0 or len(one) <= max_chars:
+        return one
+    return one[: max(1, max_chars - 1)] + "…"
+
+
+def _spawn_from_content(content: str) -> dict[str, str]:
+    text = (content or "").strip()
+    if not text.lower().startswith("spawned "):
+        return {}
+    rest = text[8:].strip()
+    typ, sep, after = rest.partition(":")
+    if not sep:
+        return {"description": rest} if rest else {}
+    desc = after.strip()
+    return {"subagent_type": typ.strip(), "description": desc}
+
+
+def _finish_from_content(content: str) -> dict[str, int | str]:
+    text = (content or "").strip()
+    if not text.lower().startswith("subagent finished"):
+        return {}
+    rest = text[len("subagent finished") :].strip()
+    out: dict[str, int | str] = {}
+    if "duration_ms=" in rest:
+        head, _, tail = rest.partition("duration_ms=")
+        num = tail.split()[0] if tail else ""
+        if num.isdigit():
+            out["duration_ms"] = int(num)
+        rest = head.strip()
+    for part in rest.split():
+        if "-" in part and len(part) >= 8:
+            out["child_session_id"] = part
+        elif part.isalpha():
+            out["status"] = part
     return out
 
 
@@ -521,3 +680,59 @@ def as_run_list(value: JsonValue) -> list[JsonObject]:
         if isinstance(item, dict):
             out.append(as_json_object(item))
     return out
+
+
+def subagent_runs_from_overview(overview: JsonObject) -> list[SubagentRun]:
+    """Hydrate turn-linked runs from a ``session/overview`` payload."""
+    turns = overview.get("turns")
+    if not isinstance(turns, dict):
+        return []
+    out: list[SubagentRun] = []
+    for row in as_run_list(turns.get("subagentRuns")):
+        path_s = json_as_str(row.get("childPath")).strip()
+        child_path = Path(path_s) if path_s else None
+        out.append(
+            SubagentRun(
+                subagent_id=json_as_str(row.get("subagentId")),
+                child_session_id=json_as_str(row.get("childSessionId")),
+                child_path=child_path,
+                subagent_type=json_as_str(row.get("subagentType")),
+                description=json_as_str(row.get("description")),
+                status=json_as_str(row.get("status")) or "running",
+                parent_turn_index=_opt_int(row.get("turnIndex")),
+                parent_prompt_id=json_as_str(row.get("parentPromptId")),
+                spawn_event_index=_opt_int(row.get("spawnEventIndex")),
+                finish_event_index=_opt_int(row.get("finishEventIndex")),
+                duration_ms=_opt_int(row.get("durationMs")),
+                tool_calls=_opt_int(row.get("toolCalls")),
+                turns=_opt_int(row.get("turns")),
+                tokens_used=_opt_int(row.get("tokensUsed")),
+                output_preview=json_as_str(row.get("outputPreview")),
+            )
+        )
+    return out
+
+
+def subagent_runs_for_view(
+    overview: JsonObject | None,
+    parent_dir: Path,
+    events: list[TraceEvent],
+    segments: list[TurnSegment],
+    turn_by_index: Mapping[int, int],
+) -> list[SubagentRun]:
+    """Owner payload when attached; disk merge when inspecting offline."""
+    if overview is not None:
+        return subagent_runs_from_overview(overview)
+    return subagent_runs_for_session(parent_dir, events, segments, turn_by_index)
+
+
+def _opt_int(value: JsonValue) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None

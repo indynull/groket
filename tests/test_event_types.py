@@ -81,3 +81,28 @@ def test_type_label_uses_grok_names() -> None:
     assert et.type_label("tool_call_update") == "tool call update"
     assert et.type_label("subagent_spawned") == "subagent spawned"
     assert et.type_label("subagent_finished") == "subagent finished"
+
+
+def test_job_event_label_is_honest_not_subagent() -> None:
+    assert et.job_event_label("task_backgrounded") == "background start"
+    assert et.job_event_label("task_backgrounded", kind="monitor") == "monitor"
+    assert et.job_event_label("task_completed") == "background done"
+    assert et.job_event_label("scheduled_task_created") == "schedule created"
+    assert et.type_label("task_backgrounded") == "task backgrounded"
+    assert et.job_event_label("scheduled_task_created") == "schedule created"
+    assert "subagent" not in et.job_event_label("task_backgrounded")
+
+
+def test_scheduled_task_types_are_timeline_task_kind() -> None:
+    for name in (
+        et.SCHEDULED_TASK_CREATED,
+        et.SCHEDULED_TASK_UPDATED,
+        et.SCHEDULED_TASK_FIRED,
+        et.SCHEDULED_TASK_DELETED,
+    ):
+        assert name in et.SESSION_UPDATE_TIMELINE_TYPES
+        assert name in et.TASK_TYPES
+        assert et.event_kind(name) == "task"
+        assert et.event_kind(name) != "subagent"
+    assert et.event_kind("scheduled_task_paused") == "task"
+    assert et.SCHEDULED_TASK_CREATED in et.SESSION_UPDATE_TIMELINE_TYPES

@@ -17,7 +17,7 @@ class BasicAnalyzer:
         return AnalyzerInfo(
             id="basic",
             name="Basic",
-            description="Session metadata only (outcome, model, tool count). No detectors.",
+            description="Session metadata and failed workflow or job findings.",
             optional=False,
         )
 
@@ -47,11 +47,17 @@ class BasicAnalyzer:
                 ok=False,
                 error=str(exc),
             )
+        from ..session.failures import findings_for_failed_runs
+
+        findings = findings_for_failed_runs(session_dir)
+        if findings:
+            summary_parts.append(f"failed_runs={len(findings)}")
         return AnalysisResult(
             session_id=sid,
             session_dir=str(session_dir),
             analyzer_id="basic",
             ok=True,
+            findings=findings,
             summary="; ".join(summary_parts) or "basic meta ok",
             extras=extras,
         )

@@ -149,8 +149,26 @@ METHODS: tuple[MethodSpec, ...] = (
     ),
     MethodSpec(
         name="session/overview",
-        role="Meta + turns + notes (no embedded event list). Turns include `subagentRuns`.",
+        role="Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. "
+        "Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies).",
         params=(_SESSION,),
+        result=(
+            FieldSpec("backgroundJobs", "Background shell and monitor rows.", json_type="array"),
+            FieldSpec("schedules", "Durable scheduler rows.", json_type="array"),
+            FieldSpec("workflows", "Grok workflow run rows.", json_type="array"),
+        ),
+        extra_md=(
+            "`backgroundJobs`, `schedules`, and `workflows` are additive. Each job has `id`,\n"
+            "`kind` (`background` or `monitor`), `status`, `description`,\n"
+            "`command`, `cwd`, `startedAt`, `endedAt`, `outputPath`,\n"
+            "`reported`, `toolCallId`, and `eventIndex`. Schedules have `id`, `intervalSecs`,\n"
+            "`humanSchedule`, `nextFireAt`, `lastFiredAt`, `lastSubagentId`,\n"
+            "`promptPreview`, `durable`, `recurring`, and `createdAt`.\n"
+            "Workflows have `id`, `name`, `status`, `phase`, `objective`,\n"
+            "`agentsUsed`, `agentBudget`, `elapsedMs`, `pauseMessage`, `eventIndex`,\n"
+            "and `children` (id, label, success, sessionId, path).\n"
+            "Overview does not embed log tails or Rhai script bodies."
+        ),
     ),
     MethodSpec(
         name="session/timeline",

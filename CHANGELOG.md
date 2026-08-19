@@ -5,6 +5,16 @@ is tagged.
 
 ## Unreleased
 
+- Timeline parses ``scheduled_task_*`` bookends and keeps structured
+  ``task_backgrounded`` / ``task_completed`` fields (id, command, cwd,
+  log path, schedule, output excerpt) instead of a stuffed content line.
+- Session Overview lists background shells, monitors, and durable
+  schedules on TUI Summary. HUD Overview shows glance counts and named
+  rows that jump Timeline to that bookend. Timeline filter Background
+  is the inspect path. ``J`` is still Docker / serve logs.
+- Failed workflow runs and failed background jobs become Findings with
+  paste-ready What/Where/Why/Should extras. Inspect labels Asked,
+  Happened, and Failed. Activating a workflow child opens that session.
 - Review runtime no longer treats a ``search_tool`` query as proof an
   MCP server was available. A catalog search for ``gitlab …`` plus
   ``glab`` is not unused-MCP.

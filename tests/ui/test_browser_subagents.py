@@ -112,8 +112,14 @@ async def test_browser_lists_runs_and_opens_child(tmp_path: Path) -> None:
     async with app.run_test(size=(140, 48)) as pilot:
         screen = app.query_one(BrowserScreen)
         await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        await wait_until(
+            pilot,
+            lambda: any(
+                r.child_session_id == "child-sub" and r.openable for r in screen._subagent_runs
+            ),
+            description="openable child-sub run",
+        )
         screen._stop_live_refresh()
-        assert any(r.child_session_id == "child-sub" and r.openable for r in screen._subagent_runs)
         screen.action_tab_summary()
         await wait_until(
             pilot,
@@ -124,7 +130,7 @@ async def test_browser_lists_runs_and_opens_child(tmp_path: Path) -> None:
         cells = [str(cell) for cell in table.get_row_at(0)]
         assert any("worker" in c or "coder" in c for c in cells)
         spawn = next(e for e in screen.timeline if e.event_type == "subagent_spawned")
-        assert "child-sub" in spawn.content
+        assert spawn.raw_input.as_str("childSessionId") == "child-sub"
         screen._current_event = spawn
         screen.action_open_subagent()
         assert app.opened == child
@@ -294,7 +300,9 @@ def _write_parent_with_two_children(root: Path) -> tuple[Path, Path, Path]:
 
 def _spawn_for(screen: BrowserScreen, child_id: str) -> TraceEvent:
     return next(
-        e for e in screen.timeline if e.event_type == "subagent_spawned" and child_id in e.content
+        e
+        for e in screen.timeline
+        if e.event_type == "subagent_spawned" and e.raw_input.as_str("childSessionId") == child_id
     )
 
 
@@ -306,6 +314,11 @@ async def test_timeline_row_selected_opens_clicked_child(tmp_path: Path) -> None
     async with app.run_test(size=(140, 48)) as pilot:
         screen = app.query_one(BrowserScreen)
         await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        await wait_until(
+            pilot,
+            lambda: screen.query("#timeline-list") and bool(screen._subagent_runs),
+            description="timeline table and runs ready",
+        )
         screen._stop_live_refresh()
         spawn_a = _spawn_for(screen, "child-a")
         spawn_b = _spawn_for(screen, "child-b")

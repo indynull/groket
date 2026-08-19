@@ -57,8 +57,18 @@ state. Cite is the groket module that owns the path.
 
 Observed `sessionUpdate` values: `user_message_chunk`, `agent_thought_chunk`,
 `agent_message_chunk`, `tool_call`, `tool_call_update`, `plan`,
-`task_backgrounded`, `task_completed`, `turn_completed`, `subagent_spawned`,
-`subagent_finished`, `current_mode_update`, `retry_state`.
+`task_backgrounded`, `task_completed`, `scheduled_task_created`,
+`scheduled_task_updated`, `scheduled_task_fired`, `scheduled_task_deleted`,
+`turn_completed`, `subagent_spawned`, `subagent_finished`,
+`current_mode_update`, `retry_state`.
+
+`scheduled_task_created` has `task_id`, `prompt`, `human_schedule`,
+`next_fire_at`. `scheduled_task_deleted` has `task_id`, `reason`.
+`task_backgrounded` has `task_id`, `tool_call_id`, `command`, `cwd`,
+`output_file`, `description` (and often `monitor_description`).
+`task_completed` has `will_wake` plus `task_snapshot` (`task_id`, command,
+cwd, output path, times, output excerpt, `kind`). Groket flattens those
+onto `TraceEvent.raw_input` and does not map them to subagent types.
 
 `user_message_chunk.content` is `{type: "text", text: "…"}`; `_meta` has
 `modelId`, `promptIndex`. `tool_call` has `toolCallId`, `title` (tool id),
@@ -338,7 +348,15 @@ encoded path.
 `summary.json`, `signals.json`, `updates.jsonl`, `events.jsonl`,
 `chat_history.jsonl`, `rewind_points.jsonl`, `system_prompt.txt`,
 `prompt_context.json`, `resources_state.json`, `announcement_state.json`,
-`terminal/` (background task logs), `*.lock`. Long Darwin sessions also
+`terminal/` (`call-*.log`, `monitor-call-*.log`), optional
+`background_tasks_manifest.json`, `*.lock`. `resources_state.json`
+`state["grok_build.Scheduler"].tasks` is the durable scheduler
+(`id`, `intervalSecs`, `prompt`, `recurring`, `durable`, `lastFiredAt`,
+`lastSubagentId`). `state["grok_build.ReportedTaskCompletions"].reported`
+is task ids already pushed to the agent. Manifest rows have `task_id`,
+`kind` (`bash` or `monitor`), `command`, `cwd`, `output_file`,
+`description`. Groket merges those in `session/jobs.py` for Summary and
+HUD Overview (not the TUI Jobs `J` modal). Long Darwin sessions also
 had `plan.json` (`todos`), `plan_mode.json` (`state`,
 `awaiting_plan_approval`), `goal/` (`state.json`, `plan.md`),
 `compaction/` (`INDEX.md`, `segment_*.md`), and `subagents/<id>/`

@@ -544,6 +544,106 @@ impl NotesBlock {
     }
 }
 
+/// One ``backgroundJobs`` row from overview.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundJobRow {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    #[serde(default)]
+    pub ended_at: Option<i64>,
+    #[serde(default)]
+    pub output_path: String,
+    #[serde(default)]
+    pub reported: bool,
+    #[serde(default)]
+    pub tool_call_id: String,
+    #[serde(default)]
+    pub event_index: Option<i64>,
+}
+
+/// One ``schedules`` row from overview.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRow {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub interval_secs: Option<i64>,
+    #[serde(default)]
+    pub human_schedule: String,
+    #[serde(default)]
+    pub next_fire_at: String,
+    #[serde(default)]
+    pub last_fired_at: String,
+    #[serde(default)]
+    pub last_subagent_id: String,
+    #[serde(default)]
+    pub prompt_preview: String,
+    #[serde(default)]
+    pub durable: bool,
+    #[serde(default)]
+    pub recurring: bool,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+/// One ``workflows`` child on an overview row (id / label / success only).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowChildRow {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+/// One ``workflows`` row from overview.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRow {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub objective: String,
+    #[serde(default)]
+    pub agents_used: Option<i64>,
+    #[serde(default)]
+    pub agent_budget: Option<i64>,
+    #[serde(default)]
+    pub elapsed_ms: Option<i64>,
+    #[serde(default)]
+    pub pause_message: String,
+    #[serde(default)]
+    pub event_index: Option<i64>,
+    #[serde(default)]
+    pub children: Vec<WorkflowChildRow>,
+}
+
 /// ``session/overview`` body.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -554,6 +654,12 @@ pub struct Overview {
     pub meta: SessionMeta,
     #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub background_jobs: Vec<BackgroundJobRow>,
+    #[serde(default)]
+    pub schedules: Vec<ScheduleRow>,
+    #[serde(default)]
+    pub workflows: Vec<WorkflowRow>,
     #[serde(default)]
     pub turns: TurnsBlock,
     #[serde(default)]
@@ -629,7 +735,7 @@ impl SessionMeta {
 
 impl TimelineEvent {
     pub fn matches_kind(&self, mode: KindFilter) -> bool {
-        crate::format::event_matches_kind(&self.kind, self.is_error, mode)
+        crate::format::event_matches_filter(&self.kind, &self.tool_name, self.is_error, mode)
     }
 
     pub fn haystack(&self) -> String {
@@ -779,6 +885,8 @@ mod tests {
 
         let ov = decode_overview(&fixture("overview.json")).expect("overview");
         assert_eq!(ov.session_id, "sess-wire");
+        assert!(ov.background_jobs.is_empty());
+        assert!(ov.schedules.is_empty());
         assert_eq!(ov.meta.status, "running");
         assert_eq!(ov.meta.session_id, "sess-wire");
         assert_eq!(ov.turns.total, 1);
@@ -802,6 +910,78 @@ mod tests {
         assert!(!page.events[2].matches_kind(KindFilter::Asst));
         assert!(page.events[1].haystack().contains("hello agent"));
         assert!(!page.events[1].fingerprint().is_empty());
+    }
+
+    #[test]
+    fn decode_overview_background_jobs_and_schedules() {
+        let ov = decode_overview(&serde_json::json!({
+            "sessionId": "sess-jobs",
+            "backgroundJobs": [{
+                "id": "job-ov",
+                "kind": "monitor",
+                "status": "done",
+                "description": "Watch board",
+                "command": "watch",
+                "cwd": "/tmp",
+                "startedAt": 100,
+                "endedAt": 110,
+                "outputPath": "/tmp/monitor-call.log",
+                "reported": false,
+                "toolCallId": "call-1"
+            }],
+            "schedules": [{
+                "id": "sched-ov",
+                "intervalSecs": 3600,
+                "humanSchedule": "every 1 hour",
+                "nextFireAt": "2026-08-18T23:00:00Z",
+                "lastFiredAt": "",
+                "lastSubagentId": "",
+                "promptPreview": "hourly ping",
+                "durable": true,
+                "recurring": true,
+                "createdAt": ""
+            }]
+        }))
+        .expect("jobs overview");
+        assert_eq!(ov.background_jobs.len(), 1);
+        assert_eq!(ov.background_jobs[0].id, "job-ov");
+        assert_eq!(ov.background_jobs[0].kind, "monitor");
+        assert_eq!(ov.background_jobs[0].output_path, "/tmp/monitor-call.log");
+        assert_eq!(ov.schedules.len(), 1);
+        assert_eq!(ov.schedules[0].id, "sched-ov");
+        assert_eq!(ov.schedules[0].human_schedule, "every 1 hour");
+        assert_eq!(ov.schedules[0].interval_secs, Some(3600));
+        assert!(ov.workflows.is_empty());
+    }
+
+    #[test]
+    fn decode_overview_workflows() {
+        let ov = decode_overview(&serde_json::json!({
+            "sessionId": "sess-wf",
+            "workflows": [{
+                "id": "wf_failed",
+                "name": "sprint-8",
+                "status": "failed",
+                "phase": "Kickoff",
+                "objective": "Engineering sprint",
+                "agentsUsed": 1,
+                "agentBudget": 64,
+                "elapsedMs": 150198,
+                "pauseMessage": "Variable not found: vissue_root",
+                "children": [{"id": "ag-1", "label": "aik", "success": true}]
+            }]
+        }))
+        .expect("wf overview");
+        assert_eq!(ov.workflows.len(), 1);
+        assert_eq!(ov.workflows[0].name, "sprint-8");
+        assert_eq!(ov.workflows[0].status, "failed");
+        assert_eq!(ov.workflows[0].phase, "Kickoff");
+        assert!(ov.workflows[0].pause_message.contains("vissue_root"));
+        assert_eq!(ov.workflows[0].children[0].label, "aik");
+    }
+
+    #[test]
+    fn decode_hit_page_keeps_match_snippet() {
         let with_hit = decode_timeline_page(&serde_json::json!({
             "sessionId": "s",
             "total": 1,

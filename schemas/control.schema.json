@@ -183,7 +183,7 @@
           ]
         },
         "session/overview": {
-          "description": "Meta + turns + notes (no embedded event list). Turns include `subagentRuns`.",
+          "description": "Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies).",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -205,7 +205,20 @@
               "title": "session/overview result",
               "type": "object",
               "additionalProperties": true,
-              "properties": {}
+              "properties": {
+                "backgroundJobs": {
+                  "description": "Background shell and monitor rows.",
+                  "type": "array"
+                },
+                "schedules": {
+                  "description": "Durable scheduler rows.",
+                  "type": "array"
+                },
+                "workflows": {
+                  "description": "Grok workflow run rows.",
+                  "type": "array"
+                }
+              }
             }
           },
           "required": [

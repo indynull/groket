@@ -38,6 +38,9 @@ def _screen(sd: Path) -> BrowserScreen:
     screen._live_heartbeat_timer = None
     screen._context_samples = ContextSampleStore()
     screen._light_refresh_heartbeat = False
+    from groket.session.jobs import SessionJobs
+
+    screen._session_jobs = SessionJobs(jobs=[], schedules=[])
     return screen
 
 

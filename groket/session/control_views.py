@@ -15,7 +15,7 @@ from pathlib import Path
 from .. import event_types as et
 from ..bounded_cache import BoundedCache
 from ..constants import OVERVIEW_CACHE_MAXSIZE, TURN_VIEW_CACHE_MAXSIZE
-from ..models import JsonObject, JsonValue, SessionMeta, TraceEvent, as_json_object
+from ..models import JsonObject, JsonValue, SessionMeta, ToolInputBag, TraceEvent, as_json_object
 from ..notes import load_schema, notes_snapshot
 from ..parser import (
     TimelineStamp,
@@ -38,25 +38,39 @@ from ..session.usage_stats import SessionUsageStats, collect_session_usage
 from ..tool_display import (
     display_tool_output,
     image_result_path,
+    job_list_preview,
     list_event_preview,
     preserve_primary_raw_input,
     tool_family,
     tool_input_fields,
 )
 from .catalog import session_catalog_row
+from .jobs import job_input_stamp, job_mapping, load_session_jobs, schedule_mapping
 from .subagents import (
     SubagentRun,
+    event_child_session_id,
     event_subagent_fields,
+    spawn_fields,
+    subagent_list_preview,
     subagent_run_mapping,
     subagent_runs_for_session,
 )
+from .workflows import workflow_list_preview, workflow_mapping
 
 DEFAULT_FINDINGS_LIMIT = 80
 
 # Concurrent HUD open + live poll + notifies were double-building the same
 # multi‑MB session overview (~12–30s each). Join one flight per path and cache
 # by timeline/notes/findings inputs so warm re-polls stay cheap.
-_OverviewStamp = tuple[TimelineStamp, str, tuple[tuple[str, int, int], ...]]
+_JobFilesStamp = tuple[tuple[str, int, int], ...]
+_MonitorStatusStamp = tuple[tuple[str, str], ...]
+_OverviewStamp = tuple[
+    TimelineStamp,
+    str,
+    tuple[tuple[str, int, int], ...],
+    _JobFilesStamp,
+    _MonitorStatusStamp,
+]
 _overview_cache: BoundedCache[tuple[_OverviewStamp, JsonObject]] = BoundedCache(
     OVERVIEW_CACHE_MAXSIZE
 )
@@ -198,8 +212,19 @@ def timeline_event_mapping(
     else:
         heading = event.type_label
     type_label = chrome_heading.lower() if chrome_heading else event.type_label
-    preview = list_event_preview(event.summary_line, tname)[:200]
     raw_map = as_json_object(raw) if isinstance(raw, dict) else {}
+    if event.event_type in et.TASK_TYPES or event.event_type.startswith("scheduled_task_"):
+        preview = job_list_preview(event.event_type, raw_map, event.content)[:200]
+    elif event.event_type in et.SUBAGENT_TYPES:
+        preview = subagent_list_preview(event.event_type, raw_map, event.content)[:200]
+    elif tname == "workflow":
+        type_label = "workflow done" if event.event_type in et.TOOL_UPDATE_TYPES else "workflow"
+        heading = type_label
+        preview = (workflow_list_preview(raw_map) or list_event_preview(event.summary_line, tname))[
+            :200
+        ]
+    else:
+        preview = list_event_preview(event.summary_line, tname)[:200]
     fields = tool_input_fields(tname, raw_map, max_chars=cap) if raw_map else []
     tool_fields: list[JsonValue] = list(fields)
     img_path = image_result_path(content_raw, None) if tname in ("image_gen", "image_edit") else ""
@@ -604,7 +629,14 @@ def _overview_input_stamp(session_dir: Path) -> _OverviewStamp:
         notes_rev = notes_snapshot(sd).revision
     except Exception:
         logger.debug("notes stamp for overview %s", sd, exc_info=True)
-    return (session_timeline_stamp(sd), notes_rev, _findings_cache_stamp(sd))
+    job_files, monitor_status = job_input_stamp(sd)
+    return (
+        session_timeline_stamp(sd),
+        notes_rev,
+        _findings_cache_stamp(sd),
+        job_files,
+        monitor_status,
+    )
 
 
 def _build_session_overview_uncached(
@@ -643,6 +675,7 @@ def _build_session_overview_uncached(
         logger.debug("notes for session/overview %s", sd, exc_info=True)
 
     findings_block = build_session_findings(sd, segs=segs)
+    packed = load_session_jobs(sd, events)
 
     summary = (meta.summary_text or "").strip()
     if len(summary) > 1200:
@@ -652,6 +685,9 @@ def _build_session_overview_uncached(
         "sessionId": (meta.session_id or sd.name).strip(),
         "meta": session_meta_mapping(meta, path=sd, origin=origin),
         "summary": summary,
+        "backgroundJobs": [job_mapping(j, events=events) for j in packed.jobs],
+        "schedules": [schedule_mapping(s) for s in packed.schedules],
+        "workflows": [workflow_mapping(w, events=events, parent_dir=sd) for w in packed.workflows],
         "turns": {
             "total": len(segs),
             # Short assistant preview for the list: full wrap-up is for open cards
@@ -802,6 +838,10 @@ def _timeline_kind_matches(event: TraceEvent, kind: str) -> bool:
         return bool(event.is_error) or mapped == "error"
     if mode in {"subagents", "subagent"}:
         return mapped == "subagent"
+    if mode in {"background", "jobs"}:
+        return mapped == "task"
+    if mode in {"workflows", "workflow"}:
+        return (event.tool_name or "") == "workflow"
     return True
 
 
@@ -920,6 +960,16 @@ def build_session_timeline(
             off = max(0, hit - 8)
     page = filtered[off : off + lim] if lim else []
     q = (query or "").strip()
+    spawn_ident: dict[str, tuple[str, str]] = {}
+    for ev in events:
+        if ev.event_type != "subagent_spawned":
+            continue
+        child = event_child_session_id(ev)
+        if not child:
+            continue
+        bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+        fields = spawn_fields(bag if isinstance(bag, dict) else {})
+        spawn_ident[child] = (fields.get("subagent_type") or "", fields.get("description") or "")
     events_out: list[JsonValue] = []
     for ev in page:
         row = timeline_event_mapping(
@@ -927,6 +977,22 @@ def build_session_timeline(
             content_chars=content_chars,
             turn_index=turn_by_index.get(int(ev.index)),
         )
+        child = event_child_session_id(ev)
+        ident = spawn_ident.get(child) if child else None
+        if ident is not None:
+            typ, desc = ident
+            raw_out = row.get("rawInput")
+            if isinstance(raw_out, dict):
+                if typ:
+                    raw_out.setdefault("subagentType", typ)
+                if desc:
+                    raw_out.setdefault("description", desc)
+            if typ and not row.get("subagentType"):
+                row["subagentType"] = typ
+            if desc and not row.get("description"):
+                row["description"] = desc
+            if ev.event_type in et.SUBAGENT_TYPES and desc:
+                row["preview"] = desc[:200]
         if q:
             # Distinct name: earlier branches bind ``hit`` as a page index.
             match = timeline_query_hit(ev, q)

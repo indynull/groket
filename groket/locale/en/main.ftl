@@ -420,6 +420,12 @@ col-title = Title
 
 col-file = File
 
+col-kind = Kind
+
+col-log = Log
+
+col-started = Started
+
 col-added = +
 
 col-removed = -
@@ -1573,6 +1579,42 @@ ui-stdio-needs-tools-in-image = [dim]stdio needs tools in image[/dim]
 ui-stop-live-refresh-on-quit-failed = stop live refresh on quit failed
 
 ui-stored-on-persona = stored on persona
+
+ui-background-filter = Background
+
+ui-background-jobs = Background
+
+ui-background-none = No background jobs
+
+ui-workflows = Workflows
+
+ui-workflows-filter = Workflows
+
+ui-workflows-none = No workflow runs
+
+ui-workflow = workflow
+
+ui-workflow-done = workflow done
+
+ui-workflow-missing = No workflow run on disk
+
+ui-workflow-agent-count = {$used}/{$budget} agents
+
+ui-inspect-asked = Asked
+
+ui-inspect-happened = Happened
+
+ui-inspect-failed = Failed
+
+ui-phase = Phase
+
+ui-agents = Agents
+
+ui-status-interrupted = interrupted
+
+ui-schedule = schedule
+
+ui-scheduled = scheduled
 
 ui-subagent = Subagent
 

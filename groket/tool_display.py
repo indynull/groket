@@ -128,6 +128,95 @@ def list_event_detail(summary: str, tool_name: str = "") -> str:
     return s
 
 
+_TASK_DUMP_KEYS = (
+    "tool_call_id",
+    "task_id",
+    "command",
+    "cwd",
+    "prompt_id",
+    "mode",
+    "state",
+)
+
+
+def task_fields_from_content(content: str) -> dict[str, str]:
+    """Recover command/cwd from the origin/main ``key=value`` bookend dump."""
+    text = (content or "").strip()
+    if not text.startswith("task_backgrounded") and not text.startswith("task_completed"):
+        return {}
+    marks: list[tuple[int, str]] = []
+    for key in _TASK_DUMP_KEYS:
+        token = f"{key}="
+        idx = text.find(token)
+        if idx < 0:
+            continue
+        if idx > 0 and not text[idx - 1].isspace():
+            continue
+        marks.append((idx, key))
+    marks.sort()
+    out: dict[str, str] = {}
+    for i, (start, key) in enumerate(marks):
+        val_start = start + len(key) + 1
+        val_end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        out[key] = text[val_start:val_end].strip()
+    brace = text.find("{")
+    if brace >= 0:
+        try:
+            extra = json.loads(text[brace:])
+        except json.JSONDecodeError:
+            extra = None
+        if isinstance(extra, dict):
+            for key in ("command", "cwd", "description", "output_file", "display_command"):
+                val = extra.get(key)
+                if val is not None and str(val).strip() and key not in out:
+                    out[key] = str(val)
+    return out
+
+
+def job_list_preview(
+    event_type: str,
+    raw: Mapping[str, JsonValue] | None,
+    content: str = "",
+    *,
+    max_chars: int = 80,
+) -> str:
+    """Summary column for a background / monitor / schedule bookend.
+
+    Prefers structured fields. Recovers ``command`` from the origin/main
+    dump when ``raw_input`` is empty. Never repeats the event type.
+    """
+    bag = as_json_object(raw) if isinstance(raw, dict) else {}
+    dump = task_fields_from_content(content)
+    command = (
+        json_as_str(bag.get("command") or bag.get("display_command")).strip()
+        or dump.get("command", "").strip()
+        or dump.get("display_command", "").strip()
+    )
+    desc = json_as_str(bag.get("description") or bag.get("monitor_description")).strip()
+    if event_type.startswith("scheduled_task_"):
+        bits = [
+            json_as_str(bag.get("human_schedule")).strip(),
+            json_as_str(bag.get("prompt")).replace("\n", " ").strip()[:48],
+        ]
+        text = " · ".join(b for b in bits if b) or json_as_str(bag.get("task_id")).strip()
+        return _clip_preview(text, max_chars)
+    if command:
+        return _clip_preview(f"$ {command.replace(chr(10), ' ').strip()}", max_chars)
+    if desc:
+        return _clip_preview(desc, max_chars)
+    one = (content or "").replace("\n", " ").strip()
+    if not one or one.startswith(event_type) or one.startswith("{"):
+        return ""
+    return _clip_preview(one, max_chars)
+
+
+def _clip_preview(text: str, max_chars: int) -> str:
+    one = (text or "").replace("\n", " ").strip()
+    if max_chars <= 0 or len(one) <= max_chars:
+        return one
+    return one[: max(1, max_chars - 1)] + "…"
+
+
 # Grok read_file dumps ``1→`` / ``12->`` before each source line.
 _LINE_PREFIX = re.compile(r"^(\s*)(\d+)(?:→|->)[ \t]?", re.MULTILINE)
 
@@ -146,6 +235,11 @@ _PRIMARY_INPUT_KEYS = (
     "description",
     "question",
     "image",
+    "run_id",
+    "resume_from_run_id",
+    "name",
+    "script_path",
+    "task_id",
 )
 
 

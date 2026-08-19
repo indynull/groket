@@ -291,6 +291,293 @@ pub fn overview_fields(
     out
 }
 
+/// Glance counts for Overview — not the job list or log tails.
+pub fn overview_job_fields(
+    jobs: &[crate::wire::BackgroundJobRow],
+    schedules: &[crate::wire::ScheduleRow],
+    workflows: &[crate::wire::WorkflowRow],
+) -> Vec<OverviewField> {
+    let mut out = Vec::new();
+    if !jobs.is_empty() {
+        let running = jobs.iter().filter(|j| j.status == "running").count();
+        let done = jobs
+            .iter()
+            .filter(|j| j.status == "done" || j.status == "completed")
+            .count();
+        let failed = jobs
+            .iter()
+            .filter(|j| j.status == "failed" || j.status == "cancelled")
+            .count();
+        let value = overview_job_count_value(jobs.len(), running, done, failed);
+        out.push(OverviewField {
+            key: "background",
+            label: "background",
+            value,
+            copyable: false,
+        });
+    }
+    if !schedules.is_empty() {
+        let value = if schedules.len() == 1 {
+            let s = &schedules[0];
+            if !s.human_schedule.is_empty() {
+                s.human_schedule.clone()
+            } else if !s.prompt_preview.is_empty() {
+                s.prompt_preview.clone()
+            } else {
+                "1".into()
+            }
+        } else {
+            schedules.len().to_string()
+        };
+        out.push(OverviewField {
+            key: "schedules",
+            label: "schedules",
+            value,
+            copyable: false,
+        });
+    }
+    if !workflows.is_empty() {
+        let complete = workflows
+            .iter()
+            .filter(|w| w.status == "complete" || w.status == "done")
+            .count();
+        let failed = workflows.iter().filter(|w| w.status == "failed").count();
+        let cancelled = workflows.iter().filter(|w| w.status == "cancelled").count();
+        let interrupted = workflows
+            .iter()
+            .filter(|w| w.status == "interrupted")
+            .count();
+        out.push(OverviewField {
+            key: "workflows",
+            label: "workflows",
+            value: overview_workflow_count_value(
+                workflows.len(),
+                complete,
+                failed,
+                cancelled,
+                interrupted,
+            ),
+            copyable: false,
+        });
+    }
+    out
+}
+
+/// Named Overview rows that jump Timeline to that bookend.
+pub struct OverviewJump {
+    pub key: String,
+    pub label: String,
+    pub event_index: i64,
+}
+
+/// Workflows then jobs that have a Timeline bookend index.
+pub fn overview_run_jumps(
+    jobs: &[crate::wire::BackgroundJobRow],
+    workflows: &[crate::wire::WorkflowRow],
+) -> Vec<OverviewJump> {
+    let mut out = Vec::new();
+    for run in workflows {
+        let Some(ix) = run.event_index else {
+            continue;
+        };
+        let name = if run.name.is_empty() {
+            run.id.clone()
+        } else {
+            run.name.clone()
+        };
+        out.push(OverviewJump {
+            key: format!("wf-{}", run.id),
+            label: name,
+            event_index: ix,
+        });
+    }
+    for job in jobs {
+        let Some(ix) = job.event_index else {
+            continue;
+        };
+        let name = if !job.description.is_empty() {
+            job.description.clone()
+        } else if !job.command.is_empty() {
+            job.command.clone()
+        } else {
+            job.id.clone()
+        };
+        out.push(OverviewJump {
+            key: format!("job-{}", job.id),
+            label: name,
+            event_index: ix,
+        });
+    }
+    out
+}
+
+/// One labeled inspect section: heading immediately above a non-empty body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectBlock {
+    pub label: &'static str,
+    pub body: String,
+}
+
+fn inspect_block(label: &'static str, body: impl Into<String>) -> Option<InspectBlock> {
+    let body = body.into();
+    if body.trim().is_empty() {
+        return None;
+    }
+    Some(InspectBlock { label, body })
+}
+
+fn join_happen(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ·  ")
+}
+
+/// Schedule inspect: Asked is the prompt; Happened is the cadence / last fire.
+pub fn schedule_inspect_blocks(
+    prompt: &str,
+    human: &str,
+    next: &str,
+    last: &str,
+    child: &str,
+) -> Vec<InspectBlock> {
+    [
+        inspect_block("Asked", prompt),
+        inspect_block("Happened", join_happen(&[human, next, last, child])),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Job inspect: Asked is what was launched; Happened is status; Failed is the last log line.
+pub fn job_inspect_blocks(asked: &str, happened: &str, failed: &str) -> Vec<InspectBlock> {
+    [
+        inspect_block("Asked", asked),
+        inspect_block("Happened", happened),
+        inspect_block("Failed", failed),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Subagent inspect: Asked is the assignment; Happened is kind/status; Failed has a body.
+pub fn subagent_inspect_blocks(asked: &str, happened: &str, failed: &str) -> Vec<InspectBlock> {
+    job_inspect_blocks(asked, happened, failed)
+}
+
+fn overview_workflow_count_value(
+    total: usize,
+    complete: usize,
+    failed: usize,
+    cancelled: usize,
+    interrupted: usize,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if complete > 0 {
+        parts.push(format!("{complete} complete"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if cancelled > 0 {
+        parts.push(format!("{cancelled} cancelled"));
+    }
+    if interrupted > 0 {
+        parts.push(format!("{interrupted} interrupted"));
+    }
+    if parts.is_empty() {
+        return total.to_string();
+    }
+    if complete + failed + cancelled + interrupted < total {
+        parts.push(total.to_string());
+    }
+    parts.join(" · ")
+}
+
+/// Name from a Timeline ``workflow`` tool bag (not the Rhai body).
+pub fn workflow_name_from_raw(raw: &Value) -> String {
+    let name = json_str_field(raw, "name");
+    if !name.is_empty() && name != "none" && name != "null" {
+        return name;
+    }
+    let path = json_str_field(raw, "script_path");
+    if !path.is_empty() {
+        let stem = path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(".rhai");
+        if !stem.is_empty() {
+            return stem.to_string();
+        }
+    }
+    let script = json_str_field(raw, "script");
+    if let Some(idx) = script.find("name:") {
+        let rest = &script[idx + 5..];
+        if let Some(start) = rest.find('"') {
+            let after = &rest[start + 1..];
+            if let Some(end) = after.find('"') {
+                return after[..end].to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Match a Timeline workflow tool call to an overview run.
+pub fn workflow_for_event<'a>(
+    runs: &'a [crate::wire::WorkflowRow],
+    raw: &Value,
+) -> Option<&'a crate::wire::WorkflowRow> {
+    let rid = {
+        let a = json_str_field(raw, "resume_from_run_id");
+        if a.is_empty() {
+            json_str_field(raw, "run_id")
+        } else {
+            a
+        }
+    };
+    if !rid.is_empty() {
+        if let Some(hit) = runs.iter().find(|r| r.id == rid) {
+            return Some(hit);
+        }
+    }
+    let name = workflow_name_from_raw(raw);
+    if name.is_empty() {
+        return None;
+    }
+    let mut hits: Vec<&crate::wire::WorkflowRow> = runs
+        .iter()
+        .filter(|r| r.name == name || r.name.starts_with(&format!("{name}-")))
+        .collect();
+    hits.sort_by(|a, b| a.id.cmp(&b.id));
+    hits.pop()
+}
+
+fn overview_job_count_value(total: usize, running: usize, done: usize, failed: usize) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if running > 0 {
+        parts.push(format!("{running} running"));
+    }
+    if done > 0 {
+        parts.push(format!("{done} complete"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if parts.is_empty() {
+        return total.to_string();
+    }
+    if running + done + failed < total {
+        parts.push(total.to_string());
+    }
+    parts.join(" · ")
+}
+
 fn overview_context_value(meta: &crate::wire::SessionMeta) -> Option<String> {
     let compact = meta.context_compact().trim();
     let usage = meta.context_usage.trim();
@@ -636,6 +923,10 @@ pub fn event_type_brand_role(event_type: &str) -> BrandRole {
         "tool_call" | "tool_call_update" | "tool_result" => BrandRole::Complete,
         "task_backgrounded"
         | "task_completed"
+        | "scheduled_task_created"
+        | "scheduled_task_updated"
+        | "scheduled_task_fired"
+        | "scheduled_task_deleted"
         | "turn_completed"
         | "current_mode_update"
         | "retry_state"
@@ -677,10 +968,397 @@ pub fn event_brand_role(event_type: &str, kind: &str, is_error: bool) -> BrandRo
     kind_brand_role(kind)
 }
 
+/// Honest TUI words for task / schedule bookends (not “subagent”).
+pub fn event_is_monitor(raw_input: &Value) -> bool {
+    if raw_input.get("kind").and_then(|v| v.as_str()) == Some("monitor") {
+        return true;
+    }
+    if raw_input
+        .get("monitor_description")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return true;
+    }
+    raw_input
+        .get("output_file")
+        .and_then(|v| v.as_str())
+        .is_some_and(|p| p.contains("monitor-call"))
+}
+
+pub fn job_event_label(event_type: &str, is_monitor: bool) -> Option<&'static str> {
+    match event_type.trim() {
+        "task_backgrounded" => Some(if is_monitor {
+            "monitor"
+        } else {
+            "background start"
+        }),
+        "task_completed" => Some(if is_monitor {
+            "monitor done"
+        } else {
+            "background done"
+        }),
+        "scheduled_task_created" => Some("schedule created"),
+        "scheduled_task_updated" => Some("schedule updated"),
+        "scheduled_task_fired" => Some("schedule fired"),
+        "scheduled_task_deleted" => Some("schedule deleted"),
+        _ => None,
+    }
+}
+
+/// Recover command/cwd from the origin/main ``key=value`` bookend dump.
+pub fn task_fields_from_content(content: &str) -> Vec<(String, String)> {
+    let text = content.trim();
+    if !text.starts_with("task_backgrounded") && !text.starts_with("task_completed") {
+        return Vec::new();
+    }
+    const KEYS: [&str; 6] = [
+        "tool_call_id",
+        "task_id",
+        "command",
+        "cwd",
+        "prompt_id",
+        "mode",
+    ];
+    let mut marks: Vec<(usize, &str)> = Vec::new();
+    for key in KEYS {
+        let token = format!("{key}=");
+        if let Some(idx) = text.find(&token) {
+            if idx == 0
+                || text
+                    .as_bytes()
+                    .get(idx - 1)
+                    .is_some_and(|b| b.is_ascii_whitespace())
+            {
+                marks.push((idx, key));
+            }
+        }
+    }
+    marks.sort_by_key(|(i, _)| *i);
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (i, (start, key)) in marks.iter().enumerate() {
+        let val_start = start + key.len() + 1;
+        let val_end = marks.get(i + 1).map(|(n, _)| *n).unwrap_or(text.len());
+        let val = text.get(val_start..val_end).unwrap_or("").trim();
+        if !val.is_empty() {
+            out.push(((*key).to_string(), val.to_string()));
+        }
+    }
+    if let Some(brace) = text.find('{') {
+        if let Ok(extra) = serde_json::from_str::<Value>(&text[brace..]) {
+            for key in [
+                "command",
+                "cwd",
+                "description",
+                "output_file",
+                "display_command",
+            ] {
+                if out.iter().any(|(k, _)| k == key) {
+                    continue;
+                }
+                if let Some(val) = extra.get(key).and_then(|v| v.as_str()) {
+                    if !val.trim().is_empty() {
+                        out.push((key.to_string(), val.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Summary remainder for a background / monitor / schedule bookend.
+pub fn job_list_preview(event_type: &str, raw: &Value, content: &str) -> String {
+    let dump = task_fields_from_content(content);
+    let dump_get = |key: &str| {
+        dump.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    };
+    let command = {
+        let from_raw = json_str_field(raw, "command");
+        let display = json_str_field(raw, "display_command");
+        if !from_raw.is_empty() {
+            from_raw
+        } else if !display.is_empty() {
+            display
+        } else if !dump_get("command").is_empty() {
+            dump_get("command").to_string()
+        } else {
+            dump_get("display_command").to_string()
+        }
+    };
+    let desc = {
+        let d = json_str_field(raw, "description");
+        if d.is_empty() {
+            json_str_field(raw, "monitor_description")
+        } else {
+            d
+        }
+    };
+    if event_type.starts_with("scheduled_task_") {
+        let human = json_str_field(raw, "human_schedule");
+        let prompt: String = json_str_field(raw, "prompt").chars().take(48).collect();
+        let mut bits: Vec<&str> = Vec::new();
+        if !human.is_empty() {
+            bits.push(human.as_str());
+        }
+        if !prompt.is_empty() {
+            bits.push(prompt.as_str());
+        }
+        let joined = bits.join(" · ");
+        let id = json_str_field(raw, "task_id");
+        let text = if joined.is_empty() { id } else { joined };
+        return capped_display(&text, 80);
+    }
+    if !command.is_empty() {
+        let one = command.replace('\n', " ");
+        return capped_display(&format!("$ {}", one.trim()), 80);
+    }
+    if !desc.is_empty() {
+        return capped_display(&desc, 80);
+    }
+    let one = content.replace('\n', " ");
+    let one = one.trim();
+    if one.is_empty() || one.starts_with(event_type) || one.starts_with('{') {
+        return String::new();
+    }
+    capped_display(one, 80)
+}
+
+/// Job id from a bookend (`task_id` / `id` / tool call id).
+pub fn job_event_id(raw: &Value, tool_call_id: &str) -> String {
+    let tid = json_str_field(raw, "task_id");
+    if !tid.is_empty() {
+        return tid;
+    }
+    let id = json_str_field(raw, "id");
+    if !id.is_empty() {
+        return id;
+    }
+    tool_call_id.trim().to_string()
+}
+
+/// Opposite bookend for the same `task_id` (start ↔ finish).
+pub fn job_mate_index(
+    event_type: &str,
+    raw: &Value,
+    tool_call_id: &str,
+    others: &[(i64, String, Value, String)],
+) -> Option<i64> {
+    let tid = job_event_id(raw, tool_call_id);
+    if tid.is_empty() {
+        return None;
+    }
+    let want = if event_type == "task_backgrounded" {
+        "task_completed"
+    } else if event_type == "task_completed" {
+        "task_backgrounded"
+    } else {
+        return None;
+    };
+    others.iter().find_map(|(idx, et, oraw, ocid)| {
+        if et == want && job_event_id(oraw, ocid) == tid {
+            Some(*idx)
+        } else {
+            None
+        }
+    })
+}
+
+/// Exit code from the finish bookend (self when this *is* the finish).
+pub fn job_exit_code(event_type: &str, raw: &Value, mate: Option<&Value>) -> Option<i64> {
+    let finish = if event_type == "task_completed" {
+        raw
+    } else {
+        mate?
+    };
+    finish.get("exit_code").and_then(|v| v.as_i64())
+}
+
+/// Last fire / last child from the merged overview row (not the bookend bag).
+pub fn schedule_last_fire<'a>(
+    schedules: &'a [crate::wire::ScheduleRow],
+    task_id: &str,
+) -> Option<(&'a str, &'a str)> {
+    let tid = task_id.trim();
+    if tid.is_empty() {
+        return None;
+    }
+    let row = schedules.iter().find(|s| s.id == tid)?;
+    Some((row.last_fired_at.as_str(), row.last_subagent_id.as_str()))
+}
+
+/// Last-line log class or finish fields — same words as TUI job status.
+pub fn job_status(raw: &Value, content: &str, log_tail: &str) -> &'static str {
+    for line in log_tail.lines().rev() {
+        let token = line.split_whitespace().next().unwrap_or("");
+        match token {
+            "DONE" => return "done",
+            "FAILED" => return "failed",
+            "CANCELLED" => return "cancelled",
+            _ => {}
+        }
+    }
+    if raw.get("completed").and_then(|v| v.as_bool()) == Some(true)
+        || content.contains("task_completed")
+    {
+        if raw.get("explicitly_killed").and_then(|v| v.as_bool()) == Some(true) {
+            return "cancelled";
+        }
+        if raw.get("exit_code").and_then(|v| v.as_i64()) == Some(0) {
+            return "done";
+        }
+        if raw
+            .get("exit_code")
+            .and_then(|v| v.as_i64())
+            .is_some_and(|c| c != 0)
+        {
+            return "failed";
+        }
+        return "done";
+    }
+    "running"
+}
+
+/// Full command for a Timeline inspect card (not the list preview).
+pub fn job_command(raw: &Value, content: &str) -> String {
+    let dump = task_fields_from_content(content);
+    let dump_cmd = dump
+        .iter()
+        .find(|(k, _)| k == "command" || k == "display_command")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let from_raw = json_str_field(raw, "command");
+    let display = json_str_field(raw, "display_command");
+    let cmd = if !from_raw.is_empty() {
+        from_raw
+    } else if !display.is_empty() {
+        display
+    } else {
+        dump_cmd.to_string()
+    };
+    cmd.trim().to_string()
+}
+
+pub fn job_description(raw: &Value) -> String {
+    let d = json_str_field(raw, "description");
+    if !d.is_empty() {
+        return d;
+    }
+    json_str_field(raw, "monitor_description")
+}
+
+pub fn job_output_path(raw: &Value) -> String {
+    let p = json_str_field(raw, "output_file");
+    if !p.is_empty() {
+        return p;
+    }
+    json_str_field(raw, "outputPath")
+}
+
+/// Last lines of a monitor/shell log for Timeline inspect. Caps size.
+pub fn job_log_tail(path: &str) -> String {
+    const MAX_CHARS: usize = 2_000;
+    const MAX_LINES: usize = 24;
+    if path.trim().is_empty() {
+        return String::new();
+    }
+    let Ok(data) = std::fs::read(path) else {
+        return String::new();
+    };
+    let start = data.len().saturating_sub(MAX_CHARS);
+    let text = String::from_utf8_lossy(&data[start..]);
+    let lines: Vec<&str> = text.lines().collect();
+    let take = lines.len().saturating_sub(MAX_LINES);
+    lines[take..].join("\n")
+}
+
+/// Summary remainder for a spawn/finish bookend (not the dump line).
+pub fn subagent_list_preview(event_type: &str, raw: &Value, content: &str) -> String {
+    if event_type == "subagent_spawned" {
+        let typ = json_str_field(raw, "subagentType");
+        let typ = if typ.is_empty() {
+            json_str_field(raw, "subagent_type")
+        } else {
+            typ
+        };
+        let desc = json_str_field(raw, "description");
+        let (typ, desc) = if typ.is_empty() && desc.is_empty() {
+            spawn_from_content(content)
+        } else {
+            (typ, desc)
+        };
+        let text = if !desc.is_empty() { desc } else { typ };
+        return capped_display(&text, 80);
+    }
+    if event_type == "subagent_finished" {
+        let desc = json_str_field(raw, "description");
+        if !desc.is_empty() {
+            return capped_display(&desc, 80);
+        }
+        let mut status = json_str_field(raw, "status");
+        if status.is_empty() {
+            status = finish_from_content(content).0;
+        }
+        return capped_display(&status, 80);
+    }
+    String::new()
+}
+
+fn spawn_from_content(content: &str) -> (String, String) {
+    let text = content.trim();
+    let rest = text
+        .strip_prefix("Spawned ")
+        .or_else(|| text.strip_prefix("spawned "))
+        .unwrap_or("");
+    if rest.is_empty() {
+        return (String::new(), String::new());
+    }
+    if let Some((typ, desc)) = rest.split_once(':') {
+        (typ.trim().to_string(), desc.trim().to_string())
+    } else {
+        (String::new(), rest.to_string())
+    }
+}
+
+fn finish_from_content(content: &str) -> (String, Option<i64>) {
+    let text = content.trim();
+    let Some(rest) = text
+        .strip_prefix("Subagent finished")
+        .or_else(|| text.strip_prefix("subagent finished"))
+    else {
+        return (String::new(), None);
+    };
+    let mut rest = rest.trim();
+    let mut ms = None;
+    if let Some(idx) = rest.find("duration_ms=") {
+        let tail = &rest[idx + "duration_ms=".len()..];
+        let num = tail.split_whitespace().next().unwrap_or("");
+        ms = num.parse().ok();
+        rest = rest[..idx].trim();
+    }
+    let status = rest
+        .split_whitespace()
+        .find(|p| p.chars().all(|c| c.is_ascii_alphabetic()))
+        .unwrap_or("")
+        .to_string();
+    (status, ms)
+}
+
 /// TUI-style human type label: Grok wire id with underscores → spaces.
 ///
-/// Prefers control `type_label`, then `event_type`, then coarse `kind`.
-pub fn human_event_type_label(event_type: &str, type_label: &str, kind: &str) -> String {
+/// Prefers honest job labels, then control `type_label`, then `event_type`.
+pub fn human_event_type_label(
+    event_type: &str,
+    type_label: &str,
+    kind: &str,
+    is_monitor: bool,
+) -> String {
+    if let Some(honest) = job_event_label(event_type, is_monitor) {
+        return honest.to_string();
+    }
     let raw = if !type_label.trim().is_empty() {
         type_label.trim()
     } else if !event_type.trim().is_empty() {
@@ -1157,8 +1835,8 @@ pub fn syntax_for_tool_output(tool_name: &str, path_hint: &str, body: &str) -> &
     }
     let t = tool_name.trim();
     if t == "run_terminal_command" || t == "get_command_or_subagent_output" || t == "monitor" {
-        // Shell stdout stays unhighlighted (mixed stream).
-        return "";
+        // Shell stream: monospaced syntax pane (txt), not a dead plain dump.
+        return "txt";
     }
     if t == "read_file" || t == "search_replace" {
         return syntax_for_source_body(body);
@@ -1348,8 +2026,18 @@ pub fn event_matches_kind(kind: &str, is_error: bool, mode: KindFilter) -> bool 
             matches!(kind.as_str(), "system" | "session" | "error")
         }
         KindFilter::Subagents => kind == "subagent",
+        KindFilter::Background => kind == "task",
+        KindFilter::Workflows => false,
         KindFilter::Errors => is_error || kind == "error",
     }
+}
+
+/// Kind filter plus tool name (Workflows is ``tool_name == workflow``).
+pub fn event_matches_filter(kind: &str, tool_name: &str, is_error: bool, mode: KindFilter) -> bool {
+    if mode == KindFilter::Workflows {
+        return tool_name == "workflow";
+    }
+    event_matches_kind(kind, is_error, mode)
 }
 
 pub fn is_unknown_method(err: &str) -> bool {
@@ -1696,9 +2384,28 @@ mod tests {
         assert!(!event_matches_kind("subagent", false, KindFilter::Sess));
         assert!(event_matches_kind("subagent", false, KindFilter::Subagents));
         assert!(!event_matches_kind("agent", false, KindFilter::Subagents));
+        assert!(event_matches_kind("task", false, KindFilter::Background));
+        assert!(!event_matches_kind(
+            "subagent",
+            false,
+            KindFilter::Background
+        ));
         assert!(!event_matches_kind("agent", false, KindFilter::Sess));
         assert!(event_matches_kind("agent", false, KindFilter::Asst));
         assert!(event_matches_kind("thought", false, KindFilter::Asst));
+        assert!(event_matches_filter(
+            "tool",
+            "workflow",
+            false,
+            KindFilter::Workflows
+        ));
+        assert!(!event_matches_filter(
+            "tool",
+            "read_file",
+            false,
+            KindFilter::Workflows
+        ));
+        assert!(!event_matches_kind("tool", false, KindFilter::Workflows));
     }
 
     #[test]
@@ -1802,27 +2509,345 @@ mod tests {
     #[test]
     fn human_event_type_label_spaces_underscores() {
         assert_eq!(
-            human_event_type_label("user_message_chunk", "", "user"),
+            human_event_type_label("user_message_chunk", "", "user", false),
             "user message chunk"
         );
         assert_eq!(
-            human_event_type_label("tool_call", "tool call", "tool"),
+            human_event_type_label("tool_call", "tool call", "tool", false),
             "tool call"
         );
-        assert_eq!(human_event_type_label("", "", "agent"), "agent");
+        assert_eq!(human_event_type_label("", "", "agent", false), "agent");
         assert_eq!(
-            human_event_type_label("subagent_spawned", "", "subagent"),
+            human_event_type_label("subagent_spawned", "", "subagent", false),
             "subagent spawned"
         );
         assert_eq!(
-            human_event_type_label("subagent_finished", "subagent finished", "subagent"),
+            human_event_type_label("subagent_finished", "subagent finished", "subagent", false),
             "subagent finished"
         );
+        assert_eq!(
+            human_event_type_label("task_backgrounded", "", "task", false),
+            "background start"
+        );
+        assert_eq!(
+            human_event_type_label("task_backgrounded", "", "task", true),
+            "monitor"
+        );
+        assert_eq!(
+            human_event_type_label("scheduled_task_created", "", "task", false),
+            "schedule created"
+        );
+        assert_eq!(job_event_label("task_backgrounded", true), Some("monitor"));
         assert_eq!(timeline_count_caption(""), None);
         assert_eq!(
             timeline_count_caption("  1-40 of 100  "),
             Some("1-40 of 100")
         );
+    }
+
+    #[test]
+    fn subagent_list_preview_is_not_the_dump() {
+        let dump =
+            "Subagent finished  01a016d1-4df7-7d30-b99f-65289aa0b417  completed  duration_ms=96555";
+        let preview = subagent_list_preview("subagent_finished", &serde_json::json!({}), dump);
+        assert_eq!(preview, "completed");
+        assert!(!preview.contains("01a016d1"));
+        assert_eq!(
+            subagent_list_preview(
+                "subagent_spawned",
+                &serde_json::json!({}),
+                "Spawned general-purpose: Investigate the bug"
+            ),
+            "Investigate the bug"
+        );
+    }
+
+    #[test]
+    fn overview_job_fields_are_counts_not_tails() {
+        use crate::wire::{BackgroundJobRow, ScheduleRow};
+
+        let jobs = [
+            BackgroundJobRow {
+                status: "running".into(),
+                command: "cargo test".into(),
+                output_path: "/tmp/monitor-call.log".into(),
+                ..BackgroundJobRow::default()
+            },
+            BackgroundJobRow {
+                status: "done".into(),
+                ..BackgroundJobRow::default()
+            },
+        ];
+        let rows = overview_job_fields(
+            &jobs,
+            &[ScheduleRow {
+                human_schedule: "every 1 hour".into(),
+                ..ScheduleRow::default()
+            }],
+            &[],
+        );
+        assert_eq!(rows[0].key, "background");
+        assert_eq!(rows[0].value, "1 running · 1 complete");
+        assert_eq!(rows[1].key, "schedules");
+        assert_eq!(rows[1].value, "every 1 hour");
+        assert!(!rows[0].value.contains("cargo"));
+        assert!(!rows[0].value.contains("monitor-call"));
+    }
+
+    #[test]
+    fn job_inspect_reads_command_and_caps_log() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("groket-hud-job-inspect.log");
+        let mut body = String::new();
+        for i in 0..40 {
+            body.push_str(&format!("line {i}\n"));
+        }
+        body.push_str("DONE\n");
+        std::fs::write(&path, body).expect("log");
+        let raw = serde_json::json!({
+            "description": "Watch board",
+            "command": "bash watch.sh",
+            "output_file": path.to_string_lossy(),
+        });
+        assert_eq!(job_command(&raw, ""), "bash watch.sh");
+        assert_eq!(job_description(&raw), "Watch board");
+        let tail = job_log_tail(path.to_str().expect("utf8"));
+        assert_eq!(job_status(&raw, "", &tail), "done");
+        assert!(tail.contains("DONE"));
+        assert!(tail.contains("line 39"));
+        assert!(!tail.contains("line 0"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn job_list_preview_is_command_not_event_type() {
+        let dump = "task_backgrounded  tool_call_id=call-1  command=cd /tmp && just lint  cwd=/tmp";
+        let preview = job_list_preview("task_backgrounded", &serde_json::json!({}), dump);
+        assert!(preview.starts_with("$ cd /tmp && just lint"));
+        assert!(!preview.contains("task_backgrounded"));
+        assert_eq!(
+            job_list_preview(
+                "task_backgrounded",
+                &serde_json::json!({"command": "bash watch.sh"}),
+                ""
+            ),
+            "$ bash watch.sh"
+        );
+    }
+
+    #[test]
+    fn overview_workflow_fields_are_counts_not_journal() {
+        use crate::wire::WorkflowRow;
+
+        let rows = overview_job_fields(
+            &[],
+            &[],
+            &[
+                WorkflowRow {
+                    name: "sprint-9".into(),
+                    status: "complete".into(),
+                    pause_message: "should not appear".into(),
+                    ..WorkflowRow::default()
+                },
+                WorkflowRow {
+                    name: "sprint-8".into(),
+                    status: "failed".into(),
+                    pause_message: "Variable not found: vissue_root".into(),
+                    ..WorkflowRow::default()
+                },
+            ],
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "workflows");
+        assert_eq!(rows[0].value, "1 complete · 1 failed");
+        assert!(!rows[0].value.contains("vissue_root"));
+        assert!(!rows[0].value.contains("sprint"));
+    }
+
+    #[test]
+    fn overview_run_jumps_named_bookends() {
+        use crate::wire::{BackgroundJobRow, WorkflowRow};
+
+        let jumps = overview_run_jumps(
+            &[BackgroundJobRow {
+                id: "job-1".into(),
+                description: "Watch board".into(),
+                event_index: Some(4),
+                ..BackgroundJobRow::default()
+            }],
+            &[WorkflowRow {
+                id: "wf_sprint8".into(),
+                name: "sprint-8".into(),
+                event_index: Some(12),
+                ..WorkflowRow::default()
+            }],
+        );
+        assert_eq!(jumps.len(), 2);
+        assert_eq!(jumps[0].label, "sprint-8");
+        assert_eq!(jumps[0].event_index, 12);
+        assert_eq!(jumps[1].label, "Watch board");
+        assert_eq!(jumps[1].event_index, 4);
+    }
+
+    #[test]
+    fn inspect_blocks_put_each_label_on_its_body() {
+        let sched = schedule_inspect_blocks(
+            "hourly ping",
+            "every 1 hour",
+            "2026-08-18T23:00:00Z",
+            "",
+            "",
+        );
+        assert_eq!(
+            sched
+                .iter()
+                .map(|b| (b.label, b.body.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Asked", "hourly ping"),
+                ("Happened", "every 1 hour  ·  2026-08-18T23:00:00Z"),
+            ]
+        );
+        let job = job_inspect_blocks("bash watch.sh", "failed  ·  exit 1", "FAILED");
+        assert_eq!(job[0].label, "Asked");
+        assert_eq!(job[0].body, "bash watch.sh");
+        assert_eq!(job[1].label, "Happened");
+        assert_eq!(job[1].body, "failed  ·  exit 1");
+        assert_eq!(job[2].label, "Failed");
+        assert_eq!(job[2].body, "FAILED");
+        let sub = subagent_inspect_blocks("Investigate the bug", "coder  ·  failed", "failed");
+        assert_eq!(sub[0].label, "Asked");
+        assert_eq!(sub[0].body, "Investigate the bug");
+        assert_eq!(sub[1].label, "Happened");
+        assert!(sub[1].body.contains("failed"));
+        assert_eq!(sub[2].label, "Failed");
+        assert!(!sub[2].body.trim().is_empty());
+        assert!(schedule_inspect_blocks("", "", "", "", "").is_empty());
+        assert!(job_inspect_blocks("", "running", "").len() == 1);
+        assert_eq!(job_inspect_blocks("", "running", "")[0].label, "Happened");
+    }
+
+    #[test]
+    fn workflow_pairs_result_run_id_not_latest_name() {
+        use crate::wire::WorkflowRow;
+
+        let runs = [
+            WorkflowRow {
+                id: "wf_failed".into(),
+                name: "sprint-8".into(),
+                status: "failed".into(),
+                phase: "Kickoff".into(),
+                pause_message: "Variable not found: vissue_root".into(),
+                ..WorkflowRow::default()
+            },
+            WorkflowRow {
+                id: "wf_later".into(),
+                name: "sprint-11".into(),
+                status: "complete".into(),
+                phase: "Retrospective".into(),
+                ..WorkflowRow::default()
+            },
+        ];
+        let raw = serde_json::json!({
+            "script_path": "/repo/.grok/workflows/sprint.rhai",
+            "run_id": "wf_failed"
+        });
+        let hit = workflow_for_event(&runs, &raw).expect("run");
+        assert_eq!(hit.id, "wf_failed");
+        assert_eq!(hit.status, "failed");
+        assert!(hit.pause_message.contains("vissue_root"));
+    }
+
+    #[test]
+    fn workflow_pairs_script_path_to_latest_named_run() {
+        use crate::wire::WorkflowRow;
+
+        let runs = [
+            WorkflowRow {
+                id: "wf_a".into(),
+                name: "sprint".into(),
+                status: "complete".into(),
+                ..WorkflowRow::default()
+            },
+            WorkflowRow {
+                id: "wf_b".into(),
+                name: "sprint-11".into(),
+                status: "complete".into(),
+                phase: "Retrospective".into(),
+                ..WorkflowRow::default()
+            },
+        ];
+        let raw = serde_json::json!({
+            "script_path": "/repo/.grok/workflows/sprint.rhai"
+        });
+        let hit = workflow_for_event(&runs, &raw).expect("run");
+        assert_eq!(hit.name, "sprint-11");
+        assert_eq!(workflow_name_from_raw(&raw), "sprint");
+        assert_eq!(
+            workflow_name_from_raw(&serde_json::json!({
+                "script": "let meta = #{ name: \"between\", description: \"x\" };"
+            })),
+            "between"
+        );
+    }
+
+    #[test]
+    fn job_mate_index_pairs_start_and_finish_both_ways() {
+        let start = serde_json::json!({"task_id": "job-x"});
+        let finish = serde_json::json!({"task_id": "job-x", "exit_code": 1});
+        let others_from_start = vec![(2, "task_completed".into(), finish.clone(), "call-x".into())];
+        let others_from_finish = vec![(
+            1,
+            "task_backgrounded".into(),
+            start.clone(),
+            "call-x".into(),
+        )];
+        assert_eq!(
+            job_mate_index("task_backgrounded", &start, "call-x", &others_from_start),
+            Some(2)
+        );
+        assert_eq!(
+            job_mate_index("task_completed", &finish, "call-x", &others_from_finish),
+            Some(1)
+        );
+        assert_eq!(job_exit_code("task_completed", &finish, None), Some(1));
+        assert_eq!(
+            job_exit_code("task_backgrounded", &start, Some(&finish)),
+            Some(1)
+        );
+        assert_eq!(job_exit_code("task_backgrounded", &start, None), None);
+    }
+
+    #[test]
+    fn schedule_last_fire_comes_from_overview_row() {
+        use crate::wire::ScheduleRow;
+
+        let rows = [ScheduleRow {
+            id: "sched-1".into(),
+            last_fired_at: "2026-08-18T22:05:45Z".into(),
+            last_subagent_id: "sub-1".into(),
+            ..ScheduleRow::default()
+        }];
+        let (last, child) = schedule_last_fire(&rows, "sched-1").expect("row");
+        assert_eq!(last, "2026-08-18T22:05:45Z");
+        assert_eq!(child, "sub-1");
+        assert!(schedule_last_fire(&rows, "").is_none());
+        assert!(schedule_last_fire(&rows, "other").is_none());
+    }
+
+    #[test]
+    fn event_is_monitor_from_kind_and_path() {
+        assert!(event_is_monitor(&serde_json::json!({
+            "kind": "monitor",
+            "output_file": "/tmp/monitor-call.log"
+        })));
+        assert!(event_is_monitor(&serde_json::json!({
+            "monitor_description": "watch board",
+        })));
+        assert!(!event_is_monitor(&serde_json::json!({
+            "kind": "bash",
+            "output_file": "/tmp/call-shell.log"
+        })));
     }
 
     #[test]
@@ -1860,6 +2885,10 @@ mod tests {
         let running = [
             "task_backgrounded",
             "task_completed",
+            "scheduled_task_created",
+            "scheduled_task_updated",
+            "scheduled_task_fired",
+            "scheduled_task_deleted",
             "turn_completed",
             "current_mode_update",
             "retry_state",
@@ -1995,7 +3024,7 @@ mod tests {
         );
         assert_eq!(
             syntax_for_tool_output("run_terminal_command", "", "ok\n"),
-            ""
+            "txt"
         );
         assert_eq!(
             body_paint_for("thought", "agent_thought_chunk", "hmm", true),

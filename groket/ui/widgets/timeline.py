@@ -12,7 +12,15 @@ from ... import event_types as et
 from ...analysis.base import Finding
 from ...constants import LIVE_TIMELINE_TAIL_CHECK
 from ...models import Flag, ToolInputBag, TraceEvent
-from ...tool_display import list_event_preview
+from ...session.jobs import event_job_kind, event_task_id
+from ...session.subagents import (
+    event_child_session_id,
+    subagent_duration_seconds,
+    subagent_inspect,
+    subagent_list_preview,
+)
+from ...session.workflows import workflow_list_preview
+from ...tool_display import job_list_preview, list_event_preview
 from ...utils import fmt_duration
 from ..data_table import (
     cursor_row_key,
@@ -23,7 +31,7 @@ from ..data_table import (
 )
 from ..i18n import t
 from ..styles import EVENT_TYPE_LABEL as TYPE_MARKUP
-from ..styles import finding_mark
+from ..styles import EVENT_TYPE_STYLE, finding_mark
 from ..styles import tool_label as tool_markup
 
 
@@ -46,6 +54,8 @@ class TimelineTable(DataTable):
     #: When True the turn map is cold; open/rebuild fills it once. Live
     #: same-length ticks keep it warm; append extends or resegments once.
     _turn_map_stale: bool = True
+    _subagent_mate: dict[int, TraceEvent] = {}
+    _job_mate: dict[int, TraceEvent] = {}
 
     @property
     def durations(self) -> dict[int, float]:
@@ -302,6 +312,9 @@ class TimelineTable(DataTable):
                     and ev.timestamp >= call.timestamp
                 ):
                     self._durations[call.index] = ev.timestamp - call.timestamp
+        self._index_subagent_mates()
+        self._index_job_mates()
+        self._apply_subagent_run_durations()
 
     def _build_tool_pairs(self) -> None:
         """Index tool_call / tool_result by call_id (trace_viewer merges these)."""
@@ -372,6 +385,60 @@ class TimelineTable(DataTable):
                         if dur >= 0:
                             self._durations[ev.index] = dur
                         break
+            own = subagent_duration_seconds(ev)
+            if own is not None:
+                self._durations[ev.index] = own
+        self._index_subagent_mates()
+        self._index_job_mates()
+        self._apply_subagent_run_durations()
+
+    def _index_subagent_mates(self) -> None:
+        by_child: dict[str, list[TraceEvent]] = {}
+        for ev in self.events:
+            if ev.event_type not in et.SUBAGENT_TYPES:
+                continue
+            child = event_child_session_id(ev)
+            if child:
+                by_child.setdefault(child, []).append(ev)
+        mates: dict[int, TraceEvent] = {}
+        for group in by_child.values():
+            spawn = next((e for e in group if e.event_type == "subagent_spawned"), None)
+            finish = next((e for e in group if e.event_type == "subagent_finished"), None)
+            if spawn is not None and finish is not None:
+                mates[spawn.index] = finish
+                mates[finish.index] = spawn
+        self._subagent_mate = mates
+
+    def _index_job_mates(self) -> None:
+        by_id: dict[str, list[TraceEvent]] = {}
+        for ev in self.events:
+            if ev.event_type not in {"task_backgrounded", "task_completed"}:
+                continue
+            tid = event_task_id(ev)
+            if tid:
+                by_id.setdefault(tid, []).append(ev)
+        mates: dict[int, TraceEvent] = {}
+        for group in by_id.values():
+            start = next((e for e in group if e.event_type == "task_backgrounded"), None)
+            finish = next((e for e in group if e.event_type == "task_completed"), None)
+            if start is not None and finish is not None:
+                mates[start.index] = finish
+                mates[finish.index] = start
+        self._job_mate = mates
+
+    def job_mate(self, ev: TraceEvent) -> TraceEvent | None:
+        return self._job_mate.get(ev.index)
+
+    def _apply_subagent_run_durations(self) -> None:
+        for ev in self.events:
+            if ev.event_type != "subagent_spawned":
+                continue
+            mate = self._subagent_mate.get(ev.index)
+            if mate is None:
+                continue
+            own = subagent_duration_seconds(mate)
+            if own is not None:
+                self._durations[ev.index] = own
 
     @staticmethod
     def _fmt_dur(seconds: float) -> str:
@@ -379,6 +446,9 @@ class TimelineTable(DataTable):
 
     def _tool_column(self, ev: TraceEvent) -> str:
         """Tool / runtime label — same family palette as ``tool_label`` (not per-tool rainbow)."""
+        if (ev.tool_name or "") == "workflow":
+            # Type already carries the honest label; do not repeat it here.
+            return ""
         if ev.event_type in et.TOOL_TYPES and ev.tool_name:
             return tool_markup(ev.tool_name)
         if ev.event_type in et.ERROR_TYPES:
@@ -392,7 +462,14 @@ class TimelineTable(DataTable):
                 label = t("ui-turn-started")
             return f"[yellow]{label}[/]"
         if ev.event_type in et.SUBAGENT_TYPES:
-            return "[cyan]" + t("ui-subagent") + "[/]"
+            mate = self._subagent_mate.get(ev.index)
+            info = subagent_inspect(ev, mate=mate)
+            if info.kind:
+                return f"[cyan]{rich_escape(info.kind)}[/]"
+            return ""
+        if ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
+            # Type already carries the honest label; do not repeat it here.
+            return ""
         if ev.event_type in (et.MESSAGE_TYPES | et.PLAN_TYPES):
             return ""
         return ""
@@ -464,7 +541,20 @@ class TimelineTable(DataTable):
             # Harness injects system-reminder / background-task as user_message_chunk.
             type_style = f"[bold magenta]{chrome_heading.lower()}[/]"
         else:
-            type_style = TYPE_MARKUP.get(ev.event_type, ev.event_type.upper())
+            honest = et.job_event_label(ev.event_type, kind=event_job_kind(ev))
+            if honest:
+                face = EVENT_TYPE_STYLE.get(ev.event_type, "yellow")
+                type_style = f"[{face}]{honest}[/]"
+            elif (ev.tool_name or "") == "workflow":
+                face = EVENT_TYPE_STYLE.get("task_backgrounded", "yellow")
+                label = (
+                    t("ui-workflow-done")
+                    if ev.event_type in et.TOOL_UPDATE_TYPES
+                    else t("ui-workflow")
+                )
+                type_style = f"[{face}]{label}[/]"
+            else:
+                type_style = TYPE_MARKUP.get(ev.event_type, ev.event_type.upper())
         tool_err = ev.is_error and ev.event_type not in et.SESSION_CHROME_TYPES
         if tool_err and chrome_heading is None:
             type_style = f"[red bold underline]{ev.type_label}[/]"
@@ -488,14 +578,26 @@ class TimelineTable(DataTable):
             finding = self.findings_by_call[ev.tool_call_id]
             sev = getattr(finding.severity, "value", None) or "low"
             prefix += finding_mark(sev) + " "
-        if ev.event_type in et.SUBAGENT_TYPES and isinstance(ev.raw_input, ToolInputBag):
-            typ = ev.raw_input.as_str("subagentType") or ev.raw_input.as_str("subagent_type")
-            desc = ev.raw_input.as_str("description")
-            bits = [b for b in (typ, desc) if b]
-            raw_sum = " · ".join(bits) if bits else ev.summary_line
+        if ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
+            bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+            raw_sum = job_list_preview(ev.event_type, bag, ev.content)
+        elif (ev.tool_name or "") == "workflow":
+            bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+            raw_sum = workflow_list_preview(bag) or ev.summary_line
+        elif ev.event_type in et.SUBAGENT_TYPES:
+            mate = self._subagent_mate.get(ev.index)
+            info = subagent_inspect(ev, mate=mate)
+            raw_sum = info.description or info.kind or info.status
+            if not raw_sum:
+                bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
+                raw_sum = subagent_list_preview(ev.event_type, bag, ev.content) or ev.summary_line
         else:
             raw_sum = ev.summary_line
-        shown = list_event_preview(raw_sum, ev.tool_name)
+        shown = (
+            raw_sum
+            if (ev.tool_name or "") == "workflow"
+            else list_event_preview(raw_sum, ev.tool_name)
+        )
         summary = prefix + rich_escape(shown[: 56 if prefix else 60])
         # Prefer the warm map (built on open / extended on append). Avoid
         # turn_index_for side effects during bulk paint.

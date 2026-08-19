@@ -169,7 +169,8 @@ groket/
                          #   launch_meta, services, task_schema
   session/               # turns, turn_gate, usage_stats, workspace_diff,
                          #   context_samples, models_catalog, export_bundle,
-                         #   sources, catalog (domain session list for control)
+                         #   sources, catalog (domain session list for control),
+                         #   jobs (background / monitor / schedule merge)
   notes.py               # configurable operator notes (TOML schema + session store)
   integrations/          # control Unix JSON-RPC, daemon (``groket serve``),
                          #   control_contract, ControlClient, emacs/vim packages
@@ -767,7 +768,8 @@ and similar chrome as small icedtea badges (same face as session status).
 (path, ``$ command``) so the tool id is not repeated.
 
 **Filter.** Bar label is **Filter**. Options: All events, Tools only, User
-messages, Assistant messages, Session markers, Subagents, Errors only.
+messages, Assistant messages, Session markers, Subagents, Background,
+Workflows, Errors only.
 
 **Turns.** Turn tables and turn pickers are chronological (turn 0 first).
 Session catalog stays newest activity first.

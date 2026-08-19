@@ -230,9 +230,10 @@ def test_parse_spawn_finish_keeps_child_id_and_stats(tmp_path: Path) -> None:
     events = parse_timeline(sd)
     spawn = next(e for e in events if e.event_type == "subagent_spawned")
     finish = next(e for e in events if e.event_type == "subagent_finished")
-    assert "child-99" in spawn.content
+    assert spawn.content == "worker"
     assert spawn.raw_input.as_str("childSessionId") == "child-99"
-    assert "child-99" in finish.content
+    assert "completed" in finish.content
+    assert "duration_ms" not in finish.content
     assert finish.raw_input.as_str("status") == "completed"
     assert finish.raw_input.raw().get("durationMs") == 1500
 
@@ -362,3 +363,55 @@ def test_control_turns_and_timeline_expose_runs(tmp_path: Path) -> None:
     assert finish["durationMs"] == 400
     assert finish["toolCalls"] == 2
     assert finish["subagentStatus"] == "completed"
+
+
+def test_subagent_runs_from_overview_skip_disk(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from groket.session.control_views import build_session_overview
+    from groket.session.subagents import subagent_runs_for_view
+
+    parent = _write_session(tmp_path / "parent-ov")
+    _write_session(tmp_path / "child-99")
+    (parent / "updates.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": 2,
+                "params": {
+                    "update": {
+                        "sessionUpdate": "subagent_spawned",
+                        "childSessionId": "child-99",
+                        "subagentType": "coder",
+                        "description": "worker",
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ov = build_session_overview(parent)
+    with patch(
+        "groket.session.subagents.subagent_runs_for_session",
+        side_effect=AssertionError("disk merge"),
+    ):
+        runs = subagent_runs_for_view(ov, parent, [], [], {})
+    assert len(runs) == 1
+    assert runs[0].child_session_id == "child-99"
+    assert runs[0].openable is True
+
+
+def test_subagent_list_preview_is_not_the_dump() -> None:
+    from groket.session.subagents import subagent_list_preview
+
+    dump = "Subagent finished  01a016d1-4df7-7d30-b99f-65289aa0b417  completed  duration_ms=96555"
+    preview = subagent_list_preview("subagent_finished", {}, dump)
+    assert preview == "completed"
+    assert "01a016d1" not in preview
+    assert "duration_ms" not in preview
+    spawn = subagent_list_preview(
+        "subagent_spawned",
+        {},
+        "Spawned general-purpose: Investigate the bug",
+    )
+    assert spawn == "Investigate the bug"
