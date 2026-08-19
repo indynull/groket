@@ -80,6 +80,8 @@ pub enum Message {
     JumpTimeline(i64),
     /// Events pane turn pick list (`None` key = all turns / search).
     EventsTurnPicked(EventsTurnPick),
+    /// Turns card click: focus that turn (Timeline stays on `g` / the chip).
+    FocusTurn(i64),
     SelectTimeline(i64),
     /// Follow new Timeline events to the end (live turn only).
     TimelineTail(bool),
@@ -1049,6 +1051,12 @@ impl Hud {
             }
             Message::JumpTimeline(ix) => self.jump_timeline(ix),
             Message::EventsTurnPicked(pick) => self.select_events_turn(pick.turn_index),
+            Message::FocusTurn(ti) => {
+                self.tab = Tab::Turns;
+                self.turns_focus = Some(ti);
+                self.focus_turn(ti);
+                self.scroll_turn_into_view()
+            }
             Message::SelectTimeline(ix) => {
                 self.timeline_focus = Some(ix);
                 if let Some((path, sid)) = self.openable_child_at(ix) {
@@ -8081,6 +8089,17 @@ mod tests {
             })
             .unwrap_or_default();
         assert!(titles.iter().any(|t| t.contains("sprint-8")));
+    }
+
+    #[test]
+    fn turn_card_click_focuses_turns_not_timeline() {
+        let mut hud = hud_with_session();
+        hud.tab = Tab::Turns;
+        hud.turns_focus = None;
+        let _ = hud.update(Message::FocusTurn(0));
+        assert_eq!(hud.tab(), Tab::Turns);
+        assert_eq!(hud.turns_focus(), Some(0));
+        assert!(hud.timeline_open().is_none());
     }
 
     #[test]

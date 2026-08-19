@@ -237,7 +237,7 @@ pub fn footer_table_for(scope: KeyScope, overlay: &KeyOverlay) -> ActionTable<Me
             Message::Noop,
         );
     }
-    if scope.tab != Tab::Notes {
+    if scope.tab != Tab::Notes && scope.tab != Tab::Overview {
         push(
             &mut table,
             overlay,
@@ -547,14 +547,19 @@ mod tests {
         assert!(blob.contains("y copy"));
         assert!(blob.contains("enter next"));
         assert!(
-            blob.contains("shift+n notes") || blob.contains("n notes"),
-            "{blob}"
+            !blob.contains("notes"),
+            "Overview footer stays one row: Notes is Shift+N in help, not the rail: {blob}"
         );
         assert!(!blob.contains("j down"), "{blob}");
         assert!(!blob.contains("g timeline"), "{blob}");
         assert!(
             !browse.footer_hints().iter().any(|h| h.starts_with("h ")),
             "{blob}"
+        );
+        assert!(
+            browse.footer_hints().len() <= 8,
+            "Overview hint rail is one row: {:?}",
+            browse.footer_hints()
         );
 
         let diff = footer_table(KeyScope {

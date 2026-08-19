@@ -1661,7 +1661,7 @@ fn turn_list_card(
             .width(Length::Fill)
             .style(move |_| icedtea::style::card(tea, selected)),
     )
-    .on_press(jump)
+    .on_press(Message::FocusTurn(t.turn_index))
     .into()
 }
 
@@ -2074,17 +2074,21 @@ fn paint_unified<'a>(
     code_inset(hud, "diff.hunk", unified, "diff", false, tea)
 }
 
+/// Title and hint for an empty Findings pane (one-line empty state).
+pub fn findings_empty_copy() -> (&'static str, &'static str) {
+    (
+        "No findings",
+        "Run analysis in the TUI so results land in the analysis cache.",
+    )
+}
+
 fn findings_tab(hud: &Hud) -> Element<'_, Message> {
     let o = hud.overview().unwrap();
     let findings: &[FindingRow] = &o.findings.findings;
     let tea = hud.body_tokens();
     if findings.is_empty() {
-        return icedtea::pattern::status_page(
-            "No findings",
-            "Run analysis in the TUI so results land in the analysis cache.",
-            None,
-            tea,
-        );
+        let (title, hint) = findings_empty_copy();
+        return kit::status_empty(title, hint, tea);
     }
     let mut buckets: [Vec<&FindingRow>; 4] = [vec![], vec![], vec![], vec![]];
     for f in findings {
@@ -3311,7 +3315,7 @@ mod tests {
         assert!(prod.contains("event.{}.in.{}"));
         assert!(prod.contains("icedtea::widget::image_slot"));
         assert!(prod.contains("icedtea::widget::progress"));
-        assert!(prod.contains("icedtea::pattern::status_page"));
+        assert!(prod.contains("kit::status_empty"));
         assert!(prod.contains("icedtea::widget::info_bar"));
         assert!(prod.contains("fn diff_chrome"));
         assert!(prod.contains("fn diff_context_body"));
@@ -3487,5 +3491,26 @@ mod tests {
         assert!(!prod.contains("fn turn_body"));
         assert!(prod.contains("FindingExpand"));
         assert!(prod.contains("NoteExpand"));
+    }
+
+    #[test]
+    fn empty_findings_copy_is_visible_one_line() {
+        let (title, hint) = findings_empty_copy();
+        assert_eq!(title, "No findings");
+        assert!(!hint.is_empty());
+        let src = include_str!("view.rs");
+        let body = src.split("fn findings_tab").nth(1).unwrap_or("");
+        assert!(
+            body.contains("kit::status_empty(title, hint, tea)"),
+            "empty Findings uses the one-line empty state"
+        );
+        assert!(
+            !body
+                .split("let mut buckets")
+                .next()
+                .unwrap_or(body)
+                .contains("status_page"),
+            "empty Findings is not a blank status_page"
+        );
     }
 }

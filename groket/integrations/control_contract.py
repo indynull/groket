@@ -12,6 +12,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 from ..models import JsonObject, as_json_object
 
@@ -557,6 +558,48 @@ No `id` on these messages (JSON-RPC notifications).
     return body if body.endswith("\n") else body + "\n"
 
 
+class InventorySnapshot(TypedDict):
+    """Handshake major plus method, notification, and initialize field names."""
+
+    major: int
+    methods: tuple[str, ...]
+    notifications: tuple[str, ...]
+    handshake: tuple[str, ...]
+
+
+def protocol_major(version: str | None = None) -> int:
+    """Integer major of *version* (defaults to :data:`PROTOCOL_VERSION`)."""
+    text = (version or PROTOCOL_VERSION).split(".", 1)[0]
+    return int(text)
+
+
+def handshake_field_names() -> tuple[str, ...]:
+    """``initialize`` request and result field names, in contract order."""
+    spec = method_by_name("initialize")
+    if spec is None:
+        return ()
+    return tuple(item.name for item in spec.params) + tuple(item.name for item in spec.result)
+
+
+def inventory_snapshot() -> InventorySnapshot:
+    """Current handshake major plus method, notification, and initialize fields."""
+    return {
+        "major": protocol_major(),
+        "methods": method_names(),
+        "notifications": notification_names(),
+        "handshake": handshake_field_names(),
+    }
+
+
+def is_breaking_inventory_change(previous: InventorySnapshot, current: InventorySnapshot) -> bool:
+    """True when a method, notification, or initialize field was removed or renamed."""
+    if set(previous["methods"]) - set(current["methods"]):
+        return True
+    if set(previous["notifications"]) - set(current["notifications"]):
+        return True
+    return previous["handshake"] != current["handshake"]
+
+
 def emit_control_doc(out: Path | None = None) -> str:
     """Serialize ``docs/control.md``; optionally write *out*."""
     text = render_control_doc()
@@ -576,6 +619,7 @@ __all__ = (
     "PROTOCOL_VERSION",
     "SCHEMA_ID",
     "FieldSpec",
+    "InventorySnapshot",
     "MethodSpec",
     "NotificationSpec",
     "METHODS",
@@ -584,8 +628,12 @@ __all__ = (
     "control_json_schema",
     "emit_control_doc",
     "emit_control_schema",
+    "handshake_field_names",
+    "inventory_snapshot",
+    "is_breaking_inventory_change",
     "method_by_name",
     "method_names",
     "notification_names",
+    "protocol_major",
     "render_control_doc",
 )

@@ -735,6 +735,36 @@ async def test_multipane_focused_only_via_real_widgets() -> None:
         assert "unique-aaa" not in copied[0]
 
 
+@pytest.mark.asyncio
+async def test_drag_selection_stays_inside_one_extractable_pane() -> None:
+    """A drag on pane A cannot include pane B's body."""
+    from textual.selection import Selection
+
+    class _Multi(App):
+        def compose(self) -> ComposeResult:
+            yield SelectableStatic("ALPHA_PANE only-here", id="pane-a")
+            yield SelectableStatic("BETA_PANE other-body", id="pane-b")
+
+    app = _Multi()
+    async with app.run_test():
+        a = app.query_one("#pane-a", SelectableStatic)
+        b = app.query_one("#pane-b", SelectableStatic)
+        a_plain = a._select_plain
+        a_lines = a_plain.splitlines() or [a_plain]
+        span = Selection(Offset(0, 0), Offset(len(a_lines[0]), 0))
+        extracted = a.get_selection(span)
+        assert extracted is not None
+        text, _ = extracted
+        assert "ALPHA_PANE" in text
+        assert "BETA_PANE" not in text
+        b_plain = b._select_plain
+        b_lines = b_plain.splitlines() or [b_plain]
+        other = b.get_selection(Selection(Offset(0, 0), Offset(len(b_lines[0]), 0)))
+        assert other is not None
+        assert "BETA_PANE" in other[0]
+        assert "ALPHA_PANE" not in other[0]
+
+
 def test_is_extractable_static() -> None:
     from groket.ui.selectable_static import SelectableStatic, is_extractable_static
     from textual.widgets import Static

@@ -9,20 +9,8 @@ that work ships (or when the changelog line is no longer true).
 
 ## Unreleased (see CHANGELOG.md)
 
-- Control protocol: no check that a breaking handshake or method change
-  bumps ``PROTOCOL_VERSION`` major. Runtime accepts the same major only.
-  Add a frozen method/field inventory (or schema) that fails when the
-  surface changes without a major bump.
-- HUD Findings: when a session has no findings, paint an empty-state
-  line (the pane is a blank body).
-- HUD Overview footer: keep the shortcut hint row on one line (``notes``
-  wraps onto a second line).
-- HUD walkthrough: the turn-open click must expand the first Turns card
-  (it currently activates Timeline).
-- TUI extractable bodies: select text inside one pane with the mouse
-  (drag or select-all) and with the keyboard in sections, then copy.
-  Selection must stay in that pane. `y` after a click-the-whole-body
-  is not enough.
+(none)
+
 ## Always on (`just ci` / `just lint`)
 
 - Keep **`just lint`** and **`just test`** green before commit.

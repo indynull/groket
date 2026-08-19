@@ -14,11 +14,16 @@ from groket.integrations.control import (
     dispatched_method_names,
 )
 from groket.integrations.control_contract import (
+    InventorySnapshot,
     capability_names,
     emit_control_doc,
     emit_control_schema,
+    handshake_field_names,
+    inventory_snapshot,
+    is_breaking_inventory_change,
     method_names,
     notification_names,
+    protocol_major,
     render_control_doc,
 )
 
@@ -80,6 +85,51 @@ REQUIRED_NOTIFICATIONS = (
 )
 
 
+# Last-published 1.x surface. Independent of REQUIRED_* so deleting a
+# method and updating that list still fails until PROTOCOL_VERSION major
+# is greater than this major.
+FROZEN_MAJOR = 1
+FROZEN_METHODS = (
+    "initialize",
+    "session/list",
+    "session/get",
+    "session/overview",
+    "session/timeline",
+    "session/turns",
+    "session/usage",
+    "session/findings",
+    "session/diff",
+    "session/open",
+    "session/render",
+    "session/follow_up",
+    "session/done",
+    "notes/list",
+    "notes/upsert",
+    "notes/delete",
+    "analysis/run",
+    "analysis/status",
+)
+FROZEN_NOTIFICATIONS = (
+    "session/selected",
+    "session/changed",
+    "notes/changed",
+    "analysis/changed",
+)
+FROZEN_HANDSHAKE = (
+    "protocolVersion",
+    "clientInfo",
+    "protocolVersion",
+    "capabilities",
+    "renderFormats",
+)
+FROZEN_INVENTORY: InventorySnapshot = {
+    "major": FROZEN_MAJOR,
+    "methods": FROZEN_METHODS,
+    "notifications": FROZEN_NOTIFICATIONS,
+    "handshake": FROZEN_HANDSHAKE,
+}
+
+
 def test_inventory_covers_shipped_methods_and_notifications() -> None:
     names = method_names()
     notes = notification_names()
@@ -91,6 +141,14 @@ def test_inventory_covers_shipped_methods_and_notifications() -> None:
     extra_notes = [name for name in notes if name not in REQUIRED_NOTIFICATIONS]
     assert extra_methods == []
     assert extra_notes == []
+
+
+def test_breaking_inventory_requires_major_bump() -> None:
+    """Gate: last-published surface vs shipped inventory and PROTOCOL_VERSION."""
+    current = inventory_snapshot()
+    if is_breaking_inventory_change(FROZEN_INVENTORY, current):
+        assert protocol_major() > FROZEN_MAJOR
+    assert handshake_field_names() == FROZEN_HANDSHAKE or protocol_major() > FROZEN_MAJOR
 
 
 def test_dispatch_keys_match_contract_methods() -> None:
