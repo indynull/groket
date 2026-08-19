@@ -410,12 +410,16 @@ class TraceEvent:
                 text = bag.as_str(key)
                 return text if n is None else text[:n]
 
-            # MCP / meta-tool: prefer structured tool_name + tool_input summary.
-            mcp_name = _s("tool_name") or self.tool_name
+            # MCP / meta-tool: outer tool name + inner id (preview humanizes both).
             if bag.has("tool_input") or (
                 self.tool_name in ("use_tool", "use-tool") and bag.has("tool_name")
             ):
+                inner = _s("tool_name")
+                server = _s("server_name") or _s("server")
+                if server and inner:
+                    inner = f"{server}__{inner}"
                 ti = bag.raw().get("tool_input")
+                val = ""
                 if isinstance(ti, dict) and ti:
                     for key in (
                         "query",
@@ -430,8 +434,9 @@ class TraceEvent:
                             val = str(ti[key]).replace("\n", " ").strip()
                             if len(val) > 48:
                                 val = val[:45] + "…"
-                            return f"{mcp_name} {val}"
-                return mcp_name or self.tool_name
+                            break
+                bits = [p for p in (self.tool_name, inner, val) if p]
+                return " ".join(bits) or self.tool_name
             if bag.has("command"):
                 return f"{self.tool_name} $ {_s('command', 60)}"
             if bag.has("pattern"):

@@ -150,16 +150,16 @@ class TestSeverityStyle:
         assert severity_style("critical") == "white"
 
 
-class TestToolStyleOverride:
-    def test_per_name_override(self) -> None:
-        """TOOL_STYLE per-name override takes precedence over family."""
-        from groket.ui.styles import TOOL_STYLE
+class TestLightFaces:
+    def test_user_and_read_are_not_cream_on_light(self) -> None:
+        from groket.ui.styles import CREAM, event_type_markup
 
-        TOOL_STYLE["my_custom_tool"] = "magenta bold"
-        try:
-            assert tool_style("my_custom_tool") == "magenta bold"
-        finally:
-            del TOOL_STYLE["my_custom_tool"]
+        user = event_type_markup("user_message_chunk", light=True)
+        read = tool_style("read_file", light=True)
+        assert CREAM not in user
+        assert CREAM not in read
+        assert user
+        assert read
 
 
 class TestConstants:

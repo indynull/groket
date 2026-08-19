@@ -5,6 +5,14 @@ is tagged.
 
 ## Unreleased
 
+- Timeline flags and findings paint on the row immediately. A live
+  append keeps the current View/Turn/search filter. Turn land sits on
+  a visible row. Marketplace summaries use human tool names. Light
+  themes keep type/tool faces readable. HUD turn pick keeps search.
+- HUD Timeline Filter and Turn stay independent. A turn pick no longer
+  resets Filter. ``h`` / ``l`` / ``]`` step matching turns only while
+  All turns is selected; a specific turn locks those keys. ``[`` returns
+  to All turns and keeps Filter.
 - Timeline parses ``scheduled_task_*`` bookends and keeps structured
   ``task_backgrounded`` / ``task_completed`` fields (id, command, cwd,
   log path, schedule, output excerpt) instead of a stuffed content line.

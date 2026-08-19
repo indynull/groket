@@ -6,6 +6,7 @@ from pathlib import Path
 
 from groket.models import TraceEvent
 from groket.ui.screens.browser import BrowserScreen
+from groket.ui.widgets.timeline import TimelineTable
 
 
 def _ev(index: int, event_type: str, content: str = "", **kw) -> TraceEvent:
@@ -288,3 +289,29 @@ def test_timeline_table_does_not_override_column_arrows() -> None:
 
     assert TimelineTable.action_cursor_left is DataTable.action_cursor_left
     assert TimelineTable.action_cursor_right is DataTable.action_cursor_right
+
+
+def test_land_target_is_visible_row_not_hidden_first_event() -> None:
+    """Turn land uses the filtered paint set, not the unfiltered first event."""
+    tl = TimelineTable()
+    tl.events = [
+        _ev(0, "user_message_chunk", "prompt"),
+        _ev(1, "tool_call", "read", tool_name="read_file"),
+        _ev(3, "tool_call", "grep", tool_name="grep"),
+        _ev(5, "agent_message_chunk", "done"),
+    ]
+    tl._visible = [tl.events[1], tl.events[2]]
+    screen = BrowserScreen.__new__(BrowserScreen)
+    screen._current_event = tl.events[0]
+    hit = screen._land_target(tl, keep=True)
+    assert hit is not None
+    assert hit.index == 1
+    hidden = screen._land_target(tl, keep=False)
+    assert hidden is not None
+    assert hidden.index in {1, 3}
+    from groket.ui.data_table import restore_cursor
+
+    assert restore_cursor(tl, "0", scroll=False) is False
+    prev = screen._current_event
+    # Failed restore must not be applied by _land_target itself.
+    assert prev.index == 0

@@ -349,8 +349,8 @@ async def test_timeline_load_events_appends_without_clear() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeline_load_events_patches_streaming_tail() -> None:
-    """Same-length streaming content updates cells without clear()+rebuild."""
+async def test_timeline_load_events_keeps_streaming_cells() -> None:
+    """Same-length streaming keeps table cells; in-memory content still updates."""
     app = _TimelineApp()
     async with app.run_test():
         tl = app.query_one("#timeline-list", TimelineTable)
@@ -873,3 +873,81 @@ async def test_timeline_append_keeps_highlight_unless_follow_tail() -> None:
         )
         tl.load_events([*events, extra, more], follow_tail=True)
         assert tl.cursor_row == tl.row_count - 1
+
+
+@pytest.mark.asyncio
+async def test_timeline_unknown_type_uses_human_label() -> None:
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        ev = make_trace_event(index=0, event_type="brand_new_signal", content="x")
+        tl.load_events([ev])
+        cells = tl._row_cell_values(ev)
+        assert "BRAND_NEW_SIGNAL" not in cells[4]
+        assert "brand new signal" in cells[4]
+
+
+def _summary_cell(tl: TimelineTable, key: str) -> str:
+    cols = list(tl.columns.keys())
+    return str(tl.get_cell(key, cols[6]))
+
+
+@pytest.mark.asyncio
+async def test_timeline_same_length_reload_paints_new_flag() -> None:
+    """Flag/finding chrome must update Summary when the list length is unchanged."""
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        events = _basic_events()
+        tl.load_events(events)
+        assert "⚑" not in _summary_cell(tl, "1")
+        flag = Flag(event_index=1, verdict=FlagVerdict.BAD, description="bad")
+        tl.load_events(events, flags=[flag])
+        assert "⚑" in _summary_cell(tl, "1")
+        finding = Finding(
+            id="f1",
+            title="test",
+            severity=Severity.HIGH,
+            plugin_id="engine",
+            detail="x",
+            tool_call_ids=["c1"],
+        )
+        tl.load_events(events, findings=[finding], flags=[flag])
+        marked = _summary_cell(tl, "1")
+        assert "⚑" in marked
+        assert "⚠" in marked
+
+
+@pytest.mark.asyncio
+async def test_timeline_filter_append_keeps_visible_rows() -> None:
+    """Live append under a type filter must not paint the unfiltered list."""
+    app = _TimelineApp()
+    async with app.run_test():
+        tl = app.query_one("#timeline-list", TimelineTable)
+        events = _basic_events()
+        tl.load_events(events)
+        tl.apply_filter(event_type="tool_call")
+        before_keys = {str(k.value) for k in tl.rows.keys()}
+        before_n = tl.row_count
+        assert before_n < len(events)
+        extra_tool = make_trace_event(
+            index=99,
+            event_type="tool_call",
+            tool_name="grep",
+            raw_input={"pattern": "x"},
+            tool_call_id="c99",
+            timestamp=2000,
+        )
+        extra_user = make_trace_event(
+            index=100,
+            event_type="user_message_chunk",
+            content="later",
+            timestamp=2001,
+        )
+        tl.load_events([*events, extra_tool, extra_user])
+        after_keys = {str(k.value) for k in tl.rows.keys()}
+        assert tl.row_count == before_n + 1
+        assert before_keys <= after_keys
+        assert "99" in after_keys
+        assert "100" not in after_keys
+        assert len(tl.events) == len(events) + 2

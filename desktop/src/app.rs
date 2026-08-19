@@ -59,6 +59,7 @@ const OVERLAY_APP_ID: &str = "dev.indynull.groket-hud.overlay";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DetailTurnEdge {
     First,
+    #[allow(dead_code)]
     Last,
 }
 
@@ -1683,6 +1684,7 @@ impl Hud {
             child_open: !self.parent_stack.is_empty(),
             compact_child: self.compact_child_chrome(),
             turn_pick: !self.hide_events_turn_pick(),
+            turn_locked: self.events_turn_index.is_some(),
             diff_pick: self.tab == Tab::Diff && self.diff.points.len() > 1,
             tab: self.tab,
             leader_armed: self.leader_armed,
@@ -3701,6 +3703,71 @@ impl Hud {
         })
     }
 
+    fn turn_index_of_event(&self, index: i64) -> Option<i64> {
+        self.turn_row_for_event(index).map(|t| t.turn_index)
+    }
+
+    fn matching_turn_indexes(&self) -> Vec<i64> {
+        let mut out = Vec::new();
+        for &src in &self.tl_filter {
+            let Some(ev) = self.timeline.get(src) else {
+                continue;
+            };
+            let Some(ti) = self.turn_index_of_event(ev.index) else {
+                continue;
+            };
+            if out.last() != Some(&ti) {
+                out.push(ti);
+            }
+        }
+        out
+    }
+
+    fn first_filtered_event_on_turn(&self, turn: i64) -> Option<i64> {
+        self.tl_filter.iter().find_map(|&src| {
+            let ev = self.timeline.get(src)?;
+            (self.turn_index_of_event(ev.index) == Some(turn)).then_some(ev.index)
+        })
+    }
+
+    fn focus_matching_turn(&mut self, forward: bool) -> Task<Message> {
+        let turns = self.matching_turn_indexes();
+        if turns.is_empty() {
+            return Task::none();
+        }
+        let cur = self
+            .timeline_focus
+            .or(self.timeline_open)
+            .and_then(|ix| self.turn_index_of_event(ix));
+        let dest = match cur {
+            None => {
+                if forward {
+                    turns.first().copied()
+                } else {
+                    turns.last().copied()
+                }
+            }
+            Some(c) => {
+                if forward {
+                    turns.iter().copied().find(|t| *t > c)
+                } else {
+                    turns.iter().rev().copied().find(|t| *t < c)
+                }
+            }
+        };
+        let Some(ti) = dest else {
+            return Task::none();
+        };
+        let Some(ix) = self.first_filtered_event_on_turn(ti) else {
+            return Task::none();
+        };
+        self.timeline_focus = Some(ix);
+        if self.timeline_open.is_some() {
+            return self.open_timeline_detail(ix);
+        }
+        self.scroll_focus_into_view()
+    }
+
     fn prompt_index_for_event(&self, index: i64) -> Option<i64> {
         if let Some(p) = self
             .timeline
@@ -3751,14 +3818,6 @@ impl Hud {
             })
     }
 
-    /// Next turn after the current Events pick, if any.
-    pub fn next_turn_after_events(&self) -> Option<&crate::wire::TurnRow> {
-        let cur = self.events_turn_index?;
-        let turns = &self.overview.as_ref()?.turns.turns;
-        let i = turns.iter().position(|t| t.turn_index == cur)?;
-        turns.get(i + 1)
-    }
-
     fn select_events_turn(&mut self, turn_index: Option<i64>) -> Task<Message> {
         self.go_page(
             MotionRole::Sibling,
@@ -3766,10 +3825,7 @@ impl Hud {
             icedtea::motion::Slide::None,
         );
         self.tab = Tab::Timeline;
-        self.timeline_query.clear();
-        self.timeline_query_draft.clear();
-        self.timeline_search_pending = false;
-        self.timeline_kind = KindFilter::All;
+        // Filter and search stay; only the turn scope changes.
         // List stays on the list. An open event page stays open on the
         // first card of the new turn (or the same card when returning to all).
         let stay = self.timeline_open.is_some();
@@ -3814,40 +3870,12 @@ impl Hud {
         }
     }
 
-    fn jump_next_turn(&mut self) -> Task<Message> {
-        let Some(next) = self.next_turn_after_events().map(|t| t.turn_index) else {
-            return Task::none();
-        };
-        self.select_events_turn(Some(next))
-    }
-
-    fn jump_prev_turn(&mut self) -> Task<Message> {
-        let Some(turns) = self.overview.as_ref().map(|o| &o.turns.turns) else {
-            return Task::none();
-        };
-        if turns.is_empty() {
-            return Task::none();
-        }
-        match self.events_turn_index {
-            None => {
-                let last = turns.last().map(|t| t.turn_index);
-                self.select_events_turn(last)
-            }
-            Some(cur) => match turns.iter().position(|t| t.turn_index == cur) {
-                Some(0) => self.select_events_turn(None),
-                Some(i) => self.select_events_turn(Some(turns[i - 1].turn_index)),
-                None => self.select_events_turn(None),
-            },
-        }
-    }
-
     fn jump_timeline(&mut self, index: i64) -> Task<Message> {
         // Chrome first: Timeline tab + turn scope, then full-pane detail.
         self.tab = Tab::Timeline;
         self.timeline_query.clear();
         self.timeline_query_draft.clear();
         self.timeline_search_pending = false;
-        self.timeline_kind = KindFilter::All;
         if let Some(t) = self.turn_row_for_event(index).cloned() {
             self.events_turn_index = Some(t.turn_index);
             self.timeline_prompt = t.prompt_index;
@@ -4986,29 +5014,25 @@ impl Hud {
             }
         }
         if self.tab == Tab::Timeline && !self.hide_events_turn_pick() {
-            let next_turn = self.key_is("events.next_turn", "l,right", &key, modifiers)
-                || self.key_is("events.scope_next", "right_square_bracket", &key, modifiers);
-            if next_turn {
-                if self.events_turn_index.is_none() {
-                    let first = self.events_turn_options.iter().find_map(|p| p.turn_index);
-                    if first.is_some() {
-                        return self.select_events_turn(first);
-                    }
-                } else {
-                    return self.jump_next_turn();
-                }
-            }
-            let prev_turn = self.key_is("events.prev_turn", "h,left", &key, modifiers);
-            if prev_turn {
-                return self.jump_prev_turn();
-            }
             if self.key_is("events.all_turns", "left_square_bracket", &key, modifiers) {
                 return self.select_events_turn(None);
             }
+            let next_turn = self.key_is("events.next_turn", "l,right", &key, modifiers)
+                || self.key_is("events.scope_next", "right_square_bracket", &key, modifiers);
+            let prev_turn = self.key_is("events.prev_turn", "h,left", &key, modifiers);
+            if self.events_turn_index.is_none() {
+                if next_turn {
+                    return self.focus_matching_turn(true);
+                }
+                if prev_turn {
+                    return self.focus_matching_turn(false);
+                }
+            }
         }
-        // From Turns: `g` opens Timeline filtered to the focused turn’s events.
+        // From Turns: `g` opens Timeline for that turn, all event types.
         if self.tab == Tab::Turns && self.key_is("turns.timeline", "g", &key, modifiers) {
             if let Some(turn) = self.turns_focus {
+                self.timeline_kind = KindFilter::All;
                 return self.select_events_turn(Some(turn));
             }
         }
@@ -5269,60 +5293,7 @@ impl Hud {
             }
             return Task::none();
         }
-        // Past this filter’s edge.
-        if self.events_turn_index.is_some() {
-            return self.detail_step_adjacent_turn(delta > 0);
-        }
-        // All turns: stop at ends (no wrap) — same hard edge as session turns.
-        Task::none()
-    }
-
-    /// Next/prev turn while staying in full-pane detail (async reload).
-    fn detail_step_adjacent_turn(&mut self, forward: bool) -> Task<Message> {
-        let turns = self
-            .overview
-            .as_ref()
-            .map(|o| o.turns.turns.clone())
-            .unwrap_or_default();
-        if turns.is_empty() {
-            return Task::none();
-        }
-        let Some(cur) = self.events_turn_index else {
-            return Task::none();
-        };
-        let Some(i) = turns.iter().position(|t| t.turn_index == cur) else {
-            return Task::none();
-        };
-        let adj = if forward {
-            turns.get(i + 1)
-        } else {
-            i.checked_sub(1).and_then(|j| turns.get(j))
-        };
-        let Some(t) = adj.cloned() else {
-            // Session boundary — stay on the current edge event.
-            return Task::none();
-        };
-        self.page_dir = Some(if forward {
-            icedtea::motion::Slide::Up
-        } else {
-            icedtea::motion::Slide::Down
-        });
-        self.detail_turn_edge = Some(if forward {
-            DetailTurnEdge::First
-        } else {
-            DetailTurnEdge::Last
-        });
-        self.events_turn_index = Some(t.turn_index);
-        self.timeline_prompt = t.prompt_index;
-        self.focus_turn(t.turn_index);
-        self.timeline_query.clear();
-        self.timeline_query_draft.clear();
-        self.timeline_search_pending = false;
-        self.timeline_kind = KindFilter::All;
-        self.tl_window = icedtea::collection::VisibleWindow::new(self.tl_window.viewport.max(1.0));
-        if let Some(sid) = self.detail_sid() {
-            return self.ensure_timeline(sid, true);
-        }
+        // Past this filter’s edge: stay on the last matching row.
         Task::none()
     }
 
@@ -6030,47 +6001,9 @@ mod tests {
         hud.rebuild_tl_filter();
         let _ = hud.update(Message::SelectTimeline(11));
         assert!(hud.is_timeline_open(11));
-        // Next past last event of turn 0 → request turn 1, open first when page lands.
         let _ = hud.update(Message::TimelineDetailStep(1));
-        assert_eq!(hud.events_turn_index, Some(1));
-        assert_eq!(hud.timeline_prompt, Some(2));
-        assert_eq!(hud.detail_turn_edge, Some(DetailTurnEdge::First));
-        // Simulate turn-1 page arriving.
-        let gen = hud.timeline_gen;
-        let _ = hud.update(Message::TimelineLoaded {
-            gen,
-            sid: "s1".into(),
-            offset: 0,
-            append: false,
-            advance: false,
-            result: Ok(json!({
-                "sessionId": "s1",
-                "total": 2,
-                "offset": 0,
-                "limit": 2,
-                "events": [
-                    {
-                        "index": 20,
-                        "type": "user message chunk",
-                        "kind": "user",
-                        "content": "t1",
-                        "preview": "t1"
-                    },
-                    {
-                        "index": 21,
-                        "type": "agent message chunk",
-                        "kind": "agent",
-                        "content": "ok",
-                        "preview": "ok"
-                    }
-                ],
-            })),
-        });
-        assert!(
-            hud.is_timeline_open(20),
-            "first event of next turn should open"
-        );
-        assert!(hud.detail_turn_edge.is_none());
+        assert_eq!(hud.events_turn_index, Some(0));
+        assert!(hud.is_timeline_open(11));
     }
 
     #[test]
@@ -7534,42 +7467,10 @@ mod tests {
     }
 
     #[test]
-    fn events_bracket_picks_first_turn_then_next() {
-        // Shipped keyboard path for Events turn-pick / next-turn (walk harness).
-        let mut hud = hud_with_session();
-        let data = json!({
-            "meta": { "sessionId": "s1", "path": "/tmp/s1", "status": "complete" },
-            "turns": {
-                "total": 2,
-                "turns": [
-                    {
-                        "turnIndex": 0,
-                        "promptIndex": 1,
-                        "label": "first",
-                        "summary": "a",
-                        "userEventIndex": 1,
-                        "eventIndexes": [1, 2]
-                    },
-                    {
-                        "turnIndex": 1,
-                        "promptIndex": 2,
-                        "label": "second",
-                        "summary": "b",
-                        "userEventIndex": 5,
-                        "eventIndexes": [5, 6]
-                    }
-                ]
-            },
-            "findings": { "count": 0, "findings": [] },
-            "notes": { "count": 0, "notes": [] }
-        });
-        let _ = hud.update(Message::OverviewLoaded {
-            gen: hud.overview_gen,
-            sid: "s1".into(),
-            quiet: true,
-            result: Ok(data),
-        });
-        let _ = hud.update(Message::SetTab(Tab::Timeline));
+    fn events_bracket_from_all_focuses_next_matching_turn() {
+        let mut hud = two_turn_timeline();
+        hud.timeline_focus = Some(1);
+        hud.rebuild_tl_filter();
         assert!(hud.events_turn_index.is_none());
         let press = |ch: &str| {
             Event::Keyboard(keyboard::Event::KeyPressed {
@@ -7585,52 +7486,23 @@ mod tests {
             })
         };
         let _ = hud.update(Message::RawEvent(press("]")));
-        assert_eq!(hud.events_turn_index, Some(0));
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_focus(), Some(3));
         let _ = hud.update(Message::RawEvent(press("]")));
-        assert_eq!(hud.events_turn_index, Some(1));
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_focus(), Some(5));
     }
 
     #[test]
-    fn events_h_l_step_turns_like_the_tui() {
-        let mut hud = hud_with_session();
-        let data = json!({
-            "meta": { "sessionId": "s1", "path": "/tmp/s1", "status": "complete" },
-            "turns": {
-                "total": 2,
-                "turns": [
-                    {
-                        "turnIndex": 0,
-                        "promptIndex": 1,
-                        "label": "first",
-                        "summary": "a",
-                        "userEventIndex": 1,
-                        "eventIndexes": [1, 2]
-                    },
-                    {
-                        "turnIndex": 1,
-                        "promptIndex": 2,
-                        "label": "second",
-                        "summary": "b",
-                        "userEventIndex": 5,
-                        "eventIndexes": [5, 6]
-                    }
-                ]
-            },
-            "findings": { "count": 0, "findings": [] },
-            "notes": { "count": 0, "notes": [] }
-        });
-        let _ = hud.update(Message::OverviewLoaded {
-            gen: hud.overview_gen,
-            sid: "s1".into(),
-            quiet: true,
-            result: Ok(data),
-        });
-        let _ = hud.update(Message::SetTab(Tab::Timeline));
-        let press = |ch: &str| {
+    fn events_h_l_from_all_focuses_matching_turns() {
+        let mut hud = two_turn_timeline();
+        hud.timeline_focus = Some(1);
+        hud.rebuild_tl_filter();
+        let press = |ch: &str, code: iced::keyboard::key::Code| {
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: Key::Character(ch.into()),
                 modified_key: Key::Character(ch.into()),
-                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyL),
+                physical_key: iced::keyboard::key::Physical::Code(code),
                 location: iced::keyboard::Location::Standard,
                 modifiers: KeyMods::default(),
                 text: None,
@@ -7638,14 +7510,23 @@ mod tests {
             })
         };
         assert!(hud.events_turn_index.is_none());
-        let _ = hud.update(Message::RawEvent(press("l")));
-        assert_eq!(hud.events_turn_index, Some(0));
-        let _ = hud.update(Message::RawEvent(press("l")));
-        assert_eq!(hud.events_turn_index, Some(1));
-        let _ = hud.update(Message::RawEvent(press("h")));
-        assert_eq!(hud.events_turn_index, Some(0));
-        let _ = hud.update(Message::RawEvent(press("h")));
+        let _ = hud.update(Message::RawEvent(press(
+            "l",
+            iced::keyboard::key::Code::KeyL,
+        )));
         assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_focus(), Some(3));
+        let _ = hud.update(Message::RawEvent(press(
+            "l",
+            iced::keyboard::key::Code::KeyL,
+        )));
+        assert_eq!(hud.timeline_focus(), Some(5));
+        let _ = hud.update(Message::RawEvent(press(
+            "h",
+            iced::keyboard::key::Code::KeyH,
+        )));
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_focus(), Some(3));
     }
 
     #[test]
@@ -7792,7 +7673,6 @@ mod tests {
         assert_eq!(hud.timeline_prompt, Some(1));
         assert_eq!(hud.events_turn_index, Some(0));
         assert_eq!(hud.turns_focus, Some(0));
-        // `]` advances Events turn scope (no dedicated Next chip / message).
         let press_bracket = Event::Keyboard(keyboard::Event::KeyPressed {
             key: Key::Character("]".into()),
             modified_key: Key::Character("]".into()),
@@ -7805,14 +7685,8 @@ mod tests {
             repeat: false,
         });
         let _ = hud.update(Message::RawEvent(press_bracket));
-        assert_eq!(hud.tab(), Tab::Timeline);
-        assert_eq!(hud.timeline_prompt, Some(2));
-        assert_eq!(hud.events_turn_index, Some(1));
-        assert_eq!(hud.turns_focus, Some(1));
-        let req = hud.last_timeline().expect("next turn timeline");
-        assert_eq!(req.prompt_index, Some(2));
-        // Focus is the next turn’s user event when present.
-        assert_eq!(req.around_index, Some(5));
+        assert_eq!(hud.events_turn_index, Some(0));
+        assert_eq!(hud.timeline_prompt, Some(1));
     }
 
     #[test]
@@ -7856,6 +7730,208 @@ mod tests {
         assert!(hud.timeline_prompt.is_none());
         let all = hud.last_timeline().expect("all-turns fetch");
         assert!(all.prompt_index.is_none());
+    }
+
+    #[test]
+    fn filter_then_turn_keeps_filter() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        reload_two_turn_page(&mut hud);
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+        let _ = hud.update(Message::EventsTurnPicked(EventsTurnPick {
+            turn_index: Some(2),
+            label: "third".into(),
+        }));
+        assert_eq!(hud.events_turn_index, Some(2));
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+        let _ = hud.update(Message::EventsTurnPicked(EventsTurnPick {
+            turn_index: None,
+            label: "All turns".into(),
+        }));
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+    }
+
+    #[test]
+    fn turn_pick_keeps_search_and_filter() {
+        let mut hud = two_turn_timeline();
+        hud.timeline_kind = KindFilter::Tools;
+        hud.timeline_query = "needle".into();
+        hud.timeline_query_draft = "needle".into();
+        let _ = hud.select_events_turn(Some(0));
+        assert_eq!(hud.timeline_kind(), KindFilter::Tools);
+        assert_eq!(hud.timeline_query(), "needle");
+        assert_eq!(hud.timeline_query_draft(), "needle");
+    }
+
+    #[test]
+    fn turn_then_filter_keeps_turn() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::EventsTurnPicked(EventsTurnPick {
+            turn_index: Some(0),
+            label: "first".into(),
+        }));
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        reload_two_turn_page(&mut hud);
+        assert_eq!(hud.events_turn_index, Some(0));
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+    }
+
+    #[test]
+    fn jump_timeline_keeps_filter() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        reload_two_turn_page(&mut hud);
+        let _ = hud.update(Message::JumpTimeline(6));
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+        assert_eq!(hud.events_turn_index, Some(2));
+    }
+
+    #[test]
+    fn specific_turn_locks_hl_and_brackets() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::EventsTurnPicked(EventsTurnPick {
+            turn_index: Some(0),
+            label: "first".into(),
+        }));
+        hud.timeline_focus = Some(1);
+        hud.rebuild_tl_filter();
+        let press = |ch: &str, code: iced::keyboard::key::Code| {
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: Key::Character(ch.into()),
+                modified_key: Key::Character(ch.into()),
+                physical_key: iced::keyboard::key::Physical::Code(code),
+                location: iced::keyboard::Location::Standard,
+                modifiers: KeyMods::default(),
+                text: None,
+                repeat: false,
+            })
+        };
+        for (ch, code) in [
+            ("l", iced::keyboard::key::Code::KeyL),
+            ("h", iced::keyboard::key::Code::KeyH),
+            ("]", iced::keyboard::key::Code::BracketRight),
+        ] {
+            let _ = hud.update(Message::RawEvent(press(ch, code)));
+            assert_eq!(
+                hud.events_turn_index,
+                Some(0),
+                "key {ch} must not change turn"
+            );
+        }
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        reload_two_turn_page(&mut hud);
+        let _ = hud.update(Message::RawEvent(press(
+            "[",
+            iced::keyboard::key::Code::BracketLeft,
+        )));
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+    }
+
+    #[test]
+    fn jk_walk_filtered_rows_inside_turn() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::EventsTurnPicked(EventsTurnPick {
+            turn_index: Some(0),
+            label: "first".into(),
+        }));
+        load_page(
+            &mut hud,
+            0,
+            false,
+            true,
+            vec![
+                ev_named(1, "user", "", 0, "u0"),
+                ev_named(2, "tool", "workflow", 0, "wf0"),
+            ],
+            2,
+            0,
+        );
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        load_page(
+            &mut hud,
+            0,
+            false,
+            true,
+            vec![
+                ev_named(1, "user", "", 0, "u0"),
+                ev_named(2, "tool", "workflow", 0, "wf0"),
+            ],
+            2,
+            0,
+        );
+        hud.rebuild_tl_filter();
+        hud.timeline_focus = Some(2);
+        let _ = hud.update(Message::RawEvent(Event::Keyboard(
+            keyboard::Event::KeyPressed {
+                key: Key::Character("j".into()),
+                modified_key: Key::Character("j".into()),
+                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyJ),
+                location: iced::keyboard::Location::Standard,
+                modifiers: KeyMods::default(),
+                text: None,
+                repeat: false,
+            },
+        )));
+        assert_eq!(hud.timeline_focus(), Some(2));
+        assert_eq!(hud.events_turn_index, Some(0));
+        let _ = hud.update(Message::RawEvent(Event::Keyboard(
+            keyboard::Event::KeyPressed {
+                key: Key::Character("k".into()),
+                modified_key: Key::Character("k".into()),
+                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyK),
+                location: iced::keyboard::Location::Standard,
+                modifiers: KeyMods::default(),
+                text: None,
+                repeat: false,
+            },
+        )));
+        assert_eq!(hud.timeline_focus(), Some(2));
+    }
+
+    #[test]
+    fn all_turns_next_skips_turn_without_filter_hit() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        reload_two_turn_page(&mut hud);
+        hud.timeline_focus = Some(2);
+        let _ = hud.update(Message::RawEvent(Event::Keyboard(
+            keyboard::Event::KeyPressed {
+                key: Key::Character("l".into()),
+                modified_key: Key::Character("l".into()),
+                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyL),
+                location: iced::keyboard::Location::Standard,
+                modifiers: KeyMods::default(),
+                text: None,
+                repeat: false,
+            },
+        )));
+        assert_eq!(hud.timeline_kind(), KindFilter::Workflows);
+        assert!(hud.events_turn_index.is_none());
+        assert_eq!(hud.timeline_focus(), Some(6));
+    }
+
+    #[test]
+    fn g_from_turns_opens_that_turn_all_events() {
+        let mut hud = two_turn_timeline();
+        let _ = hud.update(Message::TimelineKind(KindFilter::Workflows));
+        hud.tab = Tab::Turns;
+        hud.turns_focus = Some(2);
+        let _ = hud.update(Message::RawEvent(Event::Keyboard(
+            keyboard::Event::KeyPressed {
+                key: Key::Character("g".into()),
+                modified_key: Key::Character("g".into()),
+                physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyG),
+                location: iced::keyboard::Location::Standard,
+                modifiers: KeyMods::default(),
+                text: None,
+                repeat: false,
+            },
+        )));
+        assert_eq!(hud.tab(), Tab::Timeline);
+        assert_eq!(hud.events_turn_index, Some(2));
+        assert_eq!(hud.timeline_kind(), KindFilter::All);
     }
 
     #[test]
@@ -8447,6 +8523,104 @@ mod tests {
             "contentLength": content.len(),
             "contentTruncated": content.len() < 80,
         })
+    }
+
+    fn ev_named(index: i64, kind: &str, tool: &str, turn: i64, content: &str) -> Value {
+        json!({
+            "index": index,
+            "type": if tool == "workflow" { "tool_call" } else { "user_message_chunk" },
+            "kind": kind,
+            "toolName": tool,
+            "turnIndex": turn,
+            "content": content,
+            "preview": content,
+            "contentLength": content.len(),
+            "contentTruncated": false,
+        })
+    }
+
+    fn two_turn_overview_json() -> Value {
+        json!({
+            "meta": { "sessionId": "s1", "path": "/tmp/s1", "status": "complete" },
+            "turns": {
+                "total": 3,
+                "turns": [
+                    {
+                        "turnIndex": 0,
+                        "promptIndex": 1,
+                        "label": "first",
+                        "userEventIndex": 1,
+                        "firstIndex": 1,
+                        "eventIndexes": [1, 2]
+                    },
+                    {
+                        "turnIndex": 1,
+                        "promptIndex": 2,
+                        "label": "second",
+                        "userEventIndex": 3,
+                        "firstIndex": 3,
+                        "eventIndexes": [3]
+                    },
+                    {
+                        "turnIndex": 2,
+                        "promptIndex": 3,
+                        "label": "third",
+                        "userEventIndex": 5,
+                        "firstIndex": 5,
+                        "eventIndexes": [5, 6]
+                    }
+                ]
+            },
+            "findings": { "count": 0, "findings": [] },
+            "notes": { "count": 0, "notes": [] }
+        })
+    }
+
+    fn two_turn_timeline() -> Hud {
+        let mut hud = hud_with_session();
+        let _ = hud.update(Message::OverviewLoaded {
+            gen: hud.overview_gen,
+            sid: "s1".into(),
+            quiet: true,
+            result: Ok(two_turn_overview_json()),
+        });
+        let _ = hud.update(Message::SetTab(Tab::Timeline));
+        load_page(
+            &mut hud,
+            0,
+            false,
+            true,
+            vec![
+                ev_named(1, "user", "", 0, "u0"),
+                ev_named(2, "tool", "workflow", 0, "wf0"),
+                ev_named(3, "user", "", 1, "u1"),
+                ev_named(5, "user", "", 2, "u2"),
+                ev_named(6, "tool", "workflow", 2, "wf2"),
+            ],
+            5,
+            0,
+        );
+        hud.rebuild_tl_filter();
+        hud
+    }
+
+    fn reload_two_turn_page(hud: &mut Hud) {
+        load_page(
+            hud,
+            0,
+            false,
+            true,
+            vec![
+                ev_named(1, "user", "", 0, "u0"),
+                ev_named(2, "tool", "workflow", 0, "wf0"),
+                ev_named(3, "user", "", 1, "u1"),
+                ev_named(5, "user", "", 2, "u2"),
+                ev_named(6, "tool", "workflow", 2, "wf2"),
+            ],
+            5,
+            0,
+        );
+        hud.rebuild_tl_filter();
     }
 
     fn hud_with_session() -> Hud {

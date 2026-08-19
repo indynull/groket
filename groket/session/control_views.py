@@ -28,6 +28,7 @@ from ..session.tagged_blocks import unwrap_for_display
 from ..session.turns import (
     TurnSegment,
     event_display_turn_map,
+    event_matches_timeline_kind,
     events_on_display_turn,
     harness_user_chrome_heading,
     is_operator_user_event,
@@ -822,27 +823,7 @@ def _turn_view_for_session(
 
 def _timeline_kind_matches(event: TraceEvent, kind: str) -> bool:
     """HUD kind filter: all / tools / user / asst / sess / subagents / errors."""
-    mode = (kind or "").strip().casefold()
-    if not mode or mode == "all":
-        return True
-    mapped = et.event_kind(event.event_type)
-    if mode == "tools":
-        return mapped in {"tool", "tool_result"}
-    if mode == "user":
-        return mapped == "user"
-    if mode in {"asst", "assistant", "agent"}:
-        return mapped in {"agent", "thought"}
-    if mode in {"sess", "session"}:
-        return mapped in {"system", "session", "error"}
-    if mode in {"errors", "error"}:
-        return bool(event.is_error) or mapped == "error"
-    if mode in {"subagents", "subagent"}:
-        return mapped == "subagent"
-    if mode in {"background", "jobs"}:
-        return mapped == "task"
-    if mode in {"workflows", "workflow"}:
-        return (event.tool_name or "") == "workflow"
-    return True
+    return event_matches_timeline_kind(event, kind)
 
 
 def _snippet_around(text: str, start: int, needle_len: int, radius: int = 40) -> str:

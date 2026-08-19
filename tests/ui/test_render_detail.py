@@ -368,6 +368,9 @@ class TestRenderEventDetail:
         )
         result = render_event_detail(ev)
         assert_rich_contains(result, "I need to think about this")
+        from groket.ui.i18n import t
+
+        assert_rich_contains(result, t("ui-thought"))
 
     def test_plan_event(self):
         ev = make_trace_event(

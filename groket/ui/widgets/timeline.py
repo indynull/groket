@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from dataclasses import dataclass
 
 from rich.markup import escape as rich_escape
 from textual.message import Message
@@ -19,6 +20,7 @@ from ...session.subagents import (
     subagent_inspect,
     subagent_list_preview,
 )
+from ...session.turns import event_matches_timeline_kind
 from ...session.workflows import workflow_list_preview
 from ...tool_display import job_list_preview, list_event_preview
 from ...utils import fmt_duration
@@ -30,9 +32,44 @@ from ..data_table import (
     update_row_cell,
 )
 from ..i18n import t
-from ..styles import EVENT_TYPE_LABEL as TYPE_MARKUP
-from ..styles import EVENT_TYPE_STYLE, finding_mark
+from ..styles import (
+    EVENT_TYPE_STYLE,
+    EVENT_TYPE_STYLE_LIGHT,
+    active_theme_is_light,
+    event_type_markup,
+    finding_mark,
+)
 from ..styles import tool_label as tool_markup
+
+
+@dataclass
+class _ViewFilter:
+    """Last exclusive View / Turn / search applied to this table."""
+
+    event_type: str | None = None
+    event_types: frozenset[str] | None = None
+    tool_name: str | None = None
+    errors_only: bool = False
+    flagged_only: bool = False
+    search_query: str = ""
+    call_ids: frozenset[str] | None = None
+    update_indices: frozenset[int] | None = None
+    event_indices: frozenset[int] | None = None
+    kind: str | None = None
+
+    def restricts(self) -> bool:
+        return bool(
+            self.event_type
+            or self.event_types
+            or self.tool_name
+            or self.errors_only
+            or self.flagged_only
+            or self.search_query.strip()
+            or self.call_ids
+            or self.update_indices
+            or self.event_indices
+            or (self.kind and self.kind not in {"", "all"})
+        )
 
 
 class TimelineTable(DataTable):
@@ -43,19 +80,20 @@ class TimelineTable(DataTable):
             super().__init__()
             self.event = event
 
-    events: list[TraceEvent] = []
-    findings_by_call: dict[str, Finding] = {}
-    flags_by_index: dict[int, Flag] = {}
-    _durations: dict[int, float] = {}
-    _call_by_id: dict[str, TraceEvent] = {}
-    _result_by_id: dict[str, TraceEvent] = {}
-    #: event.index → trace turn_started.turn_number; empty when unknown
-    _turn_by_index: dict[int, int] = {}
-    #: When True the turn map is cold; open/rebuild fills it once. Live
-    #: same-length ticks keep it warm; append extends or resegments once.
-    _turn_map_stale: bool = True
-    _subagent_mate: dict[int, TraceEvent] = {}
-    _job_mate: dict[int, TraceEvent] = {}
+    def __init__(self, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.events: list[TraceEvent] = []
+        self.findings_by_call: dict[str, Finding] = {}
+        self.flags_by_index: dict[int, Flag] = {}
+        self._durations: dict[int, float] = {}
+        self._call_by_id: dict[str, TraceEvent] = {}
+        self._result_by_id: dict[str, TraceEvent] = {}
+        self._turn_by_index: dict[int, int] = {}
+        self._turn_map_stale: bool = True
+        self._subagent_mate: dict[int, TraceEvent] = {}
+        self._job_mate: dict[int, TraceEvent] = {}
+        self._visible: list[TraceEvent] | None = None
+        self._filter_spec: _ViewFilter | None = None
 
     @property
     def durations(self) -> dict[int, float]:
@@ -84,75 +122,69 @@ class TimelineTable(DataTable):
     ) -> None:
         """Load timeline rows.
 
-        Live multi-turn refresh paths (cheapest first):
+        Live refresh paths (cheapest first):
 
-        1. **Skip** — same length, same visible cells.
-        2. **Append + optional tail patch** — previous rows are a structural
-           prefix of *events*; patch any streamed content on the overlap, then
-           append new rows (no ``clear()``).
-        3. **Same-length tail patch** — structure unchanged, only trailing
-           summaries/durations changed (streaming assistant text).
-        4. **Full rebuild** — order/identity changed (filters, re-sort).
+        1. **Same-length** — structure unchanged. Rebind tool pairs. Patch
+           flag/finding chrome when those maps change. Streaming body text
+           is not rewritten (that froze the TUI).
+        2. **Append** — previous events are a structural prefix. Add only
+           new rows that pass the current View/Turn/search filter.
+        3. **Full rebuild** — order/identity changed.
 
-        Live ticks only re-check the last :data:`LIVE_TIMELINE_TAIL_CHECK` rows
-        for visual equality so streaming does not walk hundreds of ``summary_line``
-        properties on the UI thread.
+        ``self.events`` is always the full list. ``_visible`` is the filtered
+        paint set (or None when every event is shown).
         """
         prev = self.events
         new_events = events or []
         prev_n = len(prev)
         new_n = len(new_events)
-        row_ok = self.row_count == prev_n and prev_n > 0
+        painted_n = len(self._paint_list())
+        row_ok = self.row_count == painted_n and painted_n > 0
+        old_flags = set(self.flags_by_index)
+        old_finds = set(self.findings_by_call)
 
         self.events = new_events
-        self.findings_by_call = {}
-        if findings:
-            for f in findings:
-                for cid in f.all_tool_call_ids:
-                    self.findings_by_call[cid] = f
-        self.flags_by_index = {}
-        if flags:
-            for fl in flags:
-                self.flags_by_index[fl.event_index] = fl
+        self._set_chrome(findings, flags)
+        new_visible = self._compute_visible(new_events)
 
         if not row_ok or not prev:
             self._build_tool_pairs()
             self._compute_durations()
-            # One segment pass before paint — never mark stale then rebuild
-            # again per row / per selection (that froze live browse).
             self._rebuild_turn_map()
+            self._visible = new_visible
             self._refresh_rows()
             if follow_tail:
                 self.scroll_to_end()
             return
 
-        # Live growth / stream: only the tail can change. O(tail) not O(n).
-        # Require table row count to match prev (filter / failed paint desync
-        # must take the full rebuild path — else append raises DuplicateKey).
-        if (
-            new_n >= prev_n
-            and self.row_count == prev_n
-            and self._live_tail_struct_ok(prev, new_events)
-        ):
-            # Append-only: ignore content-only rewrites of existing rows (agent
-            # streaming). Patching every token froze the TUI; new tool rows still
-            # appear when len grows. Full paint happens on F5 / open.
+        if new_n >= prev_n and self._live_tail_struct_ok(prev, new_events):
             if new_n == prev_n:
-                # Structure unchanged — keep turn map warm. Rebind tool pairs to
-                # the new event objects so detail still finds tool_call_update
-                # bodies after a re-parse (read_file dump lives on the update).
                 self._build_tool_pairs()
+                if old_flags != set(self.flags_by_index) or old_finds != set(self.findings_by_call):
+                    self._patch_chrome_rows(old_flags, old_finds)
+                self._visible = new_visible
                 return
             self._index_new_events(new_events[prev_n:])
             self._extend_turn_map_from(prev_n)
-            self._append_live_rows(new_events[prev_n:], follow_tail=follow_tail)
-            self._patch_paired_call_durations(new_events[prev_n:])
+            added = new_events[prev_n:]
+            if self._filter_spec is not None and self._filter_spec.restricts():
+                old_keys = {int(e.index) for e in (self._visible or [])}
+                self._visible = new_visible
+                for ev in self._visible or []:
+                    if int(ev.index) not in old_keys:
+                        self._add_event_row(ev)
+            else:
+                self._visible = None
+                self._append_live_rows(added, follow_tail=follow_tail)
+                self._patch_paired_call_durations(added)
+            if old_flags != set(self.flags_by_index) or old_finds != set(self.findings_by_call):
+                self._patch_chrome_rows(old_flags, old_finds)
             return
 
-        # Structural mid-list change (filters / re-sort): full rebuild.
         self._build_tool_pairs()
         self._compute_durations()
         self._rebuild_turn_map()
+        self._visible = new_visible
         self._refresh_rows()
         if follow_tail:
             self.scroll_to_end()
@@ -173,68 +205,74 @@ class TimelineTable(DataTable):
                 return False
         return True
 
-    @staticmethod
-    def _live_tail_visual_from(
-        prev: list[TraceEvent], new: list[TraceEvent], prev_n: int
-    ) -> int | None:
-        """First visually different index in the live tail, or None if tail matches."""
-        tail = min(LIVE_TIMELINE_TAIL_CHECK, prev_n)
-        start = prev_n - tail
-        first: int | None = None
-        for i in range(start, prev_n):
-            if not TimelineTable._row_visually_equal(prev[i], new[i]):
-                if first is None:
-                    first = i
-        return first
+    def _set_chrome(self, findings: list[Finding] | None, flags: list[Flag] | None) -> None:
+        self.findings_by_call = {}
+        if findings:
+            for f in findings:
+                for cid in f.all_tool_call_ids:
+                    self.findings_by_call[cid] = f
+        self.flags_by_index = {}
+        if flags:
+            for fl in flags:
+                self.flags_by_index[fl.event_index] = fl
 
-    @staticmethod
-    def _structural_prefix_len(prev: list[TraceEvent], new: list[TraceEvent]) -> int:
-        """How many leading events share index/type/tool_call_id."""
-        n = 0
-        for a, b in zip(prev, new, strict=False):
-            if a.index != b.index or a.event_type != b.event_type:
-                break
-            if a.tool_call_id != b.tool_call_id:
-                break
-            n += 1
-        return n
+    def _paint_list(self) -> list[TraceEvent]:
+        if self._visible is not None:
+            return self._visible
+        return self.events
 
-    @staticmethod
-    def _prefix_matches(prev: list[TraceEvent], new: list[TraceEvent]) -> bool:
-        """True when *prev* is the leading segment of *new* (live growth)."""
-        if len(new) < len(prev):
+    def visible_events(self) -> list[TraceEvent]:
+        """Events currently painted (the filtered set, or the full list)."""
+        return list(self._paint_list())
+
+    def _patch_chrome_rows(self, old_flags: set[int], old_finds: set[str]) -> None:
+        idxs = set(old_flags) | set(self.flags_by_index)
+        call_ids = old_finds | set(self.findings_by_call)
+        if call_ids:
+            for row in self.events:
+                if row.tool_call_id and row.tool_call_id in call_ids:
+                    idxs.add(int(row.index))
+        by_idx = {int(e.index): e for e in self.events}
+        for i in idxs:
+            hit = by_idx.get(i)
+            if hit is not None:
+                self._update_event_row(hit)
+
+    def _compute_visible(self, events: list[TraceEvent]) -> list[TraceEvent] | None:
+        spec = self._filter_spec
+        if spec is None or not spec.restricts():
+            return None
+        out = [ev for ev in events if self._event_matches_spec(ev, spec)]
+        return out
+
+    def _event_matches_spec(self, ev: TraceEvent, spec: _ViewFilter) -> bool:
+        if spec.kind and spec.kind not in {"", "all"}:
+            if not event_matches_timeline_kind(ev, spec.kind):
+                return False
+        if spec.event_type and ev.event_type != spec.event_type:
             return False
-        return TimelineTable._structural_prefix_len(prev, new) == len(prev)
-
-    @staticmethod
-    def _row_visually_equal(a: TraceEvent, b: TraceEvent) -> bool:
-        """True when one row's visible cells would match."""
-        return (
-            a.index == b.index
-            and a.event_type == b.event_type
-            and a.tool_call_id == b.tool_call_id
-            and a.is_error == b.is_error
-            and a.tool_name == b.tool_name
-            and a.summary_line == b.summary_line
-            and a.time_str == b.time_str
-        )
-
-    @staticmethod
-    def _first_visual_mismatch(
-        prev: list[TraceEvent], new: list[TraceEvent], overlap: int
-    ) -> int | None:
-        """Index of first visually different row in ``[0, overlap)``, or None."""
-        for i in range(overlap):
-            if not TimelineTable._row_visually_equal(prev[i], new[i]):
-                return i
-        return None
-
-    @staticmethod
-    def _rows_visually_equal(prev: list[TraceEvent], new: list[TraceEvent]) -> bool:
-        """True when summary cells would not change (skip DataTable rebuild)."""
-        if len(prev) != len(new):
+        if spec.event_types is not None and ev.event_type not in spec.event_types:
             return False
-        return TimelineTable._first_visual_mismatch(prev, new, len(prev)) is None
+        if spec.tool_name and ev.tool_name != spec.tool_name:
+            return False
+        if spec.errors_only and not (ev.is_error or ev.event_type in et.ERROR_TYPES):
+            return False
+        if spec.flagged_only and ev.index not in self.flags_by_index:
+            return False
+        if spec.search_query:
+            q = spec.search_query.lower()
+            hay = f"{ev.content} {ev.tool_name} {ev.raw_input}".lower()
+            if q not in hay:
+                return False
+        if spec.call_ids or spec.update_indices or spec.event_indices:
+            if spec.call_ids and ev.tool_call_id in spec.call_ids:
+                return True
+            if spec.update_indices and ev.update_index in spec.update_indices:
+                return True
+            if spec.event_indices and ev.index in spec.event_indices:
+                return True
+            return False
+        return True
 
     def scroll_to_end(self) -> None:
         """Put the cursor on the last row and scroll it into view."""
@@ -269,11 +307,6 @@ class TimelineTable(DataTable):
             return key in self.rows
         except Exception:
             return False
-
-    def _patch_rows(self, events: list[TraceEvent]) -> None:
-        """Rewrite cells for existing rows (streaming content) without clear()."""
-        for ev in events:
-            self._update_event_row(ev)
 
     def _patch_paired_call_durations(self, events: list[TraceEvent]) -> None:
         """When a tool_result updates, refresh the earlier tool_call duration cell."""
@@ -450,7 +483,7 @@ class TimelineTable(DataTable):
             # Type already carries the honest label; do not repeat it here.
             return ""
         if ev.event_type in et.TOOL_TYPES and ev.tool_name:
-            return tool_markup(ev.tool_name)
+            return tool_markup(ev.tool_name, light=active_theme_is_light())
         if ev.event_type in et.ERROR_TYPES:
             return t("ui-session-error-1")
         if ev.event_type in et.TURN_BOUNDARY_TYPES:
@@ -536,6 +569,7 @@ class TimelineTable(DataTable):
         """Visible cell values for one event (Index, Turn, Time, Dur, Type, Tool, Summary)."""
         from ...session.turns import harness_user_chrome_heading
 
+        light = active_theme_is_light()
         chrome_heading = harness_user_chrome_heading(ev.content or "")
         if chrome_heading is not None:
             # Harness injects system-reminder / background-task as user_message_chunk.
@@ -543,10 +577,12 @@ class TimelineTable(DataTable):
         else:
             honest = et.job_event_label(ev.event_type, kind=event_job_kind(ev))
             if honest:
-                face = EVENT_TYPE_STYLE.get(ev.event_type, "yellow")
+                faces = EVENT_TYPE_STYLE_LIGHT if light else EVENT_TYPE_STYLE
+                face = faces.get(ev.event_type, "yellow")
                 type_style = f"[{face}]{honest}[/]"
             elif (ev.tool_name or "") == "workflow":
-                face = EVENT_TYPE_STYLE.get("task_backgrounded", "yellow")
+                faces = EVENT_TYPE_STYLE_LIGHT if light else EVENT_TYPE_STYLE
+                face = faces.get("task_backgrounded", "yellow")
                 label = (
                     t("ui-workflow-done")
                     if ev.event_type in et.TOOL_UPDATE_TYPES
@@ -554,7 +590,7 @@ class TimelineTable(DataTable):
                 )
                 type_style = f"[{face}]{label}[/]"
             else:
-                type_style = TYPE_MARKUP.get(ev.event_type, ev.event_type.upper())
+                type_style = event_type_markup(ev.event_type, light=light) or ev.type_label
         tool_err = ev.is_error and ev.event_type not in et.SESSION_CHROME_TYPES
         if tool_err and chrome_heading is None:
             type_style = f"[red bold underline]{ev.type_label}[/]"
@@ -632,9 +668,8 @@ class TimelineTable(DataTable):
     def _refresh_rows(self) -> None:
         with preserving_cursor(self, scroll=False):
             self.clear()
-            # Dedupe by index so a corrupt/coalesced list cannot raise DuplicateKey.
             seen: set[int] = set()
-            for ev in self.events:
+            for ev in self._paint_list():
                 ix = int(ev.index)
                 if ix in seen:
                     continue
@@ -652,53 +687,25 @@ class TimelineTable(DataTable):
         call_ids: set[str] | None = None,
         update_indices: set[int] | None = None,
         event_indices: set[int] | None = None,
+        kind: str | None = None,
     ) -> None:
-        """Re-filter the displayed events."""
-        filtered = self.events
-        if event_type:
-            filtered = [e for e in filtered if e.event_type == event_type]
-        if event_types:
-            filtered = [e for e in filtered if e.event_type in event_types]
-        if tool_name:
-            filtered = [e for e in filtered if e.tool_name == tool_name]
-        if errors_only:
-            filtered = [e for e in filtered if e.is_error or e.event_type in et.ERROR_TYPES]
-        if flagged_only:
-            filtered = [e for e in filtered if e.index in self.flags_by_index]
-        if search_query:
-            q = search_query.lower()
-            filtered = [
-                e
-                for e in filtered
-                if q in e.content.lower()
-                or q in e.tool_name.lower()
-                or q in str(e.raw_input).lower()
-            ]
-        # Evidence links: OR across tool_call_id, update_index, and event index.
-        if call_ids is not None or update_indices is not None or event_indices is not None:
-            ids = call_ids or set()
-            upds = update_indices or set()
-            eidxs = event_indices or set()
-            if ids or upds or eidxs:
-
-                def _evidence_match(e: TraceEvent) -> bool:
-                    if ids and e.tool_call_id in ids:
-                        return True
-                    if upds and e.update_index in upds:
-                        return True
-                    if eidxs and e.index in eidxs:
-                        return True
-                    return False
-
-                filtered = [e for e in filtered if _evidence_match(e)]
-        # Session-global turn ids — build from the full list before swapping in
-        # the filtered view (never resegment a subset).
+        """Re-filter the displayed events without replacing ``self.events``."""
+        self._filter_spec = _ViewFilter(
+            event_type=event_type,
+            event_types=frozenset(event_types) if event_types is not None else None,
+            tool_name=tool_name,
+            errors_only=errors_only,
+            flagged_only=flagged_only,
+            search_query=search_query or "",
+            call_ids=frozenset(call_ids) if call_ids is not None else None,
+            update_indices=frozenset(update_indices) if update_indices is not None else None,
+            event_indices=frozenset(event_indices) if event_indices is not None else None,
+            kind=kind,
+        )
         if self._turn_map_stale:
             self._rebuild_turn_map()
-        orig = self.events
-        self.events = filtered
+        self._visible = self._compute_visible(self.events)
         self._refresh_rows()
-        self.events = orig
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         row_key = event.row_key

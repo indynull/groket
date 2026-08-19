@@ -224,6 +224,39 @@ def is_operator_user_event(ev: TraceEvent) -> bool:
     return bool(operator_prompt_text(ev.content or ""))
 
 
+def event_matches_timeline_kind(event: TraceEvent, kind: str) -> bool:
+    """True when *event* belongs in Timeline View *kind* after chrome relabel.
+
+    Harness user-chrome (system-reminder, background-task) is Session, not User.
+    """
+    mode = (kind or "").strip().casefold()
+    if not mode or mode == "all":
+        return True
+    chrome = None
+    if event.event_type in et.USER_TYPES or event.event_type == "user":
+        chrome = harness_user_chrome_heading(event.content or "")
+    mapped = "system" if chrome is not None else et.event_kind(event.event_type)
+    if mode == "tools":
+        return mapped in {"tool", "tool_result"} or event.event_type in et.TOOL_TYPES
+    if mode == "user":
+        return mapped == "user"
+    if mode in {"asst", "assistant", "agent"}:
+        return mapped in {"agent", "thought"}
+    if mode in {"sess", "session"}:
+        return (
+            mapped in {"system", "session", "error"} or event.event_type in et.SESSION_CHROME_TYPES
+        )
+    if mode in {"errors", "error"}:
+        return bool(event.is_error) or mapped == "error" or event.event_type in et.ERROR_TYPES
+    if mode in {"subagents", "subagent"}:
+        return mapped == "subagent" or event.event_type in et.SUBAGENT_TYPES
+    if mode in {"background", "jobs"}:
+        return mapped == "task" or event.event_type in et.TASK_TYPES
+    if mode in {"workflows", "workflow"}:
+        return (event.tool_name or "") == "workflow"
+    return True
+
+
 def _segment_has_operator_user(seg: TurnSegment) -> bool:
     """True when the segment includes a real host/operator user prompt."""
     return any(is_operator_user_event(ev) for ev in seg.events)

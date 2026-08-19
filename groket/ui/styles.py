@@ -26,6 +26,7 @@ CREAM = "#FBF1C7"
 COMPLETE_ON_LIGHT = "#5C5B12"
 RUNNING_ON_LIGHT = "#7A5410"
 CANCELLED_ON_LIGHT = "#6B6358"
+INK_ON_LIGHT = "#3C3836"
 
 SEVERITY_STYLE: dict[str, str] = {
     "high": f"{FAILED} bold",
@@ -100,6 +101,10 @@ EVENT_TYPE_LABEL: dict[str, str] = {
     k: f"[{v}]{k.replace('_', ' ')}[/]" for k, v in EVENT_TYPE_STYLE.items()
 }
 
+EVENT_TYPE_STYLE_LIGHT: dict[str, str] = {
+    k: v.replace(CREAM, INK_ON_LIGHT) for k, v in EVENT_TYPE_STYLE.items()
+}
+
 # Color by *action family*, not per-tool identity (keeps the column scannable):
 #   cream  = read / search / inspect
 #   complete green = write / edit / mutate workspace
@@ -116,8 +121,9 @@ TOOL_FAMILY_STYLE: dict[str, str] = {
     "other": "dim",
 }
 
-# Explicit overrides (optional); prefer families via tool_style().
-TOOL_STYLE: dict[str, str] = {}
+TOOL_FAMILY_STYLE_LIGHT: dict[str, str] = {
+    k: (INK_ON_LIGHT if v == CREAM else v) for k, v in TOOL_FAMILY_STYLE.items()
+}
 
 
 # Run / container lifecycle — one palette for tables, activity bar, labels.
@@ -150,6 +156,24 @@ def theme_is_light(name: str) -> bool:
     """True when a Textual theme name is a light paper colorway."""
     n = (name or "").strip().lower()
     return any(tok in n for tok in ("light", "latte", "dawn"))
+
+
+def active_theme_is_light() -> bool:
+    """True when the running Textual app is on a light paper theme."""
+    with suppress(Exception):
+        app = getattr(App, "get_running_app", lambda: None)()
+        if app is not None:
+            return theme_is_light(getattr(app, "theme", "") or "")
+    return False
+
+
+def event_type_markup(event_type: str, *, light: bool = False) -> str:
+    """Styled Type-column label, or empty when *event_type* has no palette entry."""
+    styles = EVENT_TYPE_STYLE_LIGHT if light else EVENT_TYPE_STYLE
+    style = styles.get(event_type)
+    if not style:
+        return ""
+    return f"[{style}]{event_type.replace('_', ' ')}[/]"
 
 
 STATUS_LABEL: dict[str, str] = {
@@ -205,18 +229,17 @@ def severity_style(value: str) -> str:
     return SEVERITY_STYLE.get(value, "white")
 
 
-def tool_style(name: str) -> str:
-    """Rich style for a tool name (family palette, optional per-name override)."""
-    if name and name in TOOL_STYLE:
-        return TOOL_STYLE[name]
-    return TOOL_FAMILY_STYLE.get(tool_family(name or ""), TOOL_FAMILY_STYLE["other"])
+def tool_style(name: str, *, light: bool = False) -> str:
+    """Rich style for a tool name (family palette)."""
+    table = TOOL_FAMILY_STYLE_LIGHT if light else TOOL_FAMILY_STYLE
+    return table.get(tool_family(name or ""), table["other"])
 
 
-def tool_label(name: str, *, max_len: int = 32) -> str:
+def tool_label(name: str, *, max_len: int = 32, light: bool = False) -> str:
     """Rich markup label for a tool name in tables (MCP shown as server · method)."""
     display = format_tool_display(name or "?")
     if len(display) > max_len:
         display = display[: max_len - 1] + "…"
-    style = tool_style(name)
+    style = tool_style(name, light=light)
     safe = display.replace("[", "\\[").replace("]", "\\]")
     return f"[{style}]{safe}[/]"

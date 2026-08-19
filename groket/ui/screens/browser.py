@@ -60,7 +60,11 @@ from ...session.subagents import (
     resolve_child_session_path,
     subagent_runs_for_view,
 )
-from ...session.turns import event_display_turn_map, segment_timeline_turns
+from ...session.turns import (
+    event_display_turn_map,
+    event_matches_timeline_kind,
+    segment_timeline_turns,
+)
 from ...session.workflows import (
     WorkflowRun,
     workflow_event_index,
@@ -1389,50 +1393,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         mode = getattr(self, "_timeline_filter", "all") or "all"
         self._errors_only = mode == "errors"
         search = getattr(self, "_timeline_search", "") or ""
-        if mode == "all":
-            self._apply_filter(errors_only=False, search_query=search)
-        elif mode == "tools":
-            self._apply_filter(
-                event_types=set(et.TOOL_TYPES), errors_only=False, search_query=search
-            )
-        elif mode == "user":
-            self._apply_filter(
-                event_types=set(et.USER_TYPES), errors_only=False, search_query=search
-            )
-        elif mode == "asst":
-            self._apply_filter(
-                event_types=set(et.AGENT_TYPES | et.THOUGHT_TYPES),
-                errors_only=False,
-                search_query=search,
-            )
-        elif mode == "sess":
-            self._apply_filter(
-                event_types=set(et.SESSION_CHROME_TYPES),
-                errors_only=False,
-                search_query=search,
-            )
-        elif mode == "subagents":
-            self._apply_filter(
-                event_types=set(et.SUBAGENT_TYPES),
-                errors_only=False,
-                search_query=search,
-            )
-        elif mode == "background":
-            self._apply_filter(
-                event_types=set(et.TASK_TYPES),
-                errors_only=False,
-                search_query=search,
-            )
-        elif mode == "workflows":
-            self._apply_filter(
-                tool_name="workflow",
-                errors_only=False,
-                search_query=search,
-            )
-        elif mode == "errors":
-            self._apply_filter(errors_only=True, search_query=search)
+        if mode == "errors":
+            self._apply_filter(kind="errors", errors_only=True, search_query=search)
         else:
-            self._apply_filter(errors_only=False, search_query=search)
+            self._apply_filter(kind=mode, search_query=search)
 
     def _record_context_sample(self) -> bool:
         """Record read-only context snapshot against the current turn index."""
@@ -2236,23 +2200,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
     def _event_matches_timeline_view(self, ev: TraceEvent, mode: str) -> bool:
         """True when *ev* stays visible under Timeline View *mode*."""
-        if mode == "workflows":
-            return (ev.tool_name or "") == "workflow"
-        if mode == "tools":
-            return ev.event_type in et.TOOL_TYPES
-        if mode == "user":
-            return ev.event_type in et.USER_TYPES
-        if mode == "asst":
-            return ev.event_type in (et.AGENT_TYPES | et.THOUGHT_TYPES)
-        if mode == "sess":
-            return ev.event_type in et.SESSION_CHROME_TYPES
-        if mode == "subagents":
-            return ev.event_type in et.SUBAGENT_TYPES
-        if mode == "background":
-            return ev.event_type in et.TASK_TYPES
-        if mode == "errors":
-            return bool(ev.is_error or ev.event_type in et.ERROR_TYPES)
-        return True
+        return event_matches_timeline_kind(ev, mode)
 
     def _jump_timeline_to_event(self, event_index: int, *, turn_index: int | None = None) -> None:
         """Open Timeline and place the cursor on *event_index*."""
@@ -3989,6 +3937,16 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return
         self._set_turn_filter(str(ids[i - 1]))
 
+    def _land_target(self, tl: TimelineTable, *, keep: bool) -> TraceEvent | None:
+        """First visible event to land on, or the current one when it is still shown."""
+        visible = tl.visible_events()
+        if keep and self._current_event is not None:
+            cur = int(self._current_event.index)
+            hit = next((e for e in visible if int(e.index) == cur), None)
+            if hit is not None:
+                return hit
+        return visible[0] if visible else None
+
     def _land_after_turn_step(self, *, keep: bool) -> None:
         """Put the cursor on a real event and give the list focus so j/k work."""
 
@@ -3997,17 +3955,17 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 tl = self.query_one("#timeline-list", TimelineTable)
             except Exception:
                 return
-            evs = tl.events
-            target: TraceEvent | None = None
-            if keep and self._current_event is not None:
-                cur = int(self._current_event.index)
-                target = next((e for e in evs if int(e.index) == cur), None)
-            if target is None and evs:
-                target = evs[0]
-            if target is not None:
-                restore_cursor(tl, str(target.index), scroll=True)
-                self._current_event = target
-                self._paint_selected_event_detail()
+            target = self._land_target(tl, keep=keep)
+            if target is None:
+                focus_primary_list(tl)
+                self.refresh_bindings()
+                return
+            if not restore_cursor(tl, str(target.index), scroll=True):
+                focus_primary_list(tl)
+                self.refresh_bindings()
+                return
+            self._current_event = target
+            self._paint_selected_event_detail()
             focus_primary_list(tl)
             self.refresh_bindings()
 

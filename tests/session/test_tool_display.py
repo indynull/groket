@@ -30,6 +30,34 @@ def test_format_tool_display_uses_spaces_not_snake() -> None:
     assert format_tool_display("") == "?"
 
 
+def test_list_event_preview_keeps_path_underscores_and_hyphens() -> None:
+    """Remainder after the tool id is a path, not another tool name."""
+    assert (
+        list_event_preview("read_file src/session_inflight.py", "read_file")
+        == "read file src/session_inflight.py"
+    )
+    assert list_event_preview("read_file my-config.toml", "read_file") == "read file my-config.toml"
+
+
+def test_use_tool_preview_humanizes_marketplace_id() -> None:
+    from groket.models import TraceEvent
+
+    ev = TraceEvent(
+        index=0,
+        event_type="tool_call",
+        tool_name="use_tool",
+        raw_input={
+            "tool_name": "resolve-library-id",
+            "server_name": "context7",
+            "tool_input": {"libraryName": "textual"},
+        },
+    )
+    preview = list_event_preview(ev.summary_line, ev.tool_name)
+    assert "resolve-library-id" not in preview
+    assert "·" in preview
+    assert "textual" in preview
+
+
 def test_tool_family_search_and_marketplace() -> None:
     assert tool_family("search_tool") == "read"
     assert tool_family("use_tool") == "mcp"

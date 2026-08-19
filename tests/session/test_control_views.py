@@ -772,3 +772,36 @@ def test_build_session_diff_lists_rewind_files(tmp_path: Path) -> None:
     files = payload["points"][0]["files"]
     assert files[0]["path"] == "app.py"
     assert "app.py" in files[0]["unified"]
+
+
+def test_timeline_kind_chrome_is_session_not_user() -> None:
+    """Harness user-chrome is Session on both the TUI view check and the wire filter."""
+    from conftest import make_trace_event
+    from groket.session.control_views import _timeline_kind_matches
+    from groket.session.turns import event_matches_timeline_kind
+    from groket.ui.screens.browser import BrowserScreen
+
+    chrome = make_trace_event(
+        index=0,
+        event_type="user_message_chunk",
+        content="<system-reminder>do not mention</system-reminder>",
+    )
+    user = make_trace_event(index=1, event_type="user_message_chunk", content="please fix tests")
+    tool = make_trace_event(index=2, event_type="tool_call", tool_name="read_file")
+    wf = make_trace_event(index=3, event_type="tool_call", tool_name="workflow")
+    bg = make_trace_event(index=4, event_type="task_backgrounded")
+    err = make_trace_event(index=5, event_type="session_error", is_error=True)
+    screen = BrowserScreen.__new__(BrowserScreen)
+    for ev, mode, want in (
+        (chrome, "user", False),
+        (user, "user", True),
+        (chrome, "sess", True),
+        (tool, "tools", True),
+        (wf, "workflows", True),
+        (bg, "background", True),
+        (err, "errors", True),
+        (user, "tools", False),
+    ):
+        assert event_matches_timeline_kind(ev, mode) is want
+        assert _timeline_kind_matches(ev, mode) is want
+        assert screen._event_matches_timeline_view(ev, mode) is want

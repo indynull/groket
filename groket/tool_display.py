@@ -115,6 +115,12 @@ def list_event_preview(summary: str, tool_name: str = "") -> str:
     s = (summary or "").strip()
     n = (tool_name or "").strip()
     if n and s.startswith(n):
+        rest = s[len(n) :].lstrip()
+        if rest:
+            first, _, tail = rest.partition(" ")
+            if first and "__" in first:
+                human = format_tool_display(first)
+                return f"{format_tool_display(n)} {human}" + (f" {tail}" if tail else "")
         return f"{format_tool_display(n)}{s[len(n) :]}"
     return s
 

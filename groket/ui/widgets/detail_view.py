@@ -72,6 +72,9 @@ class DetailView(VerticalScroll):
         schedule: ScheduleTask | None = None,
         workflow: WorkflowRun | None = None,
     ) -> None:
+        same_event = self._current_event is not None and int(self._current_event.index) == int(
+            event.index
+        )
         self._current_event = event
         self._current_finding = finding
         self._current_flag = flag
@@ -83,7 +86,7 @@ class DetailView(VerticalScroll):
         self._job_mate = job_mate
         self._schedule = schedule
         self._workflow = workflow
-        self._refresh_content()
+        self._refresh_content(scroll_home=not same_event)
         self._sync_workflow_children()
 
     def show_workflow(self, run: WorkflowRun) -> None:
@@ -104,7 +107,7 @@ class DetailView(VerticalScroll):
         self._sync_workflow_children()
         self.scroll_home(animate=False)
 
-    def _refresh_content(self) -> None:
+    def _refresh_content(self, *, scroll_home: bool = True) -> None:
         ev = self._current_event
         body = self.query_one("#detail-body", SelectableStatic)
         if ev is None:
@@ -130,7 +133,8 @@ class DetailView(VerticalScroll):
         )
         set_static_renderable(body, renderable)
         self._sync_workflow_children()
-        self.scroll_home(animate=False)
+        if scroll_home:
+            self.scroll_home(animate=False)
 
     def on_mount(self) -> None:
         table = self.query_one("#workflow-children-table", DataTable)

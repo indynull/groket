@@ -1253,17 +1253,17 @@ def render_event_detail(
         chunks.extend(banners)
         chunks.append(Text(""))
     chunks.append(head)
-    if ev.event_type in et.MESSAGE_TYPES and body.strip():
-        # Soft newlines → Markdown hard breaks so each prompt line stays its own
-        # visual line (selectable for partial copy). Blank lines stay paragraphs.
-        md_body = "  \n".join(body.split("\n"))
-        chunks += [Text(""), Markdown(md_body)]
-    elif ev.event_type == "thought" and body.strip():
+    if ev.event_type in et.THOUGHT_TYPES and body.strip():
         chunks += [
             Text(""),
             Rule(t("ui-thought"), style="bright_black"),
             Text(body, style="dim italic"),
         ]
+    elif ev.event_type in et.MESSAGE_TYPES and body.strip():
+        # Soft newlines → Markdown hard breaks so each prompt line stays its own
+        # visual line (selectable for partial copy). Blank lines stay paragraphs.
+        md_body = "  \n".join(body.split("\n"))
+        chunks += [Text(""), Markdown(md_body)]
     elif ev.event_type == "plan":
         chunks += [Text(""), Rule(t("ui-plan"), style="bright_black"), _prose_or_code(body)]
     elif ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
