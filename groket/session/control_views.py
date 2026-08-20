@@ -11,8 +11,10 @@ import logging
 import threading
 from concurrent.futures import Future
 from pathlib import Path
+from typing import ClassVar
 
 from .. import event_types as et
+from ..analysis.base import AnalysisResult, Finding
 from ..bounded_cache import BoundedCache
 from ..constants import OVERVIEW_CACHE_MAXSIZE, TURN_VIEW_CACHE_MAXSIZE
 from ..models import JsonObject, JsonValue, SessionMeta, ToolInputBag, TraceEvent, as_json_object
@@ -23,16 +25,17 @@ from ..parser import (
     parse_timeline,
     session_timeline_stamp,
 )
-from ..session.sources import classify_session_origin, work_traces_root
+from ..session.sources import (
+    classify_session_origin,
+    is_under_host_grok_sessions,
+    work_traces_root,
+)
 from ..session.tagged_blocks import unwrap_for_display
 from ..session.turns import (
     TurnSegment,
     event_display_turn_map,
     event_matches_timeline_kind,
-    events_on_display_turn,
     harness_user_chrome_heading,
-    is_operator_user_event,
-    operator_prompt_text,
     segment_timeline_turns,
 )
 from ..session.usage_stats import SessionUsageStats, collect_session_usage
@@ -46,14 +49,7 @@ from ..tool_display import (
     tool_input_fields,
 )
 from .catalog import session_catalog_row
-from .jobs import (
-    event_task_id,
-    job_input_stamp,
-    job_mapping,
-    load_session_jobs,
-    schedule_mapping,
-    set_bookend_indexes,
-)
+from .jobs import SessionJobs, job_input_stamp
 from .subagents import (
     SubagentRun,
     event_child_session_id,
@@ -63,7 +59,7 @@ from .subagents import (
     subagent_run_mapping,
     subagent_runs_for_session,
 )
-from .workflows import workflow_list_preview, workflow_mapping
+from .workflows import workflow_list_preview
 
 DEFAULT_FINDINGS_LIMIT = 80
 
@@ -79,24 +75,7 @@ _OverviewStamp = tuple[
     _JobFilesStamp,
     _MonitorStatusStamp,
 ]
-_overview_cache: BoundedCache[tuple[_OverviewStamp, JsonObject]] = BoundedCache(
-    OVERVIEW_CACHE_MAXSIZE
-)
-_JobStamp = tuple[_JobFilesStamp, _MonitorStatusStamp]
-_JobBookendKey = tuple[tuple[str, str, str], ...]
-_JobReuseKey = tuple[_JobStamp, _JobBookendKey]
-_JobLists = tuple[list[JsonObject], list[JsonObject], list[JsonObject]]
-_job_payload_cache: BoundedCache[tuple[_JobReuseKey, _JobLists]] = BoundedCache(
-    OVERVIEW_CACHE_MAXSIZE
-)
-_overview_inflight: dict[str, Future[JsonObject]] = {}
-_overview_inflight_lock = threading.Lock()
-
-# Warm paged session/timeline must not re-segment multi‑k event lists.
-# Keyed by session path; invalidated when session_timeline_stamp changes.
 _TurnViewCache = tuple[TimelineStamp, list[TurnSegment], dict[int, int]]
-_turn_view_cache: BoundedCache[_TurnViewCache] = BoundedCache(TURN_VIEW_CACHE_MAXSIZE)
-_turn_view_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -185,17 +164,15 @@ def timeline_event_mapping(
     truncated = len(content) > cap
     body = content[:cap] if cap else ""
     raw: JsonValue = {}
-    try:
-        bag = event.raw_input
-        if isinstance(bag, dict):
-            raw = as_json_object(bag)
-        elif hasattr(bag, "raw"):
-            inner = bag.raw()
-            if isinstance(inner, dict):
-                raw = as_json_object(inner)
-    except Exception:
+    if isinstance(event.raw_input, ToolInputBag):
+        inner = event.raw_input.raw()
+        raw = as_json_object(inner) if isinstance(inner, dict) else {}
+    elif isinstance(event.raw_input, dict):
+        raw = as_json_object(event.raw_input)
+    if not raw or cap <= 0 or not isinstance(raw, dict):
         raw = {}
-    raw = _capped_raw_input(raw, cap)
+    else:
+        raw = preserve_primary_raw_input(as_json_object(raw), cap)
     kind = et.event_kind(event.event_type)
     family = tool_family(tname) if kind in ("tool", "tool_result") or tname else ""
     chrome_heading = (
@@ -281,58 +258,6 @@ def timeline_event_mapping(
     return row
 
 
-def _capped_raw_input(raw: JsonValue, max_chars: int) -> JsonValue:
-    """Bound ``rawInput``; keep command / old-new / path / pattern / query."""
-    if not raw or max_chars <= 0:
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    return preserve_primary_raw_input(as_json_object(raw), max_chars)
-
-
-def _turn_user_prompt_preview(
-    seg: TurnSegment,
-    *,
-    max_chars: int = 320,
-) -> tuple[str, int | None]:
-    """First *operator* user message text in *seg* and its timeline index.
-
-    Used by HUD / editors as the turn card summary (what the user asked).
-    Prefer nested ``<user_query>`` body; skip harness chrome tags.
-    """
-    for event in seg.events:
-        if not is_operator_user_event(event):
-            continue
-        text = operator_prompt_text(event.content or "", max_chars=max_chars)
-        if not text:
-            continue
-        return text, int(event.index)
-    return "", None
-
-
-def _turn_assistant_preview(
-    seg: TurnSegment,
-    *,
-    max_chars: int = 12_000,
-) -> tuple[str, int | None]:
-    """Last non-empty assistant message in *seg* (the turn wrap-up)."""
-    last_text = ""
-    last_idx: int | None = None
-    for event in seg.events:
-        if event.event_type not in et.AGENT_TYPES:
-            continue
-        raw = unwrap_for_display(event.content or "").strip()
-        if not raw:
-            continue
-        last_text = raw
-        last_idx = int(event.index)
-    if not last_text:
-        return "", None
-    if len(last_text) > max_chars:
-        last_text = last_text[: max_chars - 1] + "…"
-    return last_text, last_idx
-
-
 def turn_segment_mapping(
     seg: TurnSegment,
     *,
@@ -346,8 +271,8 @@ def turn_segment_mapping(
         short cap so large sessions stay small; full ``session/turns`` keeps
         the default.
     """
-    summary, user_index = _turn_user_prompt_preview(seg)
-    assistant, assistant_index = _turn_assistant_preview(seg, max_chars=assistant_max_chars)
+    summary, user_index = seg.user_prompt_preview()
+    assistant, assistant_index = seg.assistant_preview(max_chars=assistant_max_chars)
     row: JsonObject = {
         "turnIndex": int(seg.turn_index),
         "turnNumber": seg.turn_number,
@@ -422,17 +347,6 @@ def usage_stats_mapping(usage: SessionUsageStats) -> JsonObject:
     }
 
 
-def _session_origin(session_dir: Path, work_dir: Path | None) -> str:
-    from .sources import is_under_host_grok_sessions
-
-    sd = Path(session_dir)
-    if work_dir is not None:
-        return classify_session_origin(sd, work_traces=work_traces_root(work_dir))
-    if is_under_host_grok_sessions(sd):
-        return "host"
-    return "work"
-
-
 def build_session_get(
     session_dir: Path,
     *,
@@ -446,7 +360,7 @@ def build_session_get(
     (avoid a full ``parse_timeline`` just for the events column).
     """
     sd = Path(session_dir)
-    origin = _session_origin(sd, work_dir)
+    origin = SessionOverview.origin(sd, work_dir)
     meta = load_session_meta(sd, include_timeline_count=include_timeline_count)
     meta.origin = origin
     out = session_meta_mapping(meta, path=sd, origin=origin)
@@ -465,76 +379,44 @@ def build_session_get(
     return out
 
 
-def _finding_turn_indices(
-    segs: list[TurnSegment],
-    event_indices: list[int],
-) -> list[int]:
-    """Map finding event indices → enclosing trace turn ids (unique, order preserved)."""
-    turn_by = event_display_turn_map(segs)
-    out: list[int] = []
-    seen: set[int] = set()
-    for ei in event_indices:
-        ti = turn_by.get(int(ei))
-        if ti is None or ti in seen:
-            continue
-        seen.add(ti)
-        out.append(ti)
-    return out
-
-
 def finding_mapping(
-    finding: object,
+    finding: Finding,
     *,
     segs: list[TurnSegment],
     plugin_id: str = "",
 ) -> JsonObject:
     """Serialize one analysis :class:`~groket.analysis.base.Finding` for palette clients."""
-    # duck-typed to avoid hard import cycles in type checkers; runtime uses Finding.
-    fid = str(getattr(finding, "id", "") or "")
-    plug = str(getattr(finding, "plugin_id", "") or plugin_id or "")
-    sev = getattr(finding, "severity", None)
-    if sev is not None and hasattr(sev, "value"):
-        sev_s = str(getattr(sev, "value", "low") or "low")
-    else:
-        sev_s = str(sev or "low")
-    title = str(getattr(finding, "title", "") or "")
-    detail = str(getattr(finding, "detail", "") or "")
+    plug = finding.plugin_id or plugin_id or ""
+    detail = finding.detail or ""
     if len(detail) > 2000:
         detail = detail[:1997] + "…"
-    category = str(getattr(finding, "category", "") or "")
-    raw_ev = getattr(finding, "event_indices", None) or []
-    event_indices = [int(x) for x in raw_ev if isinstance(x, (int, float, str))]
-    raw_up = getattr(finding, "update_indices", None) or []
-    update_indices = [int(x) for x in raw_up if isinstance(x, (int, float, str))]
-    turn_indices = _finding_turn_indices(segs, event_indices)
-    primary_event = event_indices[0] if event_indices else None
-    primary_turn = turn_indices[0] if turn_indices else None
-    extras_raw = getattr(finding, "extras", None) or {}
+    event_indices = [int(x) for x in finding.event_indices]
+    update_indices = [int(x) for x in finding.update_indices]
+    turn_indices = TurnSegment.turn_indices_for(segs, event_indices)
     extras: JsonObject = {}
-    if isinstance(extras_raw, dict):
-        # Keep a short set of MF-style keys for Issue-box paste in HUD.
-        for key in (
-            "what_model_did",
-            "what_should_have_happened",
-            "where",
-            "why",
-            "pattern",
-        ):
-            if key in extras_raw and extras_raw[key] not in (None, ""):
-                val = str(extras_raw[key])
-                extras[key] = val[:1200] + ("…" if len(val) > 1200 else "")
+    for key in (
+        "what_model_did",
+        "what_should_have_happened",
+        "where",
+        "why",
+        "pattern",
+    ):
+        val = finding.extras.get(key)
+        if val not in (None, ""):
+            text = str(val)
+            extras[key] = text[:1200] + ("…" if len(text) > 1200 else "")
     return {
-        "id": fid,
+        "id": finding.id or "",
         "pluginId": plug,
-        "severity": sev_s,
-        "title": title,
+        "severity": finding.severity.value,
+        "title": finding.title or "",
         "detail": detail,
-        "category": category,
+        "category": finding.category or "",
         "eventIndices": list(event_indices[:40]),
         "updateIndices": list(update_indices[:40]),
         "turnIndices": list(turn_indices),
-        "primaryEventIndex": primary_event,
-        "primaryTurnIndex": primary_turn,
+        "primaryEventIndex": event_indices[0] if event_indices else None,
+        "primaryTurnIndex": turn_indices[0] if turn_indices else None,
         "extras": extras,
     }
 
@@ -551,7 +433,6 @@ def build_session_findings(
     TUI analysis cache). Does not re-run analyzers. Stale/mismatched plugin
     versions are still served so palette clients can show last known findings.
     """
-    from ..analysis.base import AnalysisResult, Finding
     from ..paths import analysis_cache_dir
 
     sd = Path(session_dir)
@@ -603,212 +484,240 @@ def build_session_findings(
     }
 
 
-def _session_cache_key(session_dir: Path) -> str:
-    """Stable cache key for a session directory."""
-    sd = Path(session_dir)
-    try:
-        return str(sd.expanduser().resolve())
-    except OSError:
-        return str(sd.expanduser())
+class SessionOverview:
+    """Cached ``session/overview`` payload and stamp-keyed turn view."""
 
+    _cache: ClassVar[BoundedCache[tuple[_OverviewStamp, JsonObject]]] = BoundedCache(
+        OVERVIEW_CACHE_MAXSIZE
+    )
+    _inflight: ClassVar[dict[str, Future[JsonObject]]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+    _turn_cache: ClassVar[BoundedCache[_TurnViewCache]] = BoundedCache(TURN_VIEW_CACHE_MAXSIZE)
+    _turn_lock: ClassVar[threading.Lock] = threading.Lock()
 
-def _findings_cache_stamp(session_dir: Path) -> tuple[tuple[str, int, int], ...]:
-    """Fingerprint analysis-cache JSON files (name, mtime_ns, size)."""
-    from ..paths import analysis_cache_dir
-
-    sid = (Path(session_dir).name or "").strip()
-    if not sid:
-        return ()
-    cache_dir = analysis_cache_dir() / "analysis" / sid
-    if not cache_dir.is_dir():
-        return ()
-    out: list[tuple[str, int, int]] = []
-    try:
-        paths = sorted(cache_dir.glob("*.json"))
-    except OSError:
-        return ()
-    for path in paths:
+    @staticmethod
+    def cache_key(session_dir: Path) -> str:
+        """Stable cache key for a session directory."""
+        sd = Path(session_dir)
         try:
-            st = path.stat()
+            return str(sd.expanduser().resolve())
         except OSError:
-            continue
-        out.append((path.name, int(st.st_mtime_ns), int(st.st_size)))
-    return tuple(out)
+            return str(sd.expanduser())
+
+    @staticmethod
+    def findings_stamp(session_dir: Path) -> tuple[tuple[str, int, int], ...]:
+        """Fingerprint analysis-cache JSON files (name, mtime_ns, size)."""
+        from ..paths import analysis_cache_dir
+
+        sid = (Path(session_dir).name or "").strip()
+        if not sid:
+            return ()
+        cache_dir = analysis_cache_dir() / "analysis" / sid
+        if not cache_dir.is_dir():
+            return ()
+        out: list[tuple[str, int, int]] = []
+        try:
+            paths = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            return ()
+        for path in paths:
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            out.append((path.name, int(st.st_mtime_ns), int(st.st_size)))
+        return tuple(out)
+
+    @staticmethod
+    def origin(session_dir: Path, work_dir: Path | None) -> str:
+        """``host`` or ``work`` for this session directory."""
+        sd = Path(session_dir)
+        if work_dir is not None:
+            return classify_session_origin(sd, work_traces=work_traces_root(work_dir))
+        if is_under_host_grok_sessions(sd):
+            return "host"
+        return "work"
+
+    @staticmethod
+    def notes_schema() -> JsonObject:
+        """Operator notes schema for HUD/TUI forms (same shape as notes/list)."""
+        schema = load_schema()
+        return {
+            "id": schema.schema_id,
+            "fields": [
+                {
+                    "id": field.id,
+                    "label": field.label or field.id,
+                    "choices": list(field.choices),
+                    "pick": field.pick,
+                }
+                for field in schema.fields
+            ],
+        }
+
+    @classmethod
+    def input_stamp(cls, session_dir: Path) -> _OverviewStamp:
+        """Inputs that must match for a cached overview to be reused."""
+        sd = Path(session_dir)
+        notes_rev = ""
+        try:
+            notes_rev = notes_snapshot(sd).revision
+        except Exception:
+            logger.debug("notes stamp for overview %s", sd, exc_info=True)
+        job_files, monitor_status = job_input_stamp(sd)
+        return (
+            session_timeline_stamp(sd),
+            notes_rev,
+            cls.findings_stamp(sd),
+            job_files,
+            monitor_status,
+        )
+
+    @classmethod
+    def turn_view(
+        cls,
+        session_dir: Path,
+        events: list[TraceEvent],
+    ) -> tuple[list[TurnSegment], dict[int, int]]:
+        """Return (segments, event_index→display_turn), stamp-cached.
+
+        Full re-segmentation of multi‑thousand event lists is the thrash path
+        for paged ``session/timeline``; reuse until the timeline stamp moves.
+        """
+        sd = Path(session_dir)
+        key = cls.cache_key(sd)
+        stamp = session_timeline_stamp(sd)
+        with cls._turn_lock:
+            cached = cls._turn_cache.get(key)
+            if cached is not None and cached[0] == stamp:
+                return cached[1], cached[2]
+        segs = segment_timeline_turns(events)
+        turn_by_index = event_display_turn_map(segs)
+        with cls._turn_lock:
+            cls._turn_cache[key] = (stamp, segs, turn_by_index)
+        return segs, turn_by_index
+
+    @classmethod
+    def uncached(cls, session_dir: Path, *, work_dir: Path | None = None) -> JsonObject:
+        """Build overview without single-flight / result cache."""
+        sd = Path(session_dir)
+        origin = cls.origin(sd, work_dir)
+        meta = load_session_meta(sd, include_timeline_count=False)
+        meta.origin = origin
+        events = parse_timeline(sd)
+        meta.num_events = len(events)
+        segs, turn_map = cls.turn_view(sd, events)
+        runs = subagent_runs_for_session(sd, events, segs, turn_map)
+        notes_rev = ""
+        notes_count = 0
+        notes_rows: list[JsonValue] = []
+        try:
+            snap = notes_snapshot(sd)
+            notes_rev = snap.revision
+            notes_count = len(snap.doc.notes)
+            for note in snap.doc.sorted_notes()[:40]:
+                notes_rows.append(
+                    {
+                        "id": note.id,
+                        "turnIndex": note.turn_index,
+                        "fields": dict(note.fields),
+                        "eventIndices": list(note.event_indices),
+                        "createdAt": note.created_at,
+                        "updatedAt": note.updated_at,
+                    }
+                )
+        except Exception:
+            logger.debug("notes for session/overview %s", sd, exc_info=True)
+
+        findings_block = build_session_findings(sd, segs=segs)
+        jobs, schedules, workflows = SessionJobs.overview_rows(sd, events, cls.cache_key(sd))
+        summary = (meta.summary_text or "").strip()
+        if len(summary) > 1200:
+            summary = summary[:1197] + "…"
+        return {
+            "sessionId": (meta.session_id or sd.name).strip(),
+            "meta": session_meta_mapping(meta, path=sd, origin=origin),
+            "summary": summary,
+            "backgroundJobs": SessionJobs.json_rows(jobs),
+            "schedules": SessionJobs.json_rows(schedules),
+            "workflows": SessionJobs.json_rows(workflows),
+            "turns": {
+                "total": len(segs),
+                # Short assistant preview for the list: full wrap-up is for open
+                # cards / session/turns — 12k×N turns made overview multi‑100KB.
+                "turns": [
+                    turn_segment_mapping(
+                        s,
+                        include_event_indexes=False,
+                        assistant_max_chars=400,
+                        subagent_runs=runs,
+                    )
+                    for s in segs
+                ],
+                "subagentRuns": [subagent_run_mapping(r) for r in runs],
+            },
+            "timeline": {
+                "total": len(events),
+                "offset": 0,
+                "limit": 0,
+                "truncated": False,
+                "events": [],
+                "lazy": True,
+            },
+            "notes": {
+                "revision": notes_rev,
+                "count": notes_count,
+                "notes": notes_rows,
+                "schema": cls.notes_schema(),
+            },
+            "findings": findings_block,
+        }
+
+    @classmethod
+    def build(cls, session_dir: Path, *, work_dir: Path | None = None) -> JsonObject:
+        """Meta + turns + notes + findings (timeline lazy); one in-flight per path."""
+        sd = Path(session_dir)
+        cache_key = cls.cache_key(sd)
+
+        while True:
+            stamp = cls.input_stamp(sd)
+            cached = cls._cache.get(cache_key)
+            if cached is not None and cached[0] == stamp:
+                return cached[1]
+
+            owner = False
+            with cls._lock:
+                fut = cls._inflight.get(cache_key)
+                if fut is None:
+                    fut = Future()
+                    cls._inflight[cache_key] = fut
+                    owner = True
+
+            if not owner:
+                fut.result()
+                continue
+
+            try:
+                out = cls.uncached(sd, work_dir=work_dir)
+                # Stamp after build so a growth mid-flight forces a recheck.
+                done_stamp = cls.input_stamp(sd)
+                cls._cache[cache_key] = (done_stamp, out)
+                if not fut.done():
+                    fut.set_result(out)
+                return out
+            except Exception as exc:
+                if not fut.done():
+                    fut.set_exception(exc)
+                raise
+            finally:
+                with cls._lock:
+                    if cls._inflight.get(cache_key) is fut:
+                        del cls._inflight[cache_key]
 
 
 def overview_input_stamp(session_dir: Path) -> _OverviewStamp:
     """Inputs that must match for a cached overview to be reused."""
-    sd = Path(session_dir)
-    notes_rev = ""
-    try:
-        notes_rev = notes_snapshot(sd).revision
-    except Exception:
-        logger.debug("notes stamp for overview %s", sd, exc_info=True)
-    job_files, monitor_status = job_input_stamp(sd)
-    return (
-        session_timeline_stamp(sd),
-        notes_rev,
-        _findings_cache_stamp(sd),
-        job_files,
-        monitor_status,
-    )
-
-
-_overview_input_stamp = overview_input_stamp
-
-
-def _json_value_rows(rows: list[JsonObject]) -> list[JsonValue]:
-    """Overview job rows as a JSON list value."""
-    out: list[JsonValue] = []
-    for row in rows:
-        out.append(row)
-    return out
-
-
-def _copy_job_lists(
-    jobs: list[JsonObject],
-    schedules: list[JsonObject],
-    workflows: list[JsonObject],
-) -> _JobLists:
-    """Shallow-copy overview job rows so later index writes stay local."""
-    return (
-        [dict(row) for row in jobs],
-        [dict(row) for row in schedules],
-        [dict(row) for row in workflows],
-    )
-
-
-def _job_bookend_key(events: list[TraceEvent]) -> _JobBookendKey:
-    """Identity of timeline job / schedule bookends already in *events*."""
-    rows: list[tuple[str, str, str]] = []
-    for ev in events:
-        kind = ev.event_type or ""
-        if kind not in {"task_backgrounded", "task_completed"} and not kind.startswith(
-            "scheduled_task_"
-        ):
-            continue
-        rows.append((kind, event_task_id(ev), ev.tool_call_id or ""))
-    return tuple(rows)
-
-
-def _overview_job_payload(
-    session_dir: Path,
-    events: list[TraceEvent],
-    cache_key: str,
-) -> _JobLists:
-    """Jobs / schedules / workflows, reused when files and bookends match."""
-    sd = Path(session_dir)
-    reuse_key = (job_input_stamp(sd), _job_bookend_key(events))
-    cached = _job_payload_cache.get(cache_key)
-    if cached is not None and cached[0] == reuse_key:
-        jobs, schedules, workflows = _copy_job_lists(*cached[1])
-    else:
-        packed = load_session_jobs(sd, events)
-        jobs = [job_mapping(j) for j in packed.jobs]
-        schedules = [schedule_mapping(s) for s in packed.schedules]
-        workflows = [workflow_mapping(w) for w in packed.workflows]
-        _job_payload_cache[cache_key] = (reuse_key, _copy_job_lists(jobs, schedules, workflows))
-    set_bookend_indexes(events, jobs, workflows)
-    return jobs, schedules, workflows
-
-
-def _build_session_overview_uncached(
-    session_dir: Path,
-    *,
-    work_dir: Path | None = None,
-) -> JsonObject:
-    """Build overview without single-flight / result cache."""
-    sd = Path(session_dir)
-    origin = _session_origin(sd, work_dir)
-    meta = load_session_meta(sd, include_timeline_count=False)
-    meta.origin = origin
-    events = parse_timeline(sd)
-    meta.num_events = len(events)
-    segs, turn_map = _turn_view_for_session(sd, events)
-    runs = subagent_runs_for_session(sd, events, segs, turn_map)
-    notes_rev = ""
-    notes_count = 0
-    notes_rows: list[JsonValue] = []
-    try:
-        snap = notes_snapshot(sd)
-        notes_rev = snap.revision
-        notes_count = len(snap.doc.notes)
-        for note in snap.doc.sorted_notes()[:40]:
-            notes_rows.append(
-                {
-                    "id": note.id,
-                    "turnIndex": note.turn_index,
-                    "fields": dict(note.fields),
-                    "eventIndices": list(note.event_indices),
-                    "createdAt": note.created_at,
-                    "updatedAt": note.updated_at,
-                }
-            )
-    except Exception:
-        logger.debug("notes for session/overview %s", sd, exc_info=True)
-
-    findings_block = build_session_findings(sd, segs=segs)
-    jobs, schedules, workflows = _overview_job_payload(sd, events, _session_cache_key(sd))
-
-    summary = (meta.summary_text or "").strip()
-    if len(summary) > 1200:
-        summary = summary[:1197] + "…"
-
-    return {
-        "sessionId": (meta.session_id or sd.name).strip(),
-        "meta": session_meta_mapping(meta, path=sd, origin=origin),
-        "summary": summary,
-        "backgroundJobs": _json_value_rows(jobs),
-        "schedules": _json_value_rows(schedules),
-        "workflows": _json_value_rows(workflows),
-        "turns": {
-            "total": len(segs),
-            # Short assistant preview for the list: full wrap-up is for open cards
-            # / session/turns — 12k×N turns made overview multi‑100KB and slow.
-            "turns": [
-                turn_segment_mapping(
-                    s,
-                    include_event_indexes=False,
-                    assistant_max_chars=400,
-                    subagent_runs=runs,
-                )
-                for s in segs
-            ],
-            "subagentRuns": [subagent_run_mapping(r) for r in runs],
-        },
-        "timeline": {
-            "total": len(events),
-            "offset": 0,
-            "limit": 0,
-            "truncated": False,
-            "events": [],
-            "lazy": True,
-        },
-        "notes": {
-            "revision": notes_rev,
-            "count": notes_count,
-            "notes": notes_rows,
-            "schema": _notes_schema_mapping(),
-        },
-        "findings": findings_block,
-    }
-
-
-def _notes_schema_mapping() -> JsonObject:
-    """Operator notes schema for HUD/TUI forms (same shape as notes/list)."""
-    schema = load_schema()
-    return {
-        "id": schema.schema_id,
-        "fields": [
-            {
-                "id": field.id,
-                "label": field.label or field.id,
-                "choices": list(field.choices),
-                "pick": field.pick,
-            }
-            for field in schema.fields
-        ],
-    }
+    return SessionOverview.input_stamp(session_dir)
 
 
 def build_session_overview(
@@ -826,88 +735,7 @@ def build_session_overview(
     reuse a stamp-keyed result so dual open+live-poll does not thrash multi‑MB
     host sessions.
     """
-    sd = Path(session_dir)
-    cache_key = _session_cache_key(sd)
-
-    while True:
-        stamp = _overview_input_stamp(sd)
-        cached = _overview_cache.get(cache_key)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-
-        owner = False
-        with _overview_inflight_lock:
-            fut = _overview_inflight.get(cache_key)
-            if fut is None:
-                fut = Future()
-                _overview_inflight[cache_key] = fut
-                owner = True
-
-        if not owner:
-            fut.result()
-            continue
-
-        try:
-            out = _build_session_overview_uncached(sd, work_dir=work_dir)
-            # Stamp after build so a growth mid-flight forces a recheck.
-            done_stamp = _overview_input_stamp(sd)
-            _overview_cache[cache_key] = (done_stamp, out)
-            if not fut.done():
-                fut.set_result(out)
-            return out
-        except Exception as exc:
-            if not fut.done():
-                fut.set_exception(exc)
-            raise
-        finally:
-            with _overview_inflight_lock:
-                if _overview_inflight.get(cache_key) is fut:
-                    del _overview_inflight[cache_key]
-
-
-def _session_path_key(session_dir: Path) -> str:
-    """Stable path key for turn-view and overview caches."""
-    return _session_cache_key(session_dir)
-
-
-def _turn_view_for_session(
-    session_dir: Path,
-    events: list[TraceEvent],
-) -> tuple[list[TurnSegment], dict[int, int]]:
-    """Return (segments, event_index→display_turn) for *events*, stamp-cached.
-
-    Full re-segmentation of multi‑thousand event lists is the thrash path for
-    paged ``session/timeline``; reuse until :func:`session_timeline_stamp` moves.
-    """
-    sd = Path(session_dir)
-    key = _session_path_key(sd)
-    stamp = session_timeline_stamp(sd)
-    with _turn_view_lock:
-        cached = _turn_view_cache.get(key)
-        if cached is not None and cached[0] == stamp:
-            return cached[1], cached[2]
-    segs = segment_timeline_turns(events)
-    turn_by_index = event_display_turn_map(segs)
-    with _turn_view_lock:
-        _turn_view_cache[key] = (stamp, segs, turn_by_index)
-    return segs, turn_by_index
-
-
-def _timeline_kind_matches(event: TraceEvent, kind: str) -> bool:
-    """HUD kind filter: all / tools / user / asst / sess / subagents / errors."""
-    return event_matches_timeline_kind(event, kind)
-
-
-def _snippet_around(text: str, start: int, needle_len: int, radius: int = 40) -> str:
-    """One display line around *start* (character index in *text*)."""
-    lo = max(0, start - radius)
-    hi = min(len(text), start + max(needle_len, 1) + radius)
-    chunk = text[lo:hi].replace("\n", " ").replace("\r", " ")
-    if lo > 0:
-        chunk = f"…{chunk}"
-    if hi < len(text):
-        chunk = f"{chunk}…"
-    return chunk
+    return SessionOverview.build(session_dir, work_dir=work_dir)
 
 
 def timeline_query_hit(event: TraceEvent, query: str) -> tuple[str, str] | None:
@@ -924,38 +752,22 @@ def timeline_query_hit(event: TraceEvent, query: str) -> tuple[str, str] | None:
         ("preview", list_event_preview(event.summary_line, event.tool_name)[:200]),
         ("content", body[:8_000]),
     )
+
+    def snippet(text: str, start: int) -> str:
+        lo = max(0, start - 40)
+        hi = min(len(text), start + max(len(needle), 1) + 40)
+        chunk = text[lo:hi].replace("\n", " ").replace("\r", " ")
+        if lo > 0:
+            chunk = f"…{chunk}"
+        if hi < len(text):
+            chunk = f"{chunk}…"
+        return chunk
+
     for field, text in fields:
         pos = text.casefold().find(needle)
         if pos >= 0:
-            return field, _snippet_around(text, pos, len(needle))
+            return field, snippet(text, pos)
     return None
-
-
-def _timeline_query_matches(event: TraceEvent, query: str) -> bool:
-    """Casefold substring on type, tool, heading, and body."""
-    needle = (query or "").strip()
-    if not needle:
-        return True
-    return timeline_query_hit(event, query) is not None
-
-
-def _event_indexes_for_prompt(
-    segments: list[TurnSegment],
-    prompt_index: int,
-) -> set[int]:
-    """Timeline indexes for the turn(s) whose operator ``promptIndex`` matches.
-
-    Only the operator user row carries ``_meta.promptIndex`` on the wire.
-    Tools and assistant rows in the same turn usually have no meta, so a
-    per-event equality filter would drop them. Membership is events whose
-    enclosing ``turn_started.turn_number`` matches the segment label.
-    """
-    turn_by = event_display_turn_map(segments)
-    indexes: set[int] = set()
-    for seg in segments:
-        if seg.prompt_index == prompt_index:
-            indexes.update(int(e.index) for e in events_on_display_turn(seg, turn_by))
-    return indexes
 
 
 def build_session_timeline(
@@ -975,19 +787,19 @@ def build_session_timeline(
     sd = Path(session_dir)
     events = parse_timeline(sd)
     # Enclosing turn_started.turn_number on each event (HUD/TUI column).
-    _segs, turn_by_index = _turn_view_for_session(sd, events)
+    _segs, turn_by_index = SessionOverview.turn_view(sd, events)
     prompt_indexes: set[int] | None = None
     if prompt_index is not None:
-        prompt_indexes = _event_indexes_for_prompt(_segs, int(prompt_index))
+        prompt_indexes = TurnSegment.indexes_for_prompt(_segs, int(prompt_index))
     type_filter = (event_type or "").strip().casefold()
     filtered: list[TraceEvent] = []
     for ev in events:
         if type_filter and type_filter not in (ev.event_type or "").casefold():
             if type_filter not in (ev.type_label or "").casefold():
                 continue
-        if not _timeline_kind_matches(ev, kind):
+        if not event_matches_timeline_kind(ev, kind):
             continue
-        if not _timeline_query_matches(ev, query):
+        if query.strip() and timeline_query_hit(ev, query) is None:
             continue
         if prompt_indexes is not None and int(ev.index) not in prompt_indexes:
             continue
@@ -1067,7 +879,7 @@ def build_session_turns(session_dir: Path) -> JsonObject:
     """Turn segments for ``session/turns``."""
     sd = Path(session_dir)
     events = parse_timeline(sd)
-    segs, turn_map = _turn_view_for_session(sd, events)
+    segs, turn_map = SessionOverview.turn_view(sd, events)
     runs = subagent_runs_for_session(sd, events, segs, turn_map)
     return {
         "sessionId": sd.name,
@@ -1142,6 +954,7 @@ __all__ = [
     "build_session_timeline",
     "build_session_turns",
     "build_session_usage",
+    "SessionOverview",
     "timeline_query_hit",
     "finding_mapping",
     "session_meta_mapping",

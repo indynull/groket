@@ -12,7 +12,8 @@ from groket.constants import (
     TIMELINE_CACHE_MAX_ENV,
     TIMELINE_CACHE_MAXSIZE,
 )
-from groket.session import control_views as cv_mod
+from groket.session.control_views import SessionOverview
+from groket.session.jobs import SessionJobs
 
 
 class TestResolveMaxsize:
@@ -124,9 +125,9 @@ class TestParserCachesAreBounded:
             parser_mod._runtime_markers_cache,
             parser_mod._list_runtime_cache,
             parser_mod._system_prompt_cache,
-            cv_mod._overview_cache,
-            cv_mod._job_payload_cache,
-            cv_mod._turn_view_cache,
+            SessionOverview._cache,
+            SessionJobs._row_cache,
+            SessionOverview._turn_cache,
         ):
             assert isinstance(cache, BoundedCache)
 

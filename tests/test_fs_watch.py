@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from async_wait import wait_until_sync
-from groket.fs_watch import TraceTreeWatch, _path_looks_relevant
+from groket.fs_watch import TraceTreeWatch
 
 
 def _inotify_watch_paths(watch: TraceTreeWatch) -> list[str]:
@@ -25,22 +25,22 @@ def _inotify_watch_paths(watch: TraceTreeWatch) -> list[str]:
 
 
 def test_path_looks_relevant() -> None:
-    assert _path_looks_relevant("/x/updates.jsonl")
-    assert _path_looks_relevant("/x/events.jsonl")
-    assert _path_looks_relevant("/runs/traces/groket-abc")
-    assert not _path_looks_relevant("/x/random.bin")
+    assert TraceTreeWatch.path_relevant("/x/updates.jsonl")
+    assert TraceTreeWatch.path_relevant("/x/events.jsonl")
+    assert TraceTreeWatch.path_relevant("/runs/traces/groket-abc")
+    assert not TraceTreeWatch.path_relevant("/x/random.bin")
 
 
 def test_path_looks_relevant_ignores_workspace_images_compaction() -> None:
     """Workspace, images, and compaction trees are not watch hits."""
     sess = "/home/ali/.grok/sessions/%2Fproj/sid"
-    assert not _path_looks_relevant(f"{sess}/workspace/src/a.py")
-    assert not _path_looks_relevant(f"{sess}/images/x.png")
-    assert not _path_looks_relevant(f"{sess}/compaction/y")
-    assert not _path_looks_relevant(f"{sess}/workspace/updates.jsonl")
-    assert _path_looks_relevant(f"{sess}/updates.jsonl")
-    assert _path_looks_relevant(f"{sess}/summary.json")
-    assert _path_looks_relevant(f"{sess}/signals.json")
+    assert not TraceTreeWatch.path_relevant(f"{sess}/workspace/src/a.py")
+    assert not TraceTreeWatch.path_relevant(f"{sess}/images/x.png")
+    assert not TraceTreeWatch.path_relevant(f"{sess}/compaction/y")
+    assert not TraceTreeWatch.path_relevant(f"{sess}/workspace/updates.jsonl")
+    assert TraceTreeWatch.path_relevant(f"{sess}/updates.jsonl")
+    assert TraceTreeWatch.path_relevant(f"{sess}/summary.json")
+    assert TraceTreeWatch.path_relevant(f"{sess}/signals.json")
 
 
 def test_watch_start_stop(tmp_path: Path) -> None:

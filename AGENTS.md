@@ -96,8 +96,11 @@ hide debt.
 **One clear path** per behaviour (one install method, one Docker client, one
 config source). No secondary branches “just in case.”
 
-Fallbacks only when platforms truly diverge (e.g. Windows vs POSIX), with a
-short positive comment on each path. If a single path is wrong, fix that path.
+Do not ``except Exception`` and then run a second implementation (force
+rebuild after incremental patch, parse again after a failed parse, empty
+object after missing JSON that still builds a row). A missing file or a
+true platform split is one narrow catch with a short positive comment.
+If a single path is wrong, fix that path.
 
 ### Feature delivery (mandatory for product changes)
 
@@ -387,8 +390,9 @@ Published schemas (also under ``schemas/``; GitHub Pages via
 
 ### 4.3 Module purity
 
-Keep type/model modules limited to types and type-adjacent members. Move
-helpers to ``utils``, a focused module, or the caller layer.
+Keep type/model modules limited to types and type-adjacent members.
+Behaviour that belongs to a dataclass or cache lives on that type.
+``utils`` is only for cross-cutting helpers that have no owner.
 
 | Module | Allowed | Forbidden |
 |--------|---------|-----------|
@@ -407,6 +411,8 @@ Module-level imports at top (stdlib → third party → local) after
 Do not use function-level imports to hide cycles — break cycles with leaf
 modules and ``TYPE_CHECKING``. Rare exceptions (CLI defers TUI for light
 ``--help``; dynamic plugin ``importlib``) need one factual comment.
+``groket.session`` package init is import-light so ``parser`` can load
+``session.workflows``. Import from the owning submodule.
 
 ### 4.5 Error handling
 
@@ -465,9 +471,11 @@ exceeds a limit, split or simplify that unit in the same change — no blanket
 
 ### 4.8 Naming
 
-Domain-shaped, coredis-style: verb+object publics; descriptive privates; no
-``_helper`` / ``_v2`` piles. Tests: ``test_<behaviour>`` under the matching
-domain folder.
+Domain-shaped, coredis-style: verb+object publics; one idea, one ordinary
+word. Shared behaviour goes on the type that owns the data
+(``WorkflowRun.from_directory``, ``TraceTreeWatch.path_relevant``). Do not
+add a new module-level ``def _…`` pile next to that type. Tests:
+``test_<behaviour>`` under the matching domain folder.
 
 ---
 

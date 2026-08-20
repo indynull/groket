@@ -372,20 +372,6 @@ _CATALOG_NOISE_DIR_NAMES = frozenset(
 )
 
 
-def _catalog_ignore_watch_path(path: Path) -> bool:
-    """True for workspace / image / compaction trees (not list or timeline)."""
-    return any(part.casefold() in _CATALOG_NOISE_DIR_NAMES for part in path.parts)
-
-
-def _catalog_list_rebuild_path(path: Path) -> bool:
-    """True when a watch path can change a painted session/list field."""
-    if _catalog_ignore_watch_path(path) or path.name == "events.jsonl":
-        return False
-    if path.is_dir() or not path.name:
-        return True
-    return path.name in _CATALOG_LIST_FILE_NAMES
-
-
 def apply_fs_catalog_events(
     cache: SessionCatalogCache,
     paths: list[str],
@@ -398,7 +384,7 @@ def apply_fs_catalog_events(
     :param roots: Catalog roots being watched.
     :returns: ``(changed_sessions, notes_sessions, list_changed)``.
     """
-    sessions = _session_dirs_from_event_paths(paths, roots=roots)
+    sessions = CatalogWatchApply.session_dirs(paths, roots=roots)
     notes_sessions = [
         s
         for s in sessions
@@ -406,28 +392,22 @@ def apply_fs_catalog_events(
         or any("operator_notes.toml" in p for p in paths)
     ]
     list_changed: dict[str, bool] = {}
-    list_sessions = _session_dirs_from_event_paths(
-        [p for p in paths if _catalog_list_rebuild_path(Path(p))],
+    list_sessions = CatalogWatchApply.session_dirs(
+        [p for p in paths if CatalogWatchApply.list_rebuild_path(Path(p))],
         roots=roots,
     )
     if list_sessions:
         try:
             _rows, list_changed = cache.refresh_rows(list_sessions)
-        except Exception:
+        except OSError:
             logger.debug("catalog row refresh after FS event failed", exc_info=True)
-            try:
-                cache.get(force=True)
-            except Exception:
-                logger.debug("catalog force refresh after FS event failed", exc_info=True)
-            # Fingerprint unknown after a failed incremental patch: clients
-            # must treat every dirty session as a list change.
             list_changed = {session.name: True for session in list_sessions}
     for session in sessions:
         list_changed.setdefault(session.name, False)
     return sessions, notes_sessions, list_changed
 
 
-class _CatalogWatchApply:
+class CatalogWatchApply:
     """Coalesce watch paths on the serve loop; run catalog disk I/O off it."""
 
     def __init__(
@@ -447,6 +427,50 @@ class _CatalogWatchApply:
         self._pending: set[str] = set()
         self._handle: asyncio.TimerHandle | None = None
         self._task: asyncio.Task[None] | None = None
+
+    @staticmethod
+    def ignore_path(path: Path) -> bool:
+        """True for workspace / image / compaction trees."""
+        return any(part.casefold() in _CATALOG_NOISE_DIR_NAMES for part in path.parts)
+
+    @classmethod
+    def list_rebuild_path(cls, path: Path) -> bool:
+        """True when a watch path can change a painted session/list field."""
+        if cls.ignore_path(path) or path.name == "events.jsonl":
+            return False
+        if path.is_dir() or not path.name:
+            return True
+        return path.name in _CATALOG_LIST_FILE_NAMES
+
+    @classmethod
+    def session_dirs(cls, paths: list[str], *, roots: list[Path]) -> list[Path]:
+        """Map watch paths to session directories under *roots*."""
+        found: dict[str, Path] = {}
+        root_resolved: list[Path] = []
+        for root in roots:
+            try:
+                root_resolved.append(Path(root).expanduser().resolve())
+            except OSError:
+                root_resolved.append(Path(root).expanduser())
+        for raw in paths:
+            try:
+                p = Path(raw).expanduser().resolve()
+            except OSError:
+                p = Path(raw).expanduser()
+            if cls.ignore_path(p):
+                continue
+            for root in root_resolved:
+                try:
+                    rel = p.relative_to(root)
+                except ValueError:
+                    continue
+                if not rel.parts:
+                    continue
+                session = session_dir_for_watch_path(p, root)
+                if session is not None:
+                    found[str(session)] = session
+                break
+        return list(found.values())
 
     def enqueue(self, paths: list[str]) -> None:
         """Watch-thread entry: marshal paths onto the serve loop."""
@@ -494,7 +518,7 @@ class _CatalogWatchApply:
     def _apply_disk(self, paths: list[str]) -> tuple[list[Path], list[Path], dict[str, bool]]:
         if isinstance(self._cache, SessionCatalogCache):
             return apply_fs_catalog_events(self._cache, paths, self._roots)
-        sessions = _session_dirs_from_event_paths(paths, roots=self._roots)
+        sessions = CatalogWatchApply.session_dirs(paths, roots=self._roots)
         notes = [
             session
             for session in sessions
@@ -528,40 +552,6 @@ class _CatalogWatchApply:
                 await self._server.publish_notes_changed(session)
             except Exception:
                 logger.debug("publish notes/changed failed", exc_info=True)
-
-
-def _session_dirs_from_event_paths(
-    paths: list[str],
-    *,
-    roots: list[Path],
-) -> list[Path]:
-    """Map FS event paths to session directories under *roots*."""
-    found: dict[str, Path] = {}
-    root_resolved: list[Path] = []
-    for root in roots:
-        try:
-            root_resolved.append(Path(root).expanduser().resolve())
-        except OSError:
-            root_resolved.append(Path(root).expanduser())
-    for raw in paths:
-        try:
-            p = Path(raw).expanduser().resolve()
-        except OSError:
-            p = Path(raw).expanduser()
-        if _catalog_ignore_watch_path(p):
-            continue
-        for root in root_resolved:
-            try:
-                rel = p.relative_to(root)
-            except ValueError:
-                continue
-            if not rel.parts:
-                continue
-            session = session_dir_for_watch_path(p, root)
-            if session is not None:
-                found[str(session)] = session
-            break
-    return list(found.values())
 
 
 async def serve_control_forever(
@@ -618,7 +608,7 @@ async def serve_control_forever(
 
         cache._on_rebuilt = _catalog_ready
 
-    apply = _CatalogWatchApply(
+    apply = CatalogWatchApply(
         server=server,
         cache=cache if isinstance(cache, SessionCatalogCache) else None,
         roots=uniq_roots,

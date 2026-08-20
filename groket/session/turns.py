@@ -12,6 +12,7 @@ from .tagged_blocks import (  # noqa: F401 — re-export for session.turns calle
     harness_user_chrome_heading,
     is_harness_user_chrome,
     operator_prompt_text,
+    unwrap_for_display,
 )
 
 _TURN_NUM_RE = re.compile(r"turn_number\s*=\s*(\d+)", re.I)
@@ -74,6 +75,59 @@ class TurnSegment:
         if self.outcome:
             return f"{head} ({self.outcome})"
         return head
+
+    def user_prompt_preview(self, *, max_chars: int = 320) -> tuple[str, int | None]:
+        """First operator user message in this turn and its timeline index."""
+        for event in self.events:
+            if not is_operator_user_event(event):
+                continue
+            text = operator_prompt_text(event.content or "", max_chars=max_chars)
+            if not text:
+                continue
+            return text, int(event.index)
+        return "", None
+
+    def assistant_preview(self, *, max_chars: int = 12_000) -> tuple[str, int | None]:
+        """Last non-empty assistant message in this turn (the wrap-up)."""
+        last_text = ""
+        last_idx: int | None = None
+        for event in self.events:
+            if event.event_type not in et.AGENT_TYPES:
+                continue
+            raw = unwrap_for_display(event.content or "").strip()
+            if not raw:
+                continue
+            last_text = raw
+            last_idx = int(event.index)
+        if not last_text:
+            return "", None
+        if len(last_text) > max_chars:
+            last_text = last_text[: max_chars - 1] + "…"
+        return last_text, last_idx
+
+    @classmethod
+    def turn_indices_for(cls, segments: list[TurnSegment], event_indices: list[int]) -> list[int]:
+        """Enclosing trace turn ids for *event_indices* (unique, order preserved)."""
+        turn_by = event_display_turn_map(segments)
+        out: list[int] = []
+        seen: set[int] = set()
+        for ei in event_indices:
+            ti = turn_by.get(int(ei))
+            if ti is None or ti in seen:
+                continue
+            seen.add(ti)
+            out.append(ti)
+        return out
+
+    @classmethod
+    def indexes_for_prompt(cls, segments: list[TurnSegment], prompt_index: int) -> set[int]:
+        """Timeline indexes for turns whose operator ``promptIndex`` is *prompt_index*."""
+        turn_by = event_display_turn_map(segments)
+        indexes: set[int] = set()
+        for seg in segments:
+            if seg.prompt_index == prompt_index:
+                indexes.update(int(e.index) for e in events_on_display_turn(seg, turn_by))
+        return indexes
 
     def duration_seconds(self, durations: dict[int, float] | None = None) -> float | None:
         """Span from first to last event timestamp (seconds), else sum of durations map."""

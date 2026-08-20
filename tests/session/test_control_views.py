@@ -544,6 +544,36 @@ def test_build_session_findings_maps_events_to_turns(
     assert ov["findings"]["findings"][0]["primaryTurnIndex"] is not None
 
 
+def test_finding_mapping_uses_typed_finding_fields() -> None:
+    from groket.analysis.base import Finding
+    from groket.models import Severity, TraceEvent
+    from groket.session.control_views import finding_mapping
+    from groket.session.turns import segment_timeline_turns
+
+    ev = TraceEvent(
+        index=3,
+        event_type="user_message_chunk",
+        content="<user_query>x</user_query>",
+    )
+    segs = segment_timeline_turns([ev])
+    finding = Finding(
+        id="f-issue",
+        plugin_id="basic",
+        severity=Severity.HIGH,
+        title="Broke it",
+        detail="missed a check",
+        category="workflow",
+        event_indices=[3],
+        extras={"what_model_did": "ran", "where": "t0", "why": "missed", "pattern": "x"},
+    )
+    row = finding_mapping(finding, segs=segs)
+    assert row["id"] == "f-issue"
+    assert row["severity"] == "high"
+    assert row["pluginId"] == "basic"
+    assert row["extras"]["what_model_did"] == "ran"
+    assert row["turnIndices"]
+
+
 def test_timeline_event_kind_and_tool_family() -> None:
     from groket.models import TraceEvent
     from groket.session.control_views import timeline_event_mapping, tool_family
@@ -592,8 +622,8 @@ def test_build_session_timeline_reuses_turn_view_on_warm_pages(tmp_path: Path) -
     import groket.session.control_views as cv
 
     sd = _write_session(tmp_path, "sess-warm-tl")
-    cv._turn_view_cache.clear()
-    cv._overview_cache.clear()
+    cv.SessionOverview._turn_cache.clear()
+    cv.SessionOverview._cache.clear()
 
     real_segment = cv.segment_timeline_turns
     real_map = cv.event_display_turn_map
@@ -621,22 +651,23 @@ def test_build_session_timeline_reuses_turn_view_on_warm_pages(tmp_path: Path) -
     assert segment_calls == 1
     assert map_calls == 1
     # Cache entry present for this session.
-    assert any(sd.name in k or str(sd) in k for k in cv._turn_view_cache)
+    assert any(sd.name in k or str(sd) in k for k in cv.SessionOverview._turn_cache)
 
 
 def test_build_session_overview_single_flight_and_cache(tmp_path: Path) -> None:
     """Parallel overview for one session builds once; warm re-call is cached."""
     import threading
     from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
 
     import groket.session.control_views as cv
 
     sd = _write_session(tmp_path, "sess-flight")
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
 
     body_calls = 0
-    orig = cv._build_session_overview_uncached
+    orig = cv.SessionOverview.uncached
     gate = threading.Event()
     entered = threading.Event()
 
@@ -647,9 +678,11 @@ def test_build_session_overview_single_flight_and_cache(tmp_path: Path) -> None:
         assert gate.wait(timeout=5.0)
         return orig(session_dir, work_dir=work_dir)
 
-    cv._build_session_overview_uncached = slow_body  # type: ignore[assignment]
     try:
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with (
+            ThreadPoolExecutor(max_workers=4) as pool,
+            patch.object(cv.SessionOverview, "uncached", side_effect=slow_body),
+        ):
             futs = [pool.submit(build_session_overview, sd) for _ in range(4)]
             assert entered.wait(timeout=5.0)
             gate.set()
@@ -662,9 +695,8 @@ def test_build_session_overview_single_flight_and_cache(tmp_path: Path) -> None:
         assert body_calls == 1
         assert warm is results[0]
     finally:
-        cv._build_session_overview_uncached = orig  # type: ignore[assignment]
-        cv._overview_inflight.clear()
-        cv._overview_cache.clear()
+        cv.SessionOverview._inflight.clear()
+        cv.SessionOverview._cache.clear()
 
 
 def test_overview_stamp_monitor_done_not_signals_or_shell_log(tmp_path: Path) -> None:
@@ -703,8 +735,8 @@ def test_overview_stamp_monitor_done_not_signals_or_shell_log(tmp_path: Path) ->
         + "\n",
         encoding="utf-8",
     )
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
     parses = 0
     real = cv.parse_timeline
 
@@ -849,24 +881,23 @@ def test_overview_reuses_jobs_when_only_timeline_grows(tmp_path: Path) -> None:
     """Timeline-only append keeps prior job/workflow rows; bookends stay first hits."""
     import groket.session.control_views as cv
     from groket.parser import parse_timeline
-    from groket.session.jobs import job_event_index, load_session_jobs
+    from groket.session.jobs import SessionJobs, job_event_index, load_session_jobs
     from groket.session.workflows import workflow_event_index
 
     sd = _write_jobs_workflows_session(tmp_path)
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
-    if hasattr(cv, "_job_payload_cache"):
-        cv._job_payload_cache.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
+    SessionJobs._row_cache.clear()
 
     loads = 0
-    real = cv.load_session_jobs
+    real = SessionJobs.load
 
-    def counting_load(session_dir: Path, events: object = None) -> object:
+    def counting_load(session_dir: Path, events: object = None) -> SessionJobs:
         nonlocal loads
         loads += 1
-        return real(session_dir, events)  # type: ignore[arg-type]
+        return real(session_dir, events)
 
-    cv.load_session_jobs = counting_load  # type: ignore[assignment]
+    setattr(SessionJobs, "load", counting_load)
     try:
         first = build_session_overview(sd)
         assert loads == 1
@@ -909,11 +940,10 @@ def test_overview_reuses_jobs_when_only_timeline_grows(tmp_path: Path) -> None:
         for run in packed.workflows:
             assert by_wf[run.run_id] == workflow_event_index(run, events)
     finally:
-        cv.load_session_jobs = real  # type: ignore[assignment]
-        cv._overview_cache.clear()
-        cv._overview_inflight.clear()
-        if hasattr(cv, "_job_payload_cache"):
-            cv._job_payload_cache.clear()
+        setattr(SessionJobs, "load", real)
+        cv.SessionOverview._cache.clear()
+        cv.SessionOverview._inflight.clear()
+        SessionJobs._row_cache.clear()
 
 
 def test_overview_includes_new_timeline_job_after_first_build(tmp_path: Path) -> None:
@@ -925,8 +955,8 @@ def test_overview_includes_new_timeline_job_after_first_build(tmp_path: Path) ->
     term.mkdir()
     bg_log = term / "call-shell.log"
     bg_log.write_text("hello from bg\n", encoding="utf-8")
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
     if hasattr(cv, "_job_payload_cache"):
         cv._job_payload_cache.clear()
     try:
@@ -957,8 +987,8 @@ def test_overview_includes_new_timeline_job_after_first_build(tmp_path: Path) ->
         assert [j["id"] for j in second["backgroundJobs"]] == ["job-bg-1"]
         assert second["backgroundJobs"][0]["status"] == "running"
     finally:
-        cv._overview_cache.clear()
-        cv._overview_inflight.clear()
+        cv.SessionOverview._cache.clear()
+        cv.SessionOverview._inflight.clear()
         if hasattr(cv, "_job_payload_cache"):
             cv._job_payload_cache.clear()
 
@@ -995,8 +1025,8 @@ def test_overview_updates_job_status_when_timeline_gains_completed(
         + "\n",
         encoding="utf-8",
     )
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
     if hasattr(cv, "_job_payload_cache"):
         cv._job_payload_cache.clear()
     try:
@@ -1034,8 +1064,8 @@ def test_overview_updates_job_status_when_timeline_gains_completed(
         assert [j["id"] for j in second["backgroundJobs"]] == ["job-bg-1"]
         assert second["backgroundJobs"][0]["status"] == "done"
     finally:
-        cv._overview_cache.clear()
-        cv._overview_inflight.clear()
+        cv.SessionOverview._cache.clear()
+        cv.SessionOverview._inflight.clear()
         if hasattr(cv, "_job_payload_cache"):
             cv._job_payload_cache.clear()
 
@@ -1046,8 +1076,8 @@ def test_overview_bookend_indexes_one_event_walk(tmp_path: Path) -> None:
     from groket.session import jobs as jobs_mod
 
     sd = _write_jobs_workflows_session(tmp_path)
-    cv._overview_cache.clear()
-    cv._overview_inflight.clear()
+    cv.SessionOverview._cache.clear()
+    cv.SessionOverview._inflight.clear()
     if hasattr(cv, "_job_payload_cache"):
         cv._job_payload_cache.clear()
 
@@ -1098,8 +1128,8 @@ def test_overview_bookend_indexes_one_event_walk(tmp_path: Path) -> None:
         jobs_mod.set_bookend_indexes = real_set  # type: ignore[assignment]
         jobs_mod.job_event_index = real_job_idx  # type: ignore[assignment]
         wf_mod.workflow_event_index = real_wf_idx  # type: ignore[assignment]
-        cv._overview_cache.clear()
-        cv._overview_inflight.clear()
+        cv.SessionOverview._cache.clear()
+        cv.SessionOverview._inflight.clear()
         if hasattr(cv, "_job_payload_cache"):
             cv._job_payload_cache.clear()
 
@@ -1207,7 +1237,6 @@ def test_build_session_diff_lists_rewind_files(tmp_path: Path) -> None:
 def test_timeline_kind_chrome_is_session_not_user() -> None:
     """Harness user-chrome is Session on both the TUI view check and the wire filter."""
     from conftest import make_trace_event
-    from groket.session.control_views import _timeline_kind_matches
     from groket.session.turns import event_matches_timeline_kind
     from groket.ui.screens.browser import BrowserScreen
 
@@ -1233,5 +1262,4 @@ def test_timeline_kind_chrome_is_session_not_user() -> None:
         (user, "tools", False),
     ):
         assert event_matches_timeline_kind(ev, mode) is want
-        assert _timeline_kind_matches(ev, mode) is want
         assert screen._event_matches_timeline_view(ev, mode) is want
