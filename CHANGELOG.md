@@ -7,6 +7,8 @@ is tagged.
 
 ### Feature
 
+- HUD loading uses the same spinner overlay for the catalog, an opening
+  session, Timeline, and Stats.
 - Serve watches membership directories and four session files with
   watchfiles. Workspace is not subscribed. An open session tails new
   ``updates.jsonl`` bytes. The 15-second catalog warm loop and the HUD
