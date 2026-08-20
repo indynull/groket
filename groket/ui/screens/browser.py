@@ -116,7 +116,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
     TAB_CONTENT_ID = "browser-tabs"
     TAB_PANES = (
         ("tab-timeline", "#timeline-list"),
-        ("tab-summary", "#summary-scroll"),
+        ("tab-summary", "#summary-session-scroll"),
         ("tab-diff", "#diff-file-list"),
         ("tab-findings", "#findings-table"),
         ("tab-reports", "#reports-scroll"),
@@ -144,6 +144,41 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
     def action_tab_summary(self) -> None:
         self.activate_tab_pane("tab-summary")
+
+    def action_overview_section(self) -> None:
+        """Cycle Summary inner tabs (click the strip; palette can cycle)."""
+        if self._active_browser_tab() != "tab-summary":
+            return
+        try:
+            tabs = self.query_one("#summary-tabs", TabbedContent)
+        except Exception:
+            return
+        order = (
+            "summary-session",
+            "summary-tasks",
+            "summary-workflows",
+            "summary-subagents",
+            "summary-stats",
+        )
+        try:
+            i = order.index(tabs.active)
+        except ValueError:
+            i = 0
+        nxt = order[(i + 1) % len(order)]
+        tabs.active = nxt
+        focus = {
+            "summary-session": "#summary-content",
+            "summary-tasks": "#stats-jobs-table",
+            "summary-workflows": "#stats-workflows-table",
+            "summary-subagents": "#stats-subagents-table",
+            "summary-stats": "#stats-events-table",
+        }[nxt]
+
+        def _focus() -> None:
+            with suppress(Exception):
+                focus_primary_list(self.query_one(focus))
+
+        self.call_after_refresh(_focus)
 
     def action_tab_diff(self) -> None:
         self.activate_tab_pane("tab-diff")
@@ -224,7 +259,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._subagent_runs: list[SubagentRun] = []
         self._session_jobs = SessionJobs(jobs=[], schedules=[])
         self._overview_payload: JsonObject | None = None
-        self._summary_turn_first: dict[int, int] = {}
+
         self._event_reader: bool = False
 
     def _analysis_svc(self):
@@ -314,32 +349,38 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                     with Vertical(id="detail-column"):
                         yield DetailView(id="detail-panel")
             with TabPane(U.tab_summary(), id="tab-summary"):
-                with VerticalScroll(id="summary-scroll"):
-                    with Vertical(classes="panel-card"):
-                        yield SelectableStatic(id="summary-content")
-                    with Horizontal(id="summary-turns-pair", classes="summary-pair"):
-                        with Vertical(id="summary-turns-card", classes="panel-card"):
-                            yield Static(t("ui-turns-1"), classes="panel-card-title")
-                            yield ListDataTable(id="stats-turns-table")
-                        with Vertical(id="summary-subagents-card", classes="panel-card"):
-                            yield Static(t("ui-subagent-runs"), classes="panel-card-title")
-                            yield ListDataTable(id="stats-subagents-table")
-                    with Vertical(id="summary-jobs-card", classes="panel-card"):
-                        yield Static(t("ui-background-jobs"), classes="panel-card-title")
-                        yield ListDataTable(id="stats-jobs-table")
-                    with Vertical(id="summary-workflows-card", classes="panel-card"):
-                        yield Static(t("ui-workflows"), classes="panel-card-title")
-                        yield ListDataTable(id="stats-workflows-table")
-                    with Horizontal(id="summary-stats-pair", classes="summary-pair"):
-                        with Vertical(classes="panel-card"):
-                            yield Static(U.event_types(), classes="panel-card-title")
-                            yield DataTable(id="stats-events-table")
-                        with Vertical(classes="panel-card"):
-                            yield Static(U.tool_timing(), classes="panel-card-title")
-                            yield DataTable(id="stats-tools-table")
-                    with Vertical(classes="panel-card"):
-                        yield Static(U.time_breakdown(), classes="panel-card-title")
-                        yield DataTable(id="stats-phases-table")
+                with TabbedContent(id="summary-tabs"):
+                    with TabPane(t("tab-session"), id="summary-session"):
+                        with VerticalScroll(id="summary-session-scroll"):
+                            with Vertical(classes="panel-card"):
+                                yield SelectableStatic(id="summary-content")
+                    with TabPane(t("tab-tasks"), id="summary-tasks"):
+                        with VerticalScroll(id="summary-tasks-scroll"):
+                            with Vertical(id="summary-jobs-card", classes="panel-card"):
+                                yield Static(t("ui-background-jobs"), classes="panel-card-title")
+                                yield ListDataTable(id="stats-jobs-table")
+                    with TabPane(t("tab-workflows"), id="summary-workflows"):
+                        with VerticalScroll(id="summary-workflows-scroll"):
+                            with Vertical(id="summary-workflows-card", classes="panel-card"):
+                                yield Static(t("ui-workflows"), classes="panel-card-title")
+                                yield ListDataTable(id="stats-workflows-table")
+                    with TabPane(t("tab-subagents"), id="summary-subagents"):
+                        with VerticalScroll(id="summary-subagents-scroll"):
+                            with Vertical(id="summary-subagents-card", classes="panel-card"):
+                                yield Static(t("ui-subagent-runs"), classes="panel-card-title")
+                                yield ListDataTable(id="stats-subagents-table")
+                    with TabPane(t("tab-stats"), id="summary-stats"):
+                        with VerticalScroll(id="summary-stats-scroll"):
+                            with Horizontal(id="summary-stats-pair", classes="summary-pair"):
+                                with Vertical(classes="panel-card"):
+                                    yield Static(U.event_types(), classes="panel-card-title")
+                                    yield DataTable(id="stats-events-table")
+                                with Vertical(classes="panel-card"):
+                                    yield Static(U.tool_timing(), classes="panel-card-title")
+                                    yield DataTable(id="stats-tools-table")
+                            with Vertical(classes="panel-card"):
+                                yield Static(U.time_breakdown(), classes="panel-card-title")
+                                yield DataTable(id="stats-phases-table")
             with TabPane(U.tab_diff(), id="tab-diff"):
                 yield DiffView(id="diff-view")
             with TabPane(U.tab_findings(), id="tab-findings"):
@@ -389,7 +430,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         try:
             style_data_table(self.query_one("#findings-table", DataTable))
             for tid in (
-                "#stats-turns-table",
                 "#stats-subagents-table",
                 "#stats-jobs-table",
                 "#stats-workflows-table",
@@ -2181,20 +2221,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         except Exception:
             return
 
-    @on(DataTable.RowSelected, "#stats-turns-table")
-    def _on_turn_row_selected(self, event: DataTable.RowSelected) -> None:
-        raw = str(event.row_key.value) if event.row_key is not None else ""
-        if not raw.startswith("turn-"):
-            return
-        try:
-            turn_i = int(raw.split("-")[1])
-        except (IndexError, ValueError):
-            return
-        first = self._summary_turn_first.get(turn_i)
-        if first is None:
-            return
-        self._jump_timeline_to_event(first, turn_index=turn_i)
-
     def _reveal_timeline_event(self, event_index: int) -> None:
         """Drop Turn / View filters that would hide *event_index*."""
         idxs = self._turn_event_indices()
@@ -2250,11 +2276,18 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._sync_summary_stack()
 
     def _sync_summary_stack(self) -> None:
-        try:
-            scroll = self.query_one("#summary-scroll")
-        except Exception:
-            return
-        scroll.set_class(self.size.width < self._SUMMARY_STACK_WIDTH, "summary-stack")
+        stacked = self.size.width < self._SUMMARY_STACK_WIDTH
+        for sid in (
+            "#summary-session-scroll",
+            "#summary-tasks-scroll",
+            "#summary-workflows-scroll",
+            "#summary-subagents-scroll",
+            "#summary-stats-scroll",
+        ):
+            try:
+                self.query_one(sid).set_class(stacked, "summary-stack")
+            except Exception:
+                pass
 
     def _set_title_from_meta(self) -> None:
         label = self.meta.label if self.meta else self.session_dir.name
@@ -3177,85 +3210,9 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             dur = durations.get(e.index)
             if dur is not None:
                 tool_durations[e.tool_name].append(dur)
-        try:
-            from ...session.turns import segment_timeline_turns, turn_summary_rows
-
-            turn_segments = segment_timeline_turns(self.timeline)
-            samples = {}
-            store = getattr(self, "_context_samples", None)
-            if store is not None:
-                samples = store.compact_by_turn()
-            turn_rows = turn_summary_rows(
-                turn_segments,
-                durations=durations,
-                session_context_compact=m.context_usage_compact,
-                context_by_turn=samples,
-            )
-        except Exception:
-            turn_rows = []
         self._update_subagents_table()
         self._update_jobs_table()
         self._update_workflows_table()
-        try:
-            turns_table = self.query_one("#stats-turns-table", DataTable)
-            style_data_table(turns_table)
-            turns_table.clear(columns=True)
-            turns_table.add_columns(
-                t("col-index"),
-                t("ui-label"),
-                t("ui-outcome"),
-                t("ui-events"),
-                t("ui-tools"),
-                t("ui-dur"),
-            )
-            self._summary_turn_first = {}
-            if turn_rows:
-                seen_turn_keys: set[str] = set()
-                for i, row in enumerate(turn_rows):
-                    dur_raw = row.get("duration_s")
-                    dur_s = (
-                        self._fmt_dur(float(dur_raw)) if isinstance(dur_raw, (int, float)) else "—"
-                    )
-                    turn_i = row.get("turn_index", row.get("turn", i))
-                    first = row.get("first_index")
-                    if isinstance(turn_i, int) and isinstance(first, int):
-                        self._summary_turn_first[turn_i] = first
-                    tkey = f"turn-{turn_i}-{i}"
-                    if tkey in seen_turn_keys:
-                        continue
-                    seen_turn_keys.add(tkey)
-                    turns_table.add_row(
-                        str(row.get("turn", "")),
-                        str(row.get("label", "")),
-                        str(row.get("outcome", "—")),
-                        str(row.get("events", 0)),
-                        str(row.get("tools", 0)),
-                        dur_s,
-                        key=tkey,
-                    )
-            else:
-                turns_table.add_row(
-                    "—",
-                    t("ui-no-timeline"),
-                    "—",
-                    "0",
-                    "0",
-                    "—",
-                )
-        except Exception:
-            pass
-        show_turns = len(turn_rows) > 1
-        show_subs = bool(self._subagent_runs)
-        show_jobs = bool(self._session_jobs.jobs or self._session_jobs.schedules)
-        show_wfs = bool(self._session_jobs.workflows)
-        try:
-            self.query_one("#summary-turns-card").display = show_turns
-            self.query_one("#summary-subagents-card").display = show_subs
-            self.query_one("#summary-turns-pair").display = show_turns or show_subs
-            self.query_one("#summary-jobs-card").display = show_jobs
-            self.query_one("#summary-workflows-card").display = show_wfs
-        except Exception:
-            pass
         ev_table = self.query_one("#stats-events-table", DataTable)
         style_data_table(ev_table)
         ev_table.clear(columns=True)
@@ -3801,13 +3758,11 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._sync_compact_child_chrome()
 
     def _sync_compact_child_chrome(self) -> None:
-        """Hide the Summary turns card for a one-turn subagent child."""
-        n = len(getattr(self, "_turn_segments", None) or [])
-        compact = compact_child_chrome(read_session_kind(self.session_dir), n)
-        try:
-            self.query_one("#summary-turns-card").display = not compact
-        except Exception:
-            return
+        """Keep child chrome in sync (Summary turns live on Timeline / Turns)."""
+        _ = compact_child_chrome(
+            read_session_kind(self.session_dir),
+            len(getattr(self, "_turn_segments", None) or []),
+        )
 
     def _apply_filter(self, **kwargs) -> None:
         timeline_table = self.query_one("#timeline-list", TimelineTable)
@@ -4083,6 +4038,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 view = self._diff_view()
                 return bool(view is not None and view.can_step_point())
             return self._turn_step_available()
+        if action == "overview_section":
+            return self._active_browser_tab() == "tab-summary"
         if action == "toggle_event_reader":
             focused = self.focused
             if isinstance(focused, (Input, Select)):

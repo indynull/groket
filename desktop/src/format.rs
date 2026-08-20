@@ -365,6 +365,100 @@ pub fn overview_job_fields(
     out
 }
 
+/// One Tasks-tab row: kind, status, short label, optional Timeline bookend.
+pub struct OverviewTaskRow {
+    pub kind: String,
+    pub status: String,
+    pub label: String,
+    pub event_index: Option<i64>,
+}
+
+/// Jobs, then schedules — Workflows have their own tab.
+pub fn overview_task_rows(
+    jobs: &[crate::wire::BackgroundJobRow],
+    schedules: &[crate::wire::ScheduleRow],
+) -> Vec<OverviewTaskRow> {
+    let mut out = Vec::new();
+    for job in jobs {
+        let label = if !job.description.is_empty() {
+            job.description.clone()
+        } else if !job.command.is_empty() {
+            job.command.clone()
+        } else {
+            job.id.clone()
+        };
+        let kind = if job.kind.is_empty() {
+            "background".into()
+        } else {
+            job.kind.clone()
+        };
+        out.push(OverviewTaskRow {
+            kind,
+            status: job.status.clone(),
+            label,
+            event_index: job.event_index,
+        });
+    }
+    for sch in schedules {
+        let label = if !sch.prompt_preview.is_empty() {
+            sch.prompt_preview.clone()
+        } else if !sch.human_schedule.is_empty() {
+            sch.human_schedule.clone()
+        } else {
+            sch.id.clone()
+        };
+        out.push(OverviewTaskRow {
+            kind: "schedule".into(),
+            status: "scheduled".into(),
+            label,
+            event_index: None,
+        });
+    }
+    out
+}
+
+/// Workflow list rows for the Overview Workflows tab.
+pub fn overview_workflow_rows(workflows: &[crate::wire::WorkflowRow]) -> Vec<OverviewTaskRow> {
+    workflows
+        .iter()
+        .map(|run| OverviewTaskRow {
+            kind: "workflow".into(),
+            status: run.status.clone(),
+            label: if run.name.is_empty() {
+                run.id.clone()
+            } else {
+                run.name.clone()
+            },
+            event_index: run.event_index,
+        })
+        .collect()
+}
+
+/// Subagent list rows for the Overview Subagents tab.
+pub fn overview_subagent_rows(runs: &[crate::wire::SubagentRunRow]) -> Vec<OverviewTaskRow> {
+    runs.iter()
+        .map(|run| {
+            let label = if !run.description.is_empty() {
+                run.description.clone()
+            } else if !run.subagent_type.is_empty() {
+                run.subagent_type.clone()
+            } else {
+                run.child_session_id.clone()
+            };
+            OverviewTaskRow {
+                kind: if run.subagent_type.is_empty() {
+                    "subagent".into()
+                } else {
+                    run.subagent_type.clone()
+                },
+                status: run.status.clone(),
+                label,
+                event_index: run.spawn_event_index,
+            }
+        })
+        .collect()
+}
+
 /// One labeled inspect section: heading immediately above a non-empty body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectBlock {
@@ -2555,6 +2649,44 @@ mod tests {
             ),
             "Investigate the bug"
         );
+    }
+
+    #[test]
+    fn overview_task_rows_are_named_not_prompt_dump() {
+        use crate::wire::{BackgroundJobRow, ScheduleRow, WorkflowRow};
+
+        let rows = overview_task_rows(
+            &[BackgroundJobRow {
+                id: "job-1".into(),
+                kind: "monitor".into(),
+                status: "done".into(),
+                description: "Watch board".into(),
+                event_index: Some(4),
+                ..BackgroundJobRow::default()
+            }],
+            &[ScheduleRow {
+                id: "sch-1".into(),
+                human_schedule: "every 1 hour".into(),
+                prompt_preview: "hourly ping".into(),
+                ..ScheduleRow::default()
+            }],
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, "monitor");
+        assert_eq!(rows[0].label, "Watch board");
+        let wfs = overview_workflow_rows(&[WorkflowRow {
+            id: "wf_sprint8".into(),
+            name: "sprint-8".into(),
+            status: "complete".into(),
+            event_index: Some(12),
+            ..WorkflowRow::default()
+        }]);
+        assert_eq!(wfs.len(), 1);
+        assert_eq!(wfs[0].kind, "workflow");
+        assert_eq!(wfs[0].label, "sprint-8");
+        assert_eq!(wfs[0].event_index, Some(12));
+        assert_eq!(rows[1].kind, "schedule");
+        assert_eq!(rows[1].label, "hourly ping");
     }
 
     #[test]

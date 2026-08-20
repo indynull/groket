@@ -73,6 +73,7 @@ pub enum Message {
         sid: String,
     },
     SetTab(Tab),
+    SetOverviewSection(crate::model::OverviewSection),
     /// Ctrl+1…N over the tabs that are visible for this session.
     PaneDigit(u8),
     TimelineQuery(String),
@@ -257,6 +258,8 @@ pub struct Hud {
     spotlight_limit: usize,
     active: usize,
     tab: Tab,
+    overview_section: crate::model::OverviewSection,
+    tasks_focus: Option<usize>,
     overview: Option<Overview>,
     overview_sid: String,
     overview_pending: String,
@@ -415,6 +418,8 @@ impl Default for Hud {
             spotlight_limit: SPOTLIGHT_RECENT,
             active: 0,
             tab: Tab::Overview,
+            overview_section: crate::model::OverviewSection::Session,
+            tasks_focus: None,
             overview: None,
             overview_sid: String::new(),
             overview_pending: String::new(),
@@ -872,6 +877,14 @@ impl Hud {
                     return Task::none();
                 };
                 self.update(Message::SetTab(tab))
+            }
+            Message::SetOverviewSection(section) => {
+                self.overview_section = section;
+                self.tasks_focus = None;
+                if self.overview_list_count() > 0 {
+                    self.tasks_focus = Some(0);
+                }
+                Task::none()
             }
             Message::SetTab(tab) => {
                 let tab = if tab == Tab::Turns && self.compact_child_chrome() {
@@ -1759,6 +1772,12 @@ impl Hud {
     }
     pub fn overview_pending(&self) -> &str {
         &self.overview_pending
+    }
+    pub fn overview_section(&self) -> crate::model::OverviewSection {
+        self.overview_section
+    }
+    pub fn tasks_focus(&self) -> Option<usize> {
+        self.tasks_focus
     }
     pub fn timeline_query(&self) -> &str {
         &self.timeline_query
@@ -3222,6 +3241,8 @@ impl Hud {
 
     fn reset_detail_chrome(&mut self) {
         self.tab = Tab::Overview;
+        self.overview_section = crate::model::OverviewSection::Session;
+        self.tasks_focus = None;
         self.timeline_query.clear();
         self.timeline_query_draft.clear();
         self.timeline_search_pending = false;
@@ -5199,6 +5220,16 @@ impl Hud {
             return self.nav_sessions_step(delta);
         }
         match self.tab {
+            Tab::Overview
+                if matches!(
+                    self.overview_section,
+                    crate::model::OverviewSection::Tasks
+                        | crate::model::OverviewSection::Workflows
+                        | crate::model::OverviewSection::Subagents
+                ) =>
+            {
+                self.nav_tasks_step(delta)
+            }
             Tab::Turns => self.nav_turns_step(delta),
             Tab::Timeline if self.timeline_open.is_none() => self.nav_timeline_step(delta),
             Tab::Timeline => self.nav_timeline_detail_step(delta),
@@ -5285,6 +5316,83 @@ impl Hud {
         let next = (i + delta).rem_euclid(n as i32) as usize;
         self.set_active(next);
         self.ensure_active_visible()
+    }
+
+    fn overview_list_count(&self) -> usize {
+        let Some(o) = self.overview.as_ref() else {
+            return 0;
+        };
+        match self.overview_section {
+            crate::model::OverviewSection::Tasks => {
+                crate::format::overview_task_rows(&o.background_jobs, &o.schedules).len()
+            }
+            crate::model::OverviewSection::Workflows => {
+                crate::format::overview_workflow_rows(&o.workflows).len()
+            }
+            crate::model::OverviewSection::Subagents => {
+                crate::format::overview_subagent_rows(&o.turns.subagent_runs).len()
+            }
+            _ => 0,
+        }
+    }
+
+    fn nav_tasks_step(&mut self, delta: i32) -> Task<Message> {
+        let n = self.overview_list_count();
+        if n == 0 {
+            return Task::none();
+        }
+        let pos = match self.tasks_focus {
+            None => {
+                if delta > 0 {
+                    0
+                } else {
+                    n - 1
+                }
+            }
+            Some(p) => (p as i32 + delta).rem_euclid(n as i32) as usize,
+        };
+        self.tasks_focus = Some(pos);
+        Task::none()
+    }
+
+    fn open_focused_task(&mut self) -> Task<Message> {
+        let Some(o) = self.overview.as_ref() else {
+            return Task::none();
+        };
+        let Some(i) = self.tasks_focus else {
+            return Task::none();
+        };
+        if self.overview_section == crate::model::OverviewSection::Subagents {
+            let Some(run) = o.turns.subagent_runs.get(i) else {
+                return Task::none();
+            };
+            if run.openable && !run.child_path.is_empty() && !run.child_session_id.is_empty() {
+                return self.update(Message::OpenChild {
+                    path: run.child_path.clone(),
+                    sid: run.child_session_id.clone(),
+                });
+            }
+            if let Some(ix) = run.spawn_event_index {
+                return self.update(Message::JumpTimeline(ix));
+            }
+            return Task::none();
+        }
+        let rows = match self.overview_section {
+            crate::model::OverviewSection::Tasks => {
+                crate::format::overview_task_rows(&o.background_jobs, &o.schedules)
+            }
+            crate::model::OverviewSection::Workflows => {
+                crate::format::overview_workflow_rows(&o.workflows)
+            }
+            _ => return Task::none(),
+        };
+        let Some(row) = rows.get(i) else {
+            return Task::none();
+        };
+        let Some(ix) = row.event_index else {
+            return Task::none();
+        };
+        self.update(Message::JumpTimeline(ix))
     }
 
     fn nav_turns_step(&mut self, delta: i32) -> Task<Message> {
@@ -5412,6 +5520,14 @@ impl Hud {
         }
         match self.tab {
             Tab::Overview => {
+                if matches!(
+                    self.overview_section,
+                    crate::model::OverviewSection::Tasks
+                        | crate::model::OverviewSection::Workflows
+                        | crate::model::OverviewSection::Subagents
+                ) {
+                    return self.open_focused_task();
+                }
                 if self.compact_child_chrome() {
                     self.update(Message::SetTab(Tab::Timeline))
                 } else {
@@ -8115,6 +8231,26 @@ mod tests {
         let req = hud.last_timeline().expect("all-turns page");
         assert!(req.prompt_index.is_none());
         assert!(req.query.is_empty());
+    }
+
+    #[test]
+    fn overview_section_cycles_in_strip_order() {
+        let mut hud = hud_with_session();
+        hud.tab = Tab::Overview;
+        hud.overview_pending = "s1".into();
+        assert_eq!(
+            hud.overview_section(),
+            crate::model::OverviewSection::Session
+        );
+        let _ = hud.update(Message::SetOverviewSection(hud.overview_section().other()));
+        assert_eq!(hud.overview_section(), crate::model::OverviewSection::Tasks);
+        let _ = hud.update(Message::SetOverviewSection(
+            crate::model::OverviewSection::Workflows,
+        ));
+        assert_eq!(
+            hud.overview_section(),
+            crate::model::OverviewSection::Workflows
+        );
     }
 
     #[test]

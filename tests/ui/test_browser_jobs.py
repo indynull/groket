@@ -240,3 +240,40 @@ async def test_status_only_overview_refresh_paints_jobs_table(tmp_path: Path) ->
             description="jobs table shows complete after status-only overview",
         )
         assert screen._session_jobs.jobs[0].status == "done"
+
+
+@pytest.mark.asyncio
+async def test_summary_t_cycles_session_and_tasks(tmp_path: Path) -> None:
+    from textual.widgets import TabbedContent
+
+    sd = _write_jobs_session(tmp_path)
+    app = _Host(sd)
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = app.query_one(BrowserScreen)
+        await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        screen._stop_live_refresh()
+        screen.action_tab_summary()
+        await wait_until(
+            pilot,
+            lambda: screen.query_one("#summary-tabs", TabbedContent).active == "summary-session",
+            description="session section",
+        )
+        await wait_until(
+            pilot,
+            lambda: screen.query_one("#stats-jobs-table").row_count >= 2,
+            description="jobs table filled",
+        )
+        screen.action_overview_section()
+        await wait_until(
+            pilot,
+            lambda: screen.query_one("#summary-tabs", TabbedContent).active == "summary-tasks",
+            description="tasks section",
+        )
+        assert screen.query_one("#stats-jobs-table").row_count >= 2
+        screen.action_overview_section()
+        await wait_until(
+            pilot,
+            lambda: screen.query_one("#summary-tabs", TabbedContent).active
+            == "summary-workflows",
+            description="workflows section",
+        )

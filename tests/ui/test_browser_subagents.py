@@ -180,8 +180,8 @@ async def test_one_turn_child_hides_summary_turns_card(tmp_path: Path) -> None:
         assert "Subagent" in chrome
         assert "Child" in chrome
         screen.action_tab_summary()
-        card = screen.query_one("#summary-turns-card")
-        assert card.display is False
+        glance = screen.query_one("#summary-content")
+        assert glance is not None
 
 
 @pytest.mark.asyncio

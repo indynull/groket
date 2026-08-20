@@ -654,7 +654,8 @@ keys on that screen; shared TUI/HUD keys stay aligned (§6.10).
 Session browser also: ``y`` / ``Ctrl+Shift+C`` copy selection or pane body
 (§6.5a); ``j`` / ``k`` next / previous event; ``h`` / ``l`` (and Left / Right)
 next / previous turn; Enter opens a full-width event (Esc returns to the list)
-or a child from a spawn/finish bookend; ``n``/``e`` follow-up/Done
+or a child from a spawn/finish bookend;
+``n``/``e`` follow-up/Done
 when awaiting; ``x`` delete (double-press); ``f`` flag; ``N``/``O`` notes;
 ``E`` export; ``H`` show/hide host sessions (sessions home).
 

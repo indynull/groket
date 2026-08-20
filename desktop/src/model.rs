@@ -43,6 +43,42 @@ impl Tab {
     }
 }
 
+/// Inner Overview strip (same tabs as TUI Summary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverviewSection {
+    #[default]
+    Session,
+    Tasks,
+    Workflows,
+    Subagents,
+    Stats,
+}
+
+impl OverviewSection {
+    pub const ALL: [OverviewSection; 5] = [
+        OverviewSection::Session,
+        OverviewSection::Tasks,
+        OverviewSection::Workflows,
+        OverviewSection::Subagents,
+        OverviewSection::Stats,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OverviewSection::Session => "Session",
+            OverviewSection::Tasks => "Tasks",
+            OverviewSection::Workflows => "Workflows",
+            OverviewSection::Subagents => "Subagents",
+            OverviewSection::Stats => "Stats",
+        }
+    }
+
+    pub fn other(self) -> Self {
+        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KindFilter {
     #[default]
@@ -238,6 +274,11 @@ mod tests {
         assert_eq!(Tab::ALL[3], Tab::Diff);
         assert_eq!(Tab::ALL[4], Tab::Findings);
         assert_eq!(Tab::ALL[5], Tab::Notes);
+        assert_eq!(OverviewSection::Session.label(), "Session");
+        assert_eq!(OverviewSection::Tasks.label(), "Tasks");
+        assert_eq!(OverviewSection::Workflows.label(), "Workflows");
+        assert_eq!(OverviewSection::Session.other(), OverviewSection::Tasks);
+        assert_eq!(OverviewSection::Stats.other(), OverviewSection::Session);
         let walk =
             include_str!("../../.grok/skills/hud-visual-walkthrough/scripts/hud_walkthrough.py");
         assert!(

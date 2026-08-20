@@ -115,13 +115,12 @@ keeping the default work root for new runs. Notes on Host sessions write
 under `~/.groket/notes/<session_id>/`. Subagent runs stay off the top
 list; open them from the parent (Summary run table, or Timeline
 Subagents filter — Enter, or click the tile in the desktop HUD). Esc
-returns to that Timeline or Turns place. Background shells, monitors,
-and durable schedules appear on Summary as **Background** (and Timeline
-filter Background). Grok workflow runs appear on Summary as **Workflows**
-and on Timeline filter **Workflows** (the `workflow` tool bookends). Open a
+returns to that Timeline or Turns place. Background shells, monitors, and schedules live on Summary **Tasks**.
+Workflows and subagent runs have their own Summary tabs. Timeline
+filters Background / Workflows / Subagents list the bookends. Open a
 row or a bookend to inspect the merged run (Asked / Happened / Failed).
-Enter on a workflow child opens that child session. The desktop first
-view lists the same named runs and jumps Timeline to the bookend.
+Enter on a workflow child or subagent opens that child session. The
+desktop Overview uses the same tabs.
 Failed runs also appear on Findings. Those tables are not Jobs (`J`),
 which is Docker / serve / container logs.
 
@@ -167,7 +166,7 @@ The footer lists the keys that apply now; `?` is the full list.
 | h / l / Left / Right | browser | Previous / next turn on the Timeline |
 | j / k | browser | Previous / next event on the Timeline (also Up / Down) |
 | v | browser | Timeline filter (Subagents lists spawn/finish; Background lists task and schedule bookends; Workflows lists workflow tool bookends) |
-| Summary | browser | Background table for shells/monitors/schedules; Workflows table for Grok workflow runs |
+| Summary | browser / HUD | Session glance; Tasks, Workflows, Subagents, and Stats tabs (click the strip) |
 | Tail | browser / HUD | Follow new events to the end while a turn is open (terminal and HUD). Off keeps the highlight still. |
 | Enter | browser | Full-width event (Esc back to the list); or open a child from a spawn/finish row |
 | i | browser | Jump to Findings |

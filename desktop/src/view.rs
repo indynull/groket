@@ -14,12 +14,12 @@ use crate::format::{
     is_chat_message, is_tool_identity, job_command, job_description, job_event_id, job_event_label,
     job_exit_code, job_inspect_blocks, job_inspect_log, job_list_preview, job_output_path,
     job_status, list_event_detail, list_status_label, looks_like_markdown, note_fields_view,
-    origin_label, overview_fields, overview_job_fields, path_hint_from_raw, sanitize_console_text,
-    schedule_inspect_blocks, schedule_last_fire, session_duration_chip, status_tone,
-    subagent_inspect_blocks, subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output,
-    timeline_body_text, timeline_count_caption, timeline_query_hit, tool_brand_role,
-    tool_fields_from_raw, workflow_for_event, workflow_name_from_raw, BodyPaint, BrandRole,
-    ToolField,
+    origin_label, overview_fields, overview_job_fields, overview_subagent_rows, overview_task_rows,
+    overview_workflow_rows, path_hint_from_raw, sanitize_console_text, schedule_inspect_blocks,
+    schedule_last_fire, session_duration_chip, status_tone, subagent_inspect_blocks,
+    subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output, timeline_body_text,
+    timeline_count_caption, timeline_query_hit, tool_brand_role, tool_fields_from_raw,
+    workflow_for_event, workflow_name_from_raw, BodyPaint, BrandRole, ToolField,
 };
 use crate::kit;
 use crate::live::{
@@ -27,7 +27,7 @@ use crate::live::{
     note_field_input_key, toggle_many_choice, CardMark, NOTE_TURN_INPUT, TIMELINE_OVERSCAN,
     TURNS_OVERSCAN,
 };
-use crate::model::{DiffContext, KindFilter, SchemaField, Tab};
+use crate::model::{DiffContext, KindFilter, OverviewSection, SchemaField, Tab};
 use crate::motion::PageLayer;
 use crate::typo;
 use crate::wire::{FindingRow, NoteRow, TimelineEvent, TurnRow};
@@ -867,6 +867,23 @@ fn timeline_filter(hud: &Hud) -> Element<'_, Message> {
 
 fn overview_tab(hud: &Hud) -> Element<'_, Message> {
     let tea = hud.body_tokens();
+    let body = match hud.overview_section() {
+        OverviewSection::Session => overview_session(hud),
+        OverviewSection::Tasks => overview_tasks(hud),
+        OverviewSection::Workflows => overview_workflows(hud),
+        OverviewSection::Subagents => overview_subagents(hud),
+        OverviewSection::Stats => overview_stats(hud),
+    };
+    column![
+        kit::overview_section_tabs(hud.overview_section(), tea),
+        body
+    ]
+    .spacing(8)
+    .into()
+}
+
+fn overview_session(hud: &Hud) -> Element<'_, Message> {
+    let tea = hud.body_tokens();
     let o = hud.overview().unwrap();
     let meta = &o.meta;
     let mut title = meta.title.clone();
@@ -942,8 +959,138 @@ fn overview_tab(hud: &Hud) -> Element<'_, Message> {
     for field in overview_fields(meta, &o.turns) {
         col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
     }
-    for field in overview_job_fields(&o.background_jobs, &o.schedules, &o.workflows) {
+    col.into()
+}
+
+fn overview_tasks(hud: &Hud) -> Element<'_, Message> {
+    let tea = hud.body_tokens();
+    let o = hud.overview().unwrap();
+    let rows = overview_task_rows(&o.background_jobs, &o.schedules);
+    let mut col = column![].spacing(8);
+    for field in overview_job_fields(&o.background_jobs, &o.schedules, &[]) {
         col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
+    }
+    if rows.is_empty() {
+        col = col.push(kit::status_empty(
+            "No tasks",
+            "No background jobs or schedules.",
+            tea,
+        ));
+        return col.into();
+    }
+    let focus = hud.tasks_focus();
+    for (i, row) in rows.iter().enumerate() {
+        let selected = focus == Some(i);
+        let line = format!("{}  ·  {}  ·  {}", row.kind, row.status, row.label);
+        let face = icedtea::widget::meta(
+            line.clone(),
+            hud.tokens(),
+            A11y::new(line.clone(), Role::Button),
+        );
+        let card = container(face)
+            .padding(tea.density.inset())
+            .width(Length::Fill)
+            .style(move |_| icedtea::style::card(tea, selected));
+        let el: Element<'_, Message> = if let Some(ix) = row.event_index {
+            mouse_area(card).on_press(Message::JumpTimeline(ix)).into()
+        } else {
+            card.into()
+        };
+        col = col.push(el);
+    }
+    col.into()
+}
+
+fn overview_workflows(hud: &Hud) -> Element<'_, Message> {
+    let o = hud.overview().unwrap();
+    overview_run_list(
+        hud,
+        &overview_workflow_rows(&o.workflows),
+        "No workflows",
+        "No workflow runs in this session.",
+    )
+}
+
+fn overview_subagents(hud: &Hud) -> Element<'_, Message> {
+    let o = hud.overview().unwrap();
+    overview_run_list(
+        hud,
+        &overview_subagent_rows(&o.turns.subagent_runs),
+        "No subagents",
+        "No subagent runs in this session.",
+    )
+}
+
+fn overview_run_list<'a>(
+    hud: &'a Hud,
+    rows: &[crate::format::OverviewTaskRow],
+    empty_title: &'static str,
+    empty_detail: &'static str,
+) -> Element<'a, Message> {
+    let tea = hud.body_tokens();
+    if rows.is_empty() {
+        return kit::status_empty(empty_title, empty_detail, tea);
+    }
+    let focus = hud.tasks_focus();
+    let mut col = column![].spacing(8);
+    for (i, row) in rows.iter().enumerate() {
+        let selected = focus == Some(i);
+        let line = format!("{}  ·  {}  ·  {}", row.kind, row.status, row.label);
+        let face = icedtea::widget::meta(
+            line.clone(),
+            hud.tokens(),
+            A11y::new(line.clone(), Role::Button),
+        );
+        let card = container(face)
+            .padding(tea.density.inset())
+            .width(Length::Fill)
+            .style(move |_| icedtea::style::card(tea, selected));
+        let el: Element<'_, Message> = if let Some(ix) = row.event_index {
+            mouse_area(card).on_press(Message::JumpTimeline(ix)).into()
+        } else {
+            card.into()
+        };
+        col = col.push(el);
+    }
+    col.into()
+}
+
+fn overview_stats(hud: &Hud) -> Element<'_, Message> {
+    let tea = hud.body_tokens();
+    let events = hud.timeline_events();
+    if events.is_empty() {
+        return kit::status_empty(
+            "No stats yet",
+            "Open Timeline to fill event and tool counts.",
+            tea,
+        );
+    }
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut tools: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for ev in events {
+        *types.entry(ev.event_type.as_str()).or_insert(0) += 1;
+        if ev.event_type == "tool_call" && !ev.tool_name.is_empty() {
+            *tools.entry(ev.tool_name.as_str()).or_insert(0) += 1;
+        }
+    }
+    let mut col = column![].spacing(8);
+    col = col.push(icedtea::widget::meta(
+        "Event types",
+        tea,
+        A11y::new("Event types", Role::Status),
+    ));
+    for (name, n) in types {
+        col = col.push(kit::labeled_plain(name, n.to_string(), tea));
+    }
+    if !tools.is_empty() {
+        col = col.push(icedtea::widget::meta(
+            "Tools",
+            tea,
+            A11y::new("Tools", Role::Status),
+        ));
+        for (name, n) in tools {
+            col = col.push(kit::labeled_plain(name, n.to_string(), tea));
+        }
     }
     col.into()
 }
@@ -3370,11 +3517,15 @@ mod tests {
             .split("fn kv")
             .next()
             .expect("overview body");
+        assert!(overview.contains("overview_section_tabs"));
         assert!(overview.contains("session_state_from_meta("));
         assert!(overview.contains("overview.summary"));
         assert!(overview.contains("select_bound"));
         assert!(!overview.contains("markdown_bound"));
         assert!(overview.contains("overview_job_fields"));
+        assert!(overview.contains("overview_task_rows"));
+        assert!(overview.contains("overview_workflow_rows"));
+        assert!(overview.contains("overview_subagent_rows"));
         assert!(!overview.contains("overview_run_jumps"));
         assert!(!overview.contains("\"{} · {} · {}\""));
         let picker = prod

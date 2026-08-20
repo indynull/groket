@@ -847,7 +847,25 @@ tab-report = 5 Report
 
 tab-summary = 2 Summary
 
+tab-session = Session
+
+tab-tasks = Tasks
+
+tab-workflows = Workflows
+
+tab-subagents = Subagents
+
+tab-stats = Stats
+
 tab-timeline = 1 Timeline
+
+cmd-overview-section = Summary section
+
+cmd-overview-section-help = Switch Session, Tasks, Workflows, Subagents, and Stats
+
+ui-messages = Messages
+
+ui-loops = Loops
 
 theme = Theme
 
