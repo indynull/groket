@@ -486,7 +486,9 @@ mod tests {
         }
         assert!(prod_view.contains(".size(tea.meta())") || prod_view.contains(".size(tok.meta())"));
         assert!(prod_view.contains(".size(tea.body())"));
-        assert!(prod_view.contains(".size(tea.title())"));
+        assert!(
+            prod_view.contains(".size(tea.title())") || prod_view.contains(".size(tok.title())")
+        );
         assert!(prod_app.contains("tokens(\"textual-dark\").body()"));
     }
 
