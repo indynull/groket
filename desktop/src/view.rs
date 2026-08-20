@@ -511,7 +511,7 @@ fn fade_palette<'a>(
     hud: &Hud,
     tea: icedtea::theme::Tokens,
 ) -> Element<'a, Message> {
-    // icedtea OverlayLayer does not forward Widget::overlay, so pick lists
+    // OverlayLayer still does not implement Widget::overlay, so pick lists
     // never open while this wrapper is mounted. Tokens::fade already paints
     // the show/hide. Keep the layer only while the fade is running.
     if !hud.overlay_moving() {
@@ -3090,8 +3090,8 @@ fn jump_control(
     _color: Color,
     tea: icedtea::theme::Tokens,
 ) -> Element<'static, Message> {
-    // Chip, not Canvas: one 16px canvas program per closed card was a real
-    // scroll cost with virtual_column remounting rows every frame.
+    // Chip, not Canvas: one 16px canvas program per closed card is still
+    // more draw work than a text chip.
     icedtea::widget::tooltip_wrap(
         chip_btn("→".into(), msg, tea),
         "Go to Timeline",
@@ -3387,6 +3387,67 @@ mod tests {
     }
 
     #[test]
+    fn virtual_column_sub_row_wheel_does_not_publish_scroll() {
+        use iced::advanced::clipboard;
+        use iced::advanced::layout::{Layout, Limits};
+        use iced::advanced::widget::Tree;
+        use iced::mouse;
+        use iced::widget::Id;
+        use iced::{Event, Font, Pixels, Point, Rectangle, Size};
+        use icedtea::collection::VisibleWindow;
+        use icedtea::widget::{label, virtual_column};
+
+        let tok = tea();
+        let row_h = crate::live::CLOSED_TURN_CARD_H;
+        let viewport = 400.0;
+        let heights: Vec<f32> = (0..40).map(|_| row_h).collect();
+        let window = VisibleWindow::new(viewport);
+        let mut el: iced::Element<'_, VisibleWindow> = virtual_column(
+            &heights,
+            window,
+            TURNS_OVERSCAN,
+            None,
+            |w| w,
+            Some(Id::new("hud-turns")),
+            tok,
+            |i| label(format!("turn {i}"), tok, A11y::new("r", Role::ListItem)),
+            A11y::new("Turns", Role::List),
+        );
+        let mut tree = Tree::new(el.as_widget());
+        let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(
+            Font::DEFAULT,
+            Pixels::from(16u32),
+        ));
+        let limits = Limits::new(Size::ZERO, Size::new(320.0, viewport));
+        let node = el.as_widget_mut().layout(&mut tree, &renderer, &limits);
+        let layout = Layout::new(&node);
+        let origin = layout.bounds();
+        let over = Point::new(origin.x + 20.0, origin.center_y());
+        let vp = Rectangle::new(Point::ORIGIN, Size::new(320.0, viewport));
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        {
+            let mut shell = iced::advanced::Shell::new(&mut messages);
+            el.as_widget_mut().update(
+                &mut tree,
+                &Event::Mouse(mouse::Event::WheelScrolled {
+                    delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -4.0 },
+                }),
+                layout,
+                mouse::Cursor::Available(over),
+                &renderer,
+                &mut clipboard,
+                &mut shell,
+                &vp,
+            );
+        }
+        assert!(
+            messages.is_empty(),
+            "a 4px wheel must stay in virtual_clip, got {messages:?}"
+        );
+    }
+
+    #[test]
     fn session_picker_is_spotlight_not_list_detail_rail() {
         let src = include_str!("view.rs");
         let prod = src.split("#[cfg(test)]").next().expect("prod source");
@@ -3400,6 +3461,7 @@ mod tests {
         assert!(prod.contains("fn session_state_row"));
         assert!(prod.contains("fn session_state_from_meta"));
         assert!(prod.contains("widget::virtual_column"));
+        assert!(!prod.contains("QuietColumn"));
         assert!(!prod.contains("fn tea_two_line"));
         assert!(!prod.contains("fn tea_list_view"));
         assert!(!prod.contains("SESSION_LIST_W"));

@@ -7,6 +7,10 @@ is tagged.
 
 ### Feature
 
+- HUD uses icedtea 0.12.1 (`virtual_clip` keeps list pixel scroll in
+  the widget). Turns, Timeline, Overview lists, and the session picker
+  pick that up. Keyboard jumps use `scroll_to` on the named clip.
+
 - `session/overview` includes event-type and tool counts. HUD and TUI
   Stats read those fields for the whole session.
 - TUI Session glance puts status, model, Host or Eval, and duration on
@@ -40,7 +44,7 @@ is tagged.
   split on both surfaces. ``/`` finds path or hunk text.
 - Live Timeline has a Tail switch. Opening an event asks for the
   50,000-character body, including the paired tool result.
-- HUD uses icedtea 0.11: search, badges, tabs, selectable bodies,
+- HUD uses icedtea 0.12.1: search, badges, tabs, selectable bodies,
   Diff hunks, and an F12 Look drawer.
 - Session walk uses ``groket._scan``. ``GROKET_SCAN=0`` uses the
   Python body.

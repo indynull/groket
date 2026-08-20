@@ -666,6 +666,15 @@ pub fn app_window_settings() -> window::Settings {
     desktop_prepared().window
 }
 
+fn apply_clip_scroll(
+    id: Id,
+    window: &mut icedtea::collection::VisibleWindow,
+    y: f32,
+) -> Task<Message> {
+    window.scroll = y;
+    operation::scroll_to(id, iced::widget::scrollable::AbsoluteOffset { x: 0.0, y })
+}
+
 fn open_hud_window(window_mode: bool) -> (window::Id, Task<window::Id>) {
     if window_mode {
         desktop_prepared().open()
@@ -884,10 +893,10 @@ impl Hud {
                     PageLayer::Browse,
                     icedtea::motion::Slide::End,
                 );
-                self.reset_detail_chrome();
+                let reset = self.reset_detail_chrome();
                 // Loading placeholder this frame; body fills via OverviewLoaded.
                 // Do not yank keyboard into session search after a pick.
-                Task::batch([self.load_overview(false), self.focus_browse()])
+                Task::batch([reset, self.load_overview(false), self.focus_browse()])
             }
             Message::PaneDigit(n) => {
                 let tabs = self.visible_tabs();
@@ -906,13 +915,18 @@ impl Hud {
                 if self.overview_list_count() > 0 {
                     self.tasks_focus = Some(0);
                 }
+                let jump = apply_clip_scroll(
+                    self.overview_scroll_id.clone(),
+                    &mut self.overview_window,
+                    0.0,
+                );
                 if section == crate::model::OverviewSection::Stats {
                     self.rebuild_stats_table();
                     if let Some(sid) = self.detail_sid() {
-                        return self.ensure_timeline(sid, false);
+                        return Task::batch([jump, self.ensure_timeline(sid, false)]);
                     }
                 }
-                Task::none()
+                jump
             }
             Message::SetTab(tab) => {
                 let tab = if tab == Tab::Turns && self.compact_child_chrome() {
@@ -2121,8 +2135,11 @@ impl Hud {
             self.overview_window.scroll,
             view_h,
         );
-        self.overview_window.scroll = y;
-        Task::none()
+        apply_clip_scroll(
+            self.overview_scroll_id.clone(),
+            &mut self.overview_window,
+            y,
+        )
     }
 
     fn scroll_stats_into_view(&mut self) -> Task<Message> {
@@ -2132,6 +2149,7 @@ impl Hud {
         let heights: Vec<f32> = vec![STATS_ROW_H; self.stats_table.rows.len()];
         let view_h = self.stats_window.viewport.max(1.0);
         let y = list_scroll_to_cover(&heights, pos, self.stats_window.scroll, view_h);
+        // data_table does not take a scroll_id; range-changing jumps still apply.
         self.stats_window.scroll = y;
         Task::none()
     }
@@ -3318,9 +3336,7 @@ impl Hud {
             self.list_window.scroll,
             view_h,
         );
-        // virtual_column reads VisibleWindow.scroll; no iced scrollable.
-        self.list_window.scroll = y;
-        Task::none()
+        apply_clip_scroll(self.list_scroll_id.clone(), &mut self.list_window, y)
     }
 
     fn selected_status(&self) -> String {
@@ -3347,7 +3363,7 @@ impl Hud {
         self.toasts.push_danger(self.status.clone());
     }
 
-    fn reset_detail_chrome(&mut self) {
+    fn reset_detail_chrome(&mut self) -> Task<Message> {
         self.tab = Tab::Overview;
         self.overview_section = crate::model::OverviewSection::Session;
         self.tasks_focus = None;
@@ -3398,6 +3414,15 @@ impl Hud {
         self.tl_filter.clear();
         self.turn_marks.clear();
         self.event_marks.clear();
+        Task::batch([
+            apply_clip_scroll(
+                self.overview_scroll_id.clone(),
+                &mut self.overview_window,
+                0.0,
+            ),
+            apply_clip_scroll(self.tl_scroll_id.clone(), &mut self.tl_window, 0.0),
+            apply_clip_scroll(self.turn_scroll_id.clone(), &mut self.turn_window, 0.0),
+        ])
     }
 
     fn rebuild_tl_filter(&mut self) {
@@ -3712,19 +3737,22 @@ impl Hud {
         } else {
             sid
         };
-        self.reset_detail_chrome();
+        let reset = self.reset_detail_chrome();
         self.overview_pending = sid_keep.clone();
         self.overview_gen += 1;
         let gen = self.overview_gen;
-        Task::perform(
-            rpc(move || control::session_overview(&rpc_ref)),
-            move |result| Message::OverviewLoaded {
-                gen,
-                sid: sid_keep.clone(),
-                quiet: false,
-                result,
-            },
-        )
+        Task::batch([
+            reset,
+            Task::perform(
+                rpc(move || control::session_overview(&rpc_ref)),
+                move |result| Message::OverviewLoaded {
+                    gen,
+                    sid: sid_keep.clone(),
+                    quiet: false,
+                    result,
+                },
+            ),
+        ])
     }
 
     fn return_to_parent(&mut self) -> Task<Message> {
@@ -3833,8 +3861,7 @@ impl Hud {
         };
         let view_h = self.tl_window.viewport.max(1.0);
         let y = list_scroll_to_cover(&self.tl_heights, pos, self.tl_window.scroll, view_h);
-        self.tl_window.scroll = y;
-        Task::none()
+        apply_clip_scroll(self.tl_scroll_id.clone(), &mut self.tl_window, y)
     }
 
     fn filter_pos(&self, index: i64) -> Option<usize> {
@@ -3917,8 +3944,8 @@ impl Hud {
             return Task::none();
         };
         let view_h = self.tl_window.viewport.max(1.0);
-        self.tl_window.scroll = list_scroll_to_top(&self.tl_heights, pos, view_h);
-        Task::none()
+        let y = list_scroll_to_top(&self.tl_heights, pos, view_h);
+        apply_clip_scroll(self.tl_scroll_id.clone(), &mut self.tl_window, y)
     }
 
     fn turn_row_for_event(&self, index: i64) -> Option<&crate::wire::TurnRow> {
@@ -4652,22 +4679,22 @@ impl Hud {
             PageLayer::Browse,
             icedtea::motion::Slide::Start,
         );
-        self.return_to_spotlight();
-        self.on_focus_search(0)
+        Task::batch([self.return_to_spotlight(), self.on_focus_search(0)])
     }
 
     /// Summon lands on Spotlight (Recent + search), never the last open session.
-    fn return_to_spotlight(&mut self) {
+    fn return_to_spotlight(&mut self) -> Task<Message> {
         self.query.clear();
         self.spotlight_limit = SPOTLIGHT_RECENT;
         self.help_open = false;
-        self.reset_detail_chrome();
+        let reset = self.reset_detail_chrome();
         self.parent_stack.clear();
         self.restore_around = None;
         self.timeline_open = None;
         self.active = 0;
         self.list_selection = icedtea::collection::Selection::None;
         self.rerank_visible_keeping(String::new());
+        reset
     }
 
     fn show_palette(&mut self) -> Task<Message> {
@@ -4692,11 +4719,12 @@ impl Hud {
         }
         self.sync_theme();
         // Always open on the session list — pick is explicit (Enter / click).
-        self.return_to_spotlight();
+        let reset = self.return_to_spotlight();
         if self.window_id.is_none() {
             let (id, open) = open_hud_window(false);
             self.window_id = Some(id);
             return Task::batch([
+                reset,
                 open.map(|id| Message::WindowId(Some(id))),
                 delayed_focus(0),
                 fetch_list(true, self.catalog_revision),
@@ -4713,6 +4741,7 @@ impl Hud {
             None => Task::none(),
         };
         Task::batch([
+            reset,
             chrome,
             delayed_focus(0),
             fetch_list(true, self.catalog_revision),
@@ -5724,8 +5753,7 @@ impl Hud {
         };
         let view_h = self.turn_window.viewport.max(1.0);
         let y = list_scroll_to_cover(&self.turn_heights, pos, self.turn_window.scroll, view_h);
-        self.turn_window.scroll = y;
-        Task::none()
+        apply_clip_scroll(self.turn_scroll_id.clone(), &mut self.turn_window, y)
     }
 
     /// Enter: open the next level (pick → browse → event detail → next event).
