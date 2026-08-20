@@ -94,6 +94,13 @@ def watch_target_paths(roots: list[Path], session_dirs: list[Path]) -> list[Path
 
     for path in membership_watch_dirs(roots):
         _add(path)
+        try:
+            children = list(path.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if child.is_dir() and not is_host_skip_dir_name(child.name):
+                _add(child)
     for session in session_dirs:
         _add(Path(session))
     return out

@@ -98,6 +98,37 @@ def test_journal_tail_second_append_does_not_reread(tmp_path: Path) -> None:
     assert tail.offset > offset
 
 
+def test_watch_resubscribes_plane_files_of_session_created_after_start(
+    tmp_path: Path,
+) -> None:
+    """A session mkdir after start must subscribe its plane files."""
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    hits: list[list[str]] = []
+    w = TraceTreeWatch(traces, lambda: None, on_paths=lambda paths: hits.append(list(paths)))
+    assert w.start() is True
+    try:
+        assert not any(p.name == "summary.json" for p in w.subscribed_paths())
+        session = traces / "late-sess"
+        session.mkdir()
+        (session / "summary.json").write_text("{}", encoding="utf-8")
+        (session / "updates.jsonl").write_text("{}\n", encoding="utf-8")
+        wait_until_sync(
+            lambda: any(
+                p.name == "summary.json" and p.parent.name == "late-sess"
+                for p in w.subscribed_paths()
+            ),
+            description="new session plane file subscribed after mkdir",
+        )
+        hits.clear()
+        (session / "summary.json").write_text('{"title": "late"}\n', encoding="utf-8")
+        wait_until_sync(lambda: bool(hits), description="write on late session plane file")
+    finally:
+        w.stop()
+    assert hits
+    assert any(Path(p).name == "summary.json" for batch in hits for p in batch)
+
+
 def test_owner_serve_source_has_no_watchdog_or_warm_timer() -> None:
     from groket.integrations import daemon
 

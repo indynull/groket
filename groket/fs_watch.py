@@ -129,9 +129,12 @@ class TraceTreeWatch:
                         for _kind, path in changes
                         if plane_event_path(Path(path)) and "workspace" not in Path(path).parts
                     ]
-                    if not fired:
-                        continue
-                    self._emit(fired)
+                    if fired:
+                        self._emit(fired)
+                    nxt = [p for p in self._collect_paths() if p.exists()]
+                    if {str(p) for p in nxt} != {str(p) for p in paths}:
+                        # New or gone session: drop this watch() and resubscribe.
+                        break
             except Exception:
                 logger.debug("FS watch iteration failed", exc_info=True)
                 if self._stop.wait(0.25):
