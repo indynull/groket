@@ -23,8 +23,8 @@ use crate::format::{
 };
 use crate::kit;
 use crate::live::{
-    context_fraction, finding_severity_rank, finding_severity_title, CardMark, TIMELINE_OVERSCAN,
-    TURNS_OVERSCAN,
+    context_fraction, finding_severity_rank, finding_severity_title, CardMark,
+    OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN, TURNS_OVERSCAN,
 };
 use crate::model::{DiffContext, KindFilter, OverviewSection, Tab};
 use crate::motion::PageLayer;
@@ -725,6 +725,19 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
             hud,
             tea,
         ));
+    } else if hud.tab() == Tab::Overview
+        && hud.overview().is_some()
+        && overview_virtual_body(hud.overview_section())
+    {
+        stack = stack.push(page_body(
+            container(overview_tab(hud))
+                .padding([tea.density.gap(), tea.density.inset()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            hud,
+            tea,
+        ));
     } else {
         stack = stack.push(page_body(
             icedtea::widget::themed_scroll(
@@ -874,6 +887,16 @@ fn timeline_filter(hud: &Hud) -> Element<'_, Message> {
         .into()
 }
 
+fn overview_virtual_body(section: OverviewSection) -> bool {
+    matches!(
+        section,
+        OverviewSection::Tasks
+            | OverviewSection::Workflows
+            | OverviewSection::Subagents
+            | OverviewSection::Stats
+    )
+}
+
 fn overview_tab(hud: &Hud) -> Element<'_, Message> {
     match hud.overview_section() {
         OverviewSection::Session => overview_session(hud),
@@ -961,7 +984,7 @@ fn overview_tasks(hud: &Hud) -> Element<'_, Message> {
     let o = hud.overview().unwrap();
     overview_run_list(
         hud,
-        &overview_task_rows(&o.background_jobs, &o.schedules),
+        overview_task_rows(&o.background_jobs, &o.schedules),
         "No tasks",
         "No background jobs or schedules.",
     )
@@ -971,7 +994,7 @@ fn overview_workflows(hud: &Hud) -> Element<'_, Message> {
     let o = hud.overview().unwrap();
     overview_run_list(
         hud,
-        &overview_workflow_rows(&o.workflows),
+        overview_workflow_rows(&o.workflows),
         "No workflows",
         "No workflow runs in this session.",
     )
@@ -981,7 +1004,7 @@ fn overview_subagents(hud: &Hud) -> Element<'_, Message> {
     let o = hud.overview().unwrap();
     overview_run_list(
         hud,
-        &overview_subagent_rows(&o.turns.subagent_runs),
+        overview_subagent_rows(&o.turns.subagent_runs),
         "No subagents",
         "No subagent runs in this session.",
     )
@@ -989,7 +1012,7 @@ fn overview_subagents(hud: &Hud) -> Element<'_, Message> {
 
 fn overview_run_list<'a>(
     hud: &'a Hud,
-    rows: &[crate::format::OverviewTaskRow],
+    rows: Vec<crate::format::OverviewTaskRow>,
     empty_title: &'static str,
     empty_detail: &'static str,
 ) -> Element<'a, Message> {
@@ -998,60 +1021,74 @@ fn overview_run_list<'a>(
         return kit::status_empty(empty_title, empty_detail, tea);
     }
     let focus = hud.tasks_focus();
-    let mut col = column![].spacing(8);
-    for (i, row) in rows.iter().enumerate() {
-        let selected = focus == Some(i);
-        let status = list_status_label(&row.status, "");
-        let kind = format_tool_display(&row.kind);
-        let chips = row![
-            status_chip(status.clone(), status_tone(&status), tea),
-            status_chip(kind, "", tea),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-        let name = text(row.label.clone())
-            .size(tea.body())
-            .font(typo::UI)
-            .color(tea.text);
-        let face = column![chips, name].spacing(4).width(Length::Fill);
-        let card = container(face)
-            .padding(tea.density.inset())
-            .width(Length::Fill)
-            .style(move |_| icedtea::style::card(tea, selected));
-        let el: Element<'_, Message> = if let Some(ix) = row.event_index {
-            mouse_area(card).on_press(Message::JumpTimeline(ix)).into()
-        } else {
-            card.into()
-        };
-        col = col.push(el);
-    }
-    col.into()
+    icedtea::widget::virtual_column(
+        hud.overview_heights(),
+        hud.overview_window(),
+        OVERVIEW_LIST_OVERSCAN,
+        focus,
+        Message::OverviewScroll,
+        Some(hud.overview_scroll_id()),
+        tea,
+        move |i| {
+            let Some(row) = rows.get(i) else {
+                return Space::new().height(0).into();
+            };
+            let selected = focus == Some(i);
+            let status = list_status_label(&row.status, "");
+            let kind = format_tool_display(&row.kind);
+            let chips = row![
+                status_chip(status.clone(), status_tone(&status), tea),
+                status_chip(kind, "", tea),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            let name = text(row.label.clone())
+                .size(tea.body())
+                .font(typo::UI)
+                .color(tea.text)
+                .wrapping(iced::widget::text::Wrapping::None);
+            let face = column![chips, name].spacing(4).width(Length::Fill);
+            let card = container(face)
+                .padding(tea.density.inset())
+                .width(Length::Fill)
+                .style(move |_| icedtea::style::card(tea, selected));
+            mouse_area(card)
+                .on_press(Message::FocusOverviewRow(i))
+                .into()
+        },
+        A11y::new(empty_title, Role::List),
+    )
 }
 
 fn overview_stats(hud: &Hud) -> Element<'_, Message> {
     let tea = hud.body_tokens();
-    let rows = crate::format::overview_stat_rows(hud.timeline_events());
-    if rows.is_empty() {
+    if hud.timeline_loading() && hud.stats_table().rows.is_empty() {
+        return loading_session("events", tea);
+    }
+    if hud.stats_table().rows.is_empty() {
         return kit::status_empty(
             "No stats yet",
             "Open Timeline to fill event and tool counts.",
             tea,
         );
     }
-    let mut col = column![].spacing(4);
-    let mut section = "";
-    for row in &rows {
-        if row.section != section {
-            section = row.section;
-            col = col.push(icedtea::widget::meta(
-                section,
-                tea,
-                A11y::new(section, Role::Status),
-            ));
-        }
-        col = col.push(glance_row(hud, &row.id, &row.label));
-    }
-    col.into()
+    icedtea::widget::data_table(
+        hud.stats_table(),
+        hud.stats_selection(),
+        hud.stats_cursor(),
+        hud.stats_cols(),
+        true,
+        hud.stats_window(),
+        STATS_ROW_H,
+        2,
+        Message::StatsCell,
+        Message::StatsSort,
+        Message::StatsScroll,
+        Message::StatsHScroll,
+        |_| Message::Noop,
+        tea,
+        A11y::new("Stats", Role::Table),
+    )
 }
 
 /// One Overview meta row via icedtea value_field / plain labeled readout.
@@ -3414,6 +3451,9 @@ mod tests {
         assert!(overview.contains("overview_task_rows"));
         assert!(overview.contains("overview_workflow_rows"));
         assert!(overview.contains("overview_subagent_rows"));
+        assert!(overview.contains("widget::virtual_column"));
+        assert!(overview.contains("widget::data_table"));
+        assert!(overview.contains("OVERVIEW_LIST_OVERSCAN"));
         assert!(!overview.contains("overview_run_jumps"));
         assert!(!overview.contains("\"{} · {} · {}\""));
         let picker = prod
@@ -3425,6 +3465,15 @@ mod tests {
             .expect("picker body");
         assert!(picker.contains("widget::virtual_column"));
         assert!(picker.contains("session_list_card("));
+        let detail = prod
+            .split("fn detail_pane")
+            .nth(1)
+            .expect("detail_pane")
+            .split("fn timeline_filter")
+            .next()
+            .expect("detail body");
+        assert!(detail.contains("overview_virtual_body"));
+        assert!(detail.contains("turns_tab(hud)"));
         let bar = prod
             .split("fn browse_session_bar")
             .nth(1)
