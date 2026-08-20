@@ -299,7 +299,7 @@ def _keep_list_status(old: JsonObject, new: JsonObject) -> JsonObject:
     """Keep ``complete`` when cheap host meta only has ``—``.
 
     ``running`` must be allowed to become ``—`` after the stale window so
-    the HUD drops ``LIVE_POLL_MS``.
+    the HUD drops the live list poll.
     """
     old_st = str(old.get("status") or "")
     new_st = str(new.get("status") or "")

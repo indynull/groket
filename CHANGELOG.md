@@ -10,6 +10,10 @@ is tagged.
 - HUD notes form uses a pick list for one-of schema fields (severity)
   and filter chips for many-select. Tab / Shift+Tab walk the text
   fields while composing; Ctrl+Tab or Ctrl+1–6 still change panes.
+- Serve watches membership directories and four session files with
+  watchfiles. Workspace is not subscribed. An open session tails new
+  ``updates.jsonl`` bytes. The 15-second catalog warm loop and the HUD
+  3-second live list poll are gone.
 - Session Overview and Summary share Session, Tasks, Workflows,
   Subagents, and Stats tabs (click the strip). Session is the glance.
   Tasks is shells, monitors, and schedules. Timeline filter Background

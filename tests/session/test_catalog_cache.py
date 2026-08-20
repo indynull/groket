@@ -168,6 +168,39 @@ def test_apply_fs_catalog_events_patches_dirty_row(tmp_path: Path) -> None:
     assert by_id["one"]["title"] == "One live"
 
 
+def test_open_journal_second_apply_reads_from_offset(tmp_path: Path) -> None:
+    """An open session's second updates.jsonl apply tails from the first offset."""
+    import asyncio
+
+    from groket.integrations.daemon import CatalogWatchApply
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    one = _write_sess(traces, "one", "One")
+    cache = SessionCatalogCache(work, traces_path=traces, include_host=False, ttl=3600.0)
+    cache.get(force=True)
+    loop = asyncio.new_event_loop()
+
+    class _Server:
+        async def publish_session_changed(self, *_a: object, **_k: object) -> None:
+            return None
+
+        async def publish_notes_changed(self, *_a: object) -> None:
+            return None
+
+    apply = CatalogWatchApply(server=_Server(), cache=cache, roots=[traces], loop=loop)
+    apply.mark_open(one)
+    tail = apply.tail_for(one)
+    assert tail is not None
+    first_offset = tail.offset
+    assert first_offset > 0
+    with (one / "updates.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write("{}\n")
+    apply._apply_disk([str(one / "updates.jsonl")])
+    assert tail.offset > first_offset
+    loop.close()
+
+
 def test_apply_fs_catalog_events_append_marks_list_unchanged(tmp_path: Path) -> None:
     """An updates.jsonl append that leaves painted fields sets listChanged false."""
     from groket.integrations.daemon import apply_fs_catalog_events

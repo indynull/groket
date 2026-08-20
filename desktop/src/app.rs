@@ -33,7 +33,7 @@ use crate::live::{
     should_load_previous_timeline, should_page_recent, spotlight_recent,
     timeline_coverage_complete, timeline_page_next, timeline_range_label, timeline_window_start,
     trim_timeline_buffer, wants_periodic_poll, CardMark, TickInput, CLOSED_TURN_CARD_H,
-    IDLE_POLL_MS, LIVE_POLL_MS, LIVE_TAIL_LIMIT, OVERVIEW_LIST_ROW_H, SPOTLIGHT_RECENT,
+    IDLE_POLL_MS, LIVE_TAIL_LIMIT, OVERVIEW_LIST_ROW_H, SPOTLIGHT_RECENT,
     STATS_ROW_H, TIMELINE_BUFFER_CAP, TIMELINE_CHUNK, TIMELINE_OPEN_CHARS, TIMELINE_PREVIEW_CHARS,
     TIMELINE_ROW_H,
 };
@@ -831,15 +831,8 @@ impl Hud {
             subs.push(window::frames().map(|_| Message::Tick));
         }
         if wants_periodic_poll(self.visible, self.focused, self.window_mode) {
-            let any_live = session_needs_live_poll(
-                &self.selected_status(),
-                self.overview.as_ref().map(|o| &o.turns),
-            ) || self
-                .all_sessions
-                .iter()
-                .any(|r| session_needs_live_poll(&r.status, None));
-            let poll = if any_live { LIVE_POLL_MS } else { IDLE_POLL_MS };
-            subs.push(time::every(Duration::from_millis(poll)).map(|_| Message::Tick));
+            // Toast / overlay clock only. List and timeline follow socket notifies.
+            subs.push(time::every(Duration::from_millis(IDLE_POLL_MS)).map(|_| Message::Tick));
         }
         if self.note_delete_until.is_some() || self.leader_until.is_some() {
             subs.push(time::every(Duration::from_millis(250)).map(|_| Message::Tick));
