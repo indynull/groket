@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from conftest import make_trace_event
+from groket.models import ToolInputBag
 from groket.session.jobs import load_session_jobs
 from groket.session.workflows import (
     WorkflowRun,
@@ -127,6 +128,15 @@ def test_load_session_workflows_reads_complete_and_failed(tmp_path: Path) -> Non
 
     packed = load_session_jobs(sd, [])
     assert {w.name for w in packed.workflows} == {"sprint-9", "sprint-8"}
+
+
+def test_load_session_workflows_skips_directory_without_state(tmp_path: Path) -> None:
+    """A wf_* folder with no state.json is not an invented run."""
+    sd = tmp_path / "sess-empty"
+    empty = sd / "workflows" / "wf_ghost"
+    empty.mkdir(parents=True)
+    assert load_session_workflows(sd) == []
+    assert WorkflowRun.from_directory(empty) is None
 
 
 def test_workflow_pairs_script_path_stem_to_latest_named_run(tmp_path: Path) -> None:
@@ -266,3 +276,51 @@ def test_workflow_inspect_uses_result_run_id_not_later_sprint(tmp_path: Path) ->
     assert "vissue_root" in plain
     assert "Retrospective" not in plain
     assert "sprint-11" not in plain
+
+
+def test_merge_output_ids_copies_run_id_onto_empty_bag() -> None:
+    bag = ToolInputBag()
+    out = WorkflowRun.merge_output_ids(
+        bag,
+        {"type": "Workflow", "run_id": "wf_x", "name": "sprint"},
+        tool_name="workflow",
+    )
+    assert out.as_str("run_id") == "wf_x"
+    assert out.as_str("name") == "sprint"
+
+
+def test_merge_output_ids_skips_non_workflow_tool() -> None:
+    bag = ToolInputBag()
+    out = WorkflowRun.merge_output_ids(
+        bag,
+        {"type": "Shell", "run_id": "wf_stolen"},
+        tool_name="run_terminal_command",
+    )
+    assert out.as_str("run_id") == ""
+    assert bag is out
+
+
+def test_merge_output_ids_keeps_existing_ids() -> None:
+    bag = ToolInputBag({"run_id": "wf_keep", "name": "old"})
+    out = WorkflowRun.merge_output_ids(
+        bag,
+        {"type": "Workflow", "run_id": "wf_new", "name": "new"},
+        tool_name="workflow",
+    )
+    assert out.as_str("run_id") == "wf_keep"
+    assert out.as_str("name") == "old"
+
+
+def test_merge_output_ids_accepts_type_without_tool_name() -> None:
+    bag = ToolInputBag()
+    out = WorkflowRun.merge_output_ids(
+        bag,
+        {"type": "Workflow", "run_id": "wf_typed"},
+    )
+    assert out.as_str("run_id") == "wf_typed"
+
+
+def test_merge_output_ids_ignores_non_mapping_output() -> None:
+    bag = ToolInputBag()
+    assert WorkflowRun.merge_output_ids(bag, "not-a-map") is bag
+    assert WorkflowRun.merge_output_ids(bag, None) is bag

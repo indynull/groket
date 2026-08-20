@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from groket.models import TraceEvent
 from groket.session.turns import (
+    TurnSegment,
     event_display_turn_map,
     format_turns_plain,
     segment_timeline_turns,
@@ -1016,3 +1017,87 @@ def test_gap_in_start_numbers_is_not_filled() -> None:
     segs = segment_timeline_turns(tl)
     assert [s.turn_number for s in segs] == [0, 2]
     assert set(event_display_turn_map(segs).values()) == {0, 2}
+
+
+def test_user_prompt_preview_skips_harness_and_returns_operator() -> None:
+    segs = segment_timeline_turns(
+        [
+            _ev(0, "user_message_chunk", "<system-reminder>ignore</system-reminder>"),
+            _ev(1, "user_message_chunk", "<user_query>please fix</user_query>"),
+            _ev(2, "agent_message_chunk", "ok"),
+        ]
+    )
+    text, idx = segs[0].user_prompt_preview()
+    assert text == "please fix"
+    assert idx == 1
+
+
+def test_user_prompt_preview_empty_when_no_operator() -> None:
+    segs = segment_timeline_turns(
+        [
+            _ev(0, "agent_message_chunk", "only assistant"),
+        ]
+    )
+    text, idx = segs[0].user_prompt_preview()
+    assert text == ""
+    assert idx is None
+
+
+def test_assistant_preview_takes_last_nonempty() -> None:
+    segs = segment_timeline_turns(
+        [
+            _ev(0, "user_message_chunk", "<user_query>hi</user_query>"),
+            _ev(1, "agent_message_chunk", "first"),
+            _ev(2, "agent_message_chunk", ""),
+            _ev(3, "agent_message_chunk", "last wrap"),
+        ]
+    )
+    text, idx = segs[0].assistant_preview()
+    assert text == "last wrap"
+    assert idx == 3
+
+
+def test_assistant_preview_caps_long_text() -> None:
+    long_text = "A" * 80
+    segs = segment_timeline_turns(
+        [
+            _ev(0, "agent_message_chunk", long_text),
+        ]
+    )
+    text, idx = segs[0].assistant_preview(max_chars=20)
+    assert text.endswith("…")
+    assert len(text) == 20
+    assert idx == 0
+
+
+def test_turn_indices_for_preserves_order_and_drops_unknown() -> None:
+    tl = [
+        _ev(0, "turn_started", "turn started  turn_number=2"),
+        _ev(1, "user_message_chunk", "<user_query>a</user_query>"),
+        _ev(2, "turn_ended", "turn ended  outcome=completed"),
+        _ev(3, "turn_started", "turn started  turn_number=5"),
+        _ev(4, "user_message_chunk", "<user_query>b</user_query>"),
+        _ev(5, "turn_ended", "turn ended  outcome=completed"),
+    ]
+    segs = segment_timeline_turns(tl)
+    assert TurnSegment.turn_indices_for(segs, [4, 1, 4, 99]) == [5, 2]
+
+
+def test_indexes_for_prompt_includes_same_turn_tools() -> None:
+    u0 = _ev(1, "user_message_chunk", "<user_query>first</user_query>")
+    u0.prompt_index = 2
+    tool = _ev(2, "tool_call", tool="grep")
+    u1 = _ev(5, "user_message_chunk", "<user_query>second</user_query>")
+    u1.prompt_index = 3
+    tl = [
+        _ev(0, "turn_started", "turn started  turn_number=0"),
+        u0,
+        tool,
+        _ev(3, "turn_ended", "turn ended  outcome=completed"),
+        _ev(4, "turn_started", "turn started  turn_number=1"),
+        u1,
+        _ev(6, "turn_ended", "turn ended  outcome=completed"),
+    ]
+    segs = segment_timeline_turns(tl)
+    assert 2 in TurnSegment.indexes_for_prompt(segs, 2)
+    assert 5 not in TurnSegment.indexes_for_prompt(segs, 2)

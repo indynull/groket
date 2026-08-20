@@ -184,10 +184,10 @@ def test_apply_fs_catalog_events_append_marks_list_unchanged(tmp_path: Path) -> 
     assert changed.get("one") is False
 
 
-def test_apply_fs_catalog_events_force_rebuild_marks_list_changed(
+def test_apply_fs_catalog_events_refresh_error_marks_list_changed(
     tmp_path: Path,
 ) -> None:
-    """When incremental refresh fails, force rebuild still reports list changes."""
+    """A failed incremental refresh reports list change without a second scan."""
     from unittest.mock import patch
 
     from groket.integrations.daemon import apply_fs_catalog_events
@@ -201,17 +201,17 @@ def test_apply_fs_catalog_events_force_rebuild_marks_list_changed(
         json.dumps({"info": {"id": "one"}, "generated_title": "One live"}),
         encoding="utf-8",
     )
-    with patch.object(cache, "refresh_rows", side_effect=RuntimeError("boom")):
+    with patch.object(cache, "refresh_rows", side_effect=OSError("disk")):
         _sessions, _notes, changed = apply_fs_catalog_events(
             cache, [str(one / "summary.json")], [traces]
         )
     assert changed == {"one": True}
     by_id = {str(r["sessionId"]): r for r in cache.get()}
-    assert by_id["one"]["title"] == "One live"
+    assert by_id["one"]["title"] == "One"
 
 
 def test_event_paths_skip_encoded_cwd_bucket(tmp_path: Path) -> None:
-    from groket.integrations.daemon import _session_dirs_from_event_paths
+    from groket.integrations.daemon import CatalogWatchApply
 
     traces = tmp_path / "sessions"
     bucket = traces / "%2FUsers%2Fali%2F_dev%2F_git%2Fgroket"
@@ -219,9 +219,9 @@ def test_event_paths_skip_encoded_cwd_bucket(tmp_path: Path) -> None:
     sess.mkdir(parents=True)
     (sess / "summary.json").write_text("{}", encoding="utf-8")
     (sess / "updates.jsonl").write_text("{}\n", encoding="utf-8")
-    found = _session_dirs_from_event_paths([str(sess / "updates.jsonl")], roots=[traces])
+    found = CatalogWatchApply.session_dirs([str(sess / "updates.jsonl")], roots=[traces])
     assert [p.resolve() for p in found] == [sess.resolve()]
-    assert _session_dirs_from_event_paths([str(bucket)], roots=[traces]) == []
+    assert CatalogWatchApply.session_dirs([str(bucket)], roots=[traces]) == []
 
 
 def test_catalog_cache_refresh_rows_updates_one_status(tmp_path: Path) -> None:

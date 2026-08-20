@@ -415,3 +415,17 @@ def test_subagent_list_preview_is_not_the_dump() -> None:
         "Spawned general-purpose: Investigate the bug",
     )
     assert spawn == "Investigate the bug"
+
+
+def test_subagent_run_parses_spawn_and_finish_dump_lines() -> None:
+    from groket.session.subagents import SubagentRun
+
+    spawn = SubagentRun.spawn_from_content("Spawned general-purpose: Investigate the bug")
+    assert spawn["subagent_type"] == "general-purpose"
+    assert spawn["description"] == "Investigate the bug"
+    finish = SubagentRun.finish_from_content(
+        "Subagent finished  01a016d1-4df7-7d30-b99f-65289aa0b417  completed  duration_ms=96555"
+    )
+    assert finish["child_session_id"] == "01a016d1-4df7-7d30-b99f-65289aa0b417"
+    assert finish["status"] == "completed"
+    assert finish["duration_ms"] == 96555

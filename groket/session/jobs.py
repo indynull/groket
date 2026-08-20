@@ -5,19 +5,38 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import ClassVar
 
-from ..models import JsonObject, JsonValue, ToolInputBag, TraceEvent, as_json_object, json_as_str
+from ..analysis.base import Finding
+from ..bounded_cache import BoundedCache
+from ..constants import OVERVIEW_CACHE_MAXSIZE
+from ..models import (
+    JsonObject,
+    JsonValue,
+    Severity,
+    ToolInputBag,
+    TraceEvent,
+    as_json_object,
+    json_as_str,
+)
 from ..parser import parse_timeline
 from ..tool_display import task_fields_from_content
 from .workflows import (
     WorkflowRun,
     load_session_workflows,
+    workflow_mapping,
     workflow_name_from_raw,
     workflow_run_id_from_raw,
     workflows_from_overview,
 )
 
 _MONITOR_LINE = {"DONE": "done", "FAILED": "failed", "CANCELLED": "cancelled"}
+
+type _JobFileStamp = tuple[tuple[str, int, int], ...]
+type _MonitorStamp = tuple[tuple[str, str], ...]
+type _BookendStamp = tuple[tuple[str, str, str], ...]
+type _JobReuseKey = tuple[tuple[_JobFileStamp, _MonitorStamp], _BookendStamp]
+type _JobRowLists = tuple[list[JsonObject], list[JsonObject], list[JsonObject]]
 
 
 @dataclass
@@ -36,6 +55,218 @@ class BackgroundJob:
     reported: bool
     tool_call_id: str = ""
 
+    @staticmethod
+    def completed_status(row: JsonObject) -> str:
+        """``done`` / ``failed`` / ``cancelled`` from a finish mapping."""
+        signal = json_as_str(row.get("signal")).casefold()
+        if row.get("explicitly_killed") is True or signal in {"killed", "sigkill", "sigterm"}:
+            return "cancelled"
+        code = row.get("exit_code")
+        if isinstance(code, int) and code != 0:
+            return "failed"
+        return "done"
+
+    @staticmethod
+    def kind_from(row: JsonObject, output_path: str, description: str) -> str:
+        """``monitor`` or ``background`` from a mapping and log path."""
+        raw = json_as_str(row.get("kind")).casefold()
+        if raw == "monitor" or "monitor-call" in output_path.replace("\\", "/"):
+            return "monitor"
+        if json_as_str(row.get("monitor_description")).strip():
+            return "monitor"
+        if description.casefold().startswith("live ") and "watch" in description.casefold():
+            return "monitor"
+        return "background"
+
+    @staticmethod
+    def last_line_class(path: Path) -> str:
+        """``done`` / ``failed`` / ``cancelled`` / ``running`` from the log tail."""
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, 2)
+                size = handle.tell()
+                handle.seek(max(0, size - 512))
+                chunk = handle.read()
+        except OSError:
+            return "running"
+        text = chunk.decode("utf-8", errors="replace")
+        return monitor_line_status(text) or "running"
+
+    @staticmethod
+    def status_from_log(output_path: str) -> str | None:
+        """Last-line monitor class from *output_path*, if any."""
+        if not output_path:
+            return None
+        return monitor_line_status(read_log_tail(Path(output_path), max_chars=4_000))
+
+    @classmethod
+    def from_mapping(cls, row: JsonObject, session_dir: Path) -> BackgroundJob:
+        """One job from a manifest or timeline bag."""
+        job_id = json_as_str(row.get("task_id") or row.get("id")).strip()
+        tool_call_id = json_as_str(row.get("tool_call_id")).strip()
+        command = json_as_str(row.get("command") or row.get("display_command"))
+        cwd = json_as_str(row.get("cwd"))
+        desc = json_as_str(row.get("description") or row.get("monitor_description")).strip()
+        output = json_as_str(row.get("output_file")).strip()
+        if output and not Path(output).is_absolute():
+            output = str(session_dir / output)
+        status = "running"
+        if row.get("completed") is True:
+            status = cls.completed_status(row)
+        return cls(
+            job_id=job_id or tool_call_id,
+            kind=cls.kind_from(row, output, desc),
+            status=status,
+            description=desc,
+            command=command,
+            cwd=cwd,
+            started_at=SessionJobs.epoch(row.get("start_time")),
+            ended_at=SessionJobs.epoch(row.get("end_time")),
+            output_path=output,
+            reported=False,
+            tool_call_id=tool_call_id,
+        )
+
+    @classmethod
+    def from_event(cls, event: TraceEvent, session_dir: Path) -> BackgroundJob:
+        """One job from a start/finish bookend."""
+        raw_in = event.raw_input
+        bag = raw_in.raw() if isinstance(raw_in, ToolInputBag) else {}
+        mapping = as_json_object(bag) if isinstance(bag, dict) else {}
+        job = cls.from_mapping(mapping, session_dir)
+        started = job.started_at
+        ended = job.ended_at
+        if event.event_type == "task_backgrounded" and started is None:
+            started = event.timestamp
+        if event.event_type == "task_completed":
+            if ended is None:
+                ended = event.timestamp
+            if job.status == "running":
+                job = replace(job, status=cls.completed_status(mapping))
+        if not job.tool_call_id:
+            job = replace(job, tool_call_id=event.tool_call_id)
+        return replace(job, started_at=started, ended_at=ended)
+
+    @classmethod
+    def from_overview(cls, row: JsonObject) -> BackgroundJob:
+        """Hydrate one ``session/overview`` job row."""
+        return cls(
+            job_id=json_as_str(row.get("id")),
+            kind=json_as_str(row.get("kind")) or "background",
+            status=json_as_str(row.get("status")) or "running",
+            description=json_as_str(row.get("description")),
+            command=json_as_str(row.get("command")),
+            cwd=json_as_str(row.get("cwd")),
+            started_at=SessionJobs.optional_int(row.get("startedAt")),
+            ended_at=SessionJobs.optional_int(row.get("endedAt")),
+            output_path=json_as_str(row.get("outputPath")),
+            reported=row.get("reported") is True,
+            tool_call_id=json_as_str(row.get("toolCallId")),
+        )
+
+    def merge(self, extra: BackgroundJob) -> BackgroundJob:
+        """Combine two records for the same id (later finish wins status)."""
+        rank = {"running": 0, "done": 1, "failed": 2, "cancelled": 2}
+        status = (
+            extra.status if rank.get(extra.status, 0) >= rank.get(self.status, 0) else self.status
+        )
+        return BackgroundJob(
+            job_id=extra.job_id or self.job_id,
+            kind=extra.kind if extra.kind == "monitor" else self.kind,
+            status=status,
+            description=extra.description or self.description,
+            command=extra.command or self.command,
+            cwd=extra.cwd or self.cwd,
+            started_at=self.started_at if self.started_at is not None else extra.started_at,
+            ended_at=extra.ended_at if extra.ended_at is not None else self.ended_at,
+            output_path=extra.output_path or self.output_path,
+            reported=self.reported or extra.reported,
+            tool_call_id=extra.tool_call_id or self.tool_call_id,
+        )
+
+    def mapping(self, *, events: list[TraceEvent] | None = None) -> JsonObject:
+        """CamelCase overview row."""
+        ev_i = self.event_index(events) if events else None
+        return {
+            "id": self.job_id,
+            "kind": self.kind,
+            "status": self.status,
+            "description": self.description,
+            "command": self.command,
+            "cwd": self.cwd,
+            "startedAt": self.started_at,
+            "endedAt": self.ended_at,
+            "outputPath": self.output_path,
+            "reported": self.reported,
+            "toolCallId": self.tool_call_id,
+            "eventIndex": ev_i,
+        }
+
+    def event_index(self, events: list[TraceEvent]) -> int | None:
+        """First Timeline bookend, or None."""
+        wanted = (self.job_id or "").strip()
+        call = (self.tool_call_id or "").strip()
+        for ev in events:
+            ev_id = event_task_id(ev)
+            ev_call = ev.tool_call_id or ""
+            if (wanted and ev_id == wanted) or (call and ev_call == call):
+                return int(ev.index)
+        return None
+
+    def evidence(self, events: list[TraceEvent]) -> tuple[list[int], list[str]]:
+        """Timeline indexes and tool-call ids for this job."""
+        indices: list[int] = []
+        calls: list[str] = []
+        wanted = (self.job_id or "").strip()
+        call = (self.tool_call_id or "").strip()
+        for ev in events:
+            ev_id = event_task_id(ev)
+            ev_call = ev.tool_call_id or ""
+            if (wanted and ev_id == wanted) or (call and ev_call == call):
+                indices.append(int(ev.index))
+                if ev.tool_call_id:
+                    calls.append(ev.tool_call_id)
+        return indices, calls
+
+    def finding(self, events: list[TraceEvent]) -> Finding:
+        """Paste-ready Finding for a failed or cancelled job."""
+        label = self.description or self.command or self.job_id
+        indices, calls = self.evidence(events)
+        asked = (self.command or self.description or "").strip() or label
+        why = f"Background {self.kind or 'job'} {label} ended {self.status}."
+        bits = [p for p in ((self.status or "").strip(), (self.kind or "").strip()) if p]
+        happened = " · ".join(bits)
+        where = f"Timeline {', '.join(f'#{i}' for i in indices[:8])}" if indices else f"job {label}"
+        issue = (
+            f"What: Backgrounded {asked}.\n"
+            f"Where: {where}\n"
+            f"Why: {why}\n"
+            f"Should have: Finish the background job or monitor without a failed status.\n"
+            f"Pattern: failed session run\n"
+        )
+        extras: JsonObject = {
+            "what_model_did": f"Backgrounded {asked}.",
+            "where": where,
+            "why_mistake": why,
+            "what_should_have_done": "Finish the background job or monitor without a failed status.",
+            "issue_box": issue,
+            "asked": asked,
+            "happened": happened,
+            "failed": self.status,
+        }
+        cancelled = (self.status or "").strip().lower() in {"cancelled", "interrupted"}
+        return Finding(
+            id=f"job:{self.job_id}",
+            plugin_id="basic",
+            severity=Severity.MEDIUM if cancelled else Severity.HIGH,
+            title=f"Background job {label} failed",
+            detail=why,
+            category="job",
+            tool_call_ids=calls,
+            event_indices=indices,
+            extras=extras,
+        )
+
 
 @dataclass
 class ScheduleTask:
@@ -52,6 +283,37 @@ class ScheduleTask:
     recurring: bool
     created_at: str = ""
 
+    @classmethod
+    def from_overview(cls, row: JsonObject) -> ScheduleTask:
+        """Hydrate one ``session/overview`` schedule row."""
+        return cls(
+            task_id=json_as_str(row.get("id")),
+            interval_secs=SessionJobs.optional_int(row.get("intervalSecs")),
+            human_schedule=json_as_str(row.get("humanSchedule")),
+            next_fire_at=json_as_str(row.get("nextFireAt")),
+            last_fired_at=json_as_str(row.get("lastFiredAt")),
+            last_subagent_id=json_as_str(row.get("lastSubagentId")),
+            prompt_preview=json_as_str(row.get("promptPreview")),
+            durable=row.get("durable") is True,
+            recurring=row.get("recurring") is True,
+            created_at=json_as_str(row.get("createdAt")),
+        )
+
+    def mapping(self) -> JsonObject:
+        """CamelCase overview row."""
+        return {
+            "id": self.task_id,
+            "intervalSecs": self.interval_secs,
+            "humanSchedule": self.human_schedule,
+            "nextFireAt": self.next_fire_at,
+            "lastFiredAt": self.last_fired_at,
+            "lastSubagentId": self.last_subagent_id,
+            "promptPreview": self.prompt_preview,
+            "durable": self.durable,
+            "recurring": self.recurring,
+            "createdAt": self.created_at,
+        }
+
 
 @dataclass
 class SessionJobs:
@@ -61,6 +323,238 @@ class SessionJobs:
     schedules: list[ScheduleTask]
     workflows: list[WorkflowRun] = field(default_factory=list)
 
+    @staticmethod
+    def optional_int(val: JsonValue) -> int | None:
+        """Int from JSON, or None when missing or not numeric."""
+        return WorkflowRun.optional_int(val)
+
+    @staticmethod
+    def epoch(val: JsonValue) -> int | None:
+        """Unix seconds from an int or ``{secs_since_epoch}`` object."""
+        if isinstance(val, dict):
+            secs = val.get("secs_since_epoch")
+            if isinstance(secs, bool):
+                return None
+            if isinstance(secs, (int, float)):
+                return int(secs)
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return int(val)
+        return None
+
+    @staticmethod
+    def read_json(path: Path) -> JsonValue:
+        """JSON file contents, or None when missing or not JSON."""
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def load(cls, session_dir: Path, events: list[TraceEvent] | None = None) -> SessionJobs:
+        """Merge timeline bookends, resources_state, manifest, and terminal logs."""
+        sd = Path(session_dir)
+        evs = events if events is not None else parse_timeline(sd)
+        raw = cls.read_json(sd / "resources_state.json")
+        mapping = as_json_object(raw) if isinstance(raw, dict) else {}
+        inner = mapping.get("state")
+        state = as_json_object(inner) if isinstance(inner, dict) else {}
+        reported = cls.reported_ids(state)
+        jobs: dict[str, BackgroundJob] = {}
+        for ev in evs:
+            if ev.event_type not in {"task_backgrounded", "task_completed"}:
+                continue
+            job = BackgroundJob.from_event(ev, sd)
+            if not job.job_id:
+                continue
+            prev = jobs.get(job.job_id)
+            jobs[job.job_id] = prev.merge(job) if prev else job
+        raw_list = cls.read_json(sd / "background_tasks_manifest.json")
+        rows = (
+            [as_json_object(item) for item in raw_list if isinstance(item, dict)]
+            if isinstance(raw_list, list)
+            else []
+        )
+        for row in rows:
+            job = BackgroundJob.from_mapping(row, sd)
+            if not job.job_id:
+                continue
+            prev = jobs.get(job.job_id)
+            jobs[job.job_id] = prev.merge(job) if prev else job
+        for job_id, job in list(jobs.items()):
+            log_status = BackgroundJob.status_from_log(job.output_path)
+            status = log_status or job.status
+            jobs[job_id] = replace(job, status=status, reported=job_id in reported)
+        return cls(
+            jobs=sorted(jobs.values(), key=lambda j: (j.started_at or 0, j.job_id)),
+            schedules=sorted(
+                cls.schedules_from(evs, state),
+                key=lambda s: (s.created_at, s.task_id),
+            ),
+            workflows=load_session_workflows(sd),
+        )
+
+    @classmethod
+    def from_overview(cls, overview: JsonObject) -> SessionJobs:
+        """Hydrate domain rows from a ``session/overview`` payload."""
+        jobs: list[BackgroundJob] = []
+        raw_jobs = overview.get("backgroundJobs")
+        if isinstance(raw_jobs, list):
+            for item in raw_jobs:
+                if isinstance(item, dict):
+                    jobs.append(BackgroundJob.from_overview(as_json_object(item)))
+        schedules: list[ScheduleTask] = []
+        raw_sch = overview.get("schedules")
+        if isinstance(raw_sch, list):
+            for item in raw_sch:
+                if isinstance(item, dict):
+                    schedules.append(ScheduleTask.from_overview(as_json_object(item)))
+        return cls(
+            jobs=jobs,
+            schedules=schedules,
+            workflows=workflows_from_overview(overview),
+        )
+
+    @staticmethod
+    def reported_ids(state: JsonObject) -> set[str]:
+        """Task ids listed under ``ReportedTaskCompletions``."""
+        block = state.get("grok_build.ReportedTaskCompletions")
+        if not isinstance(block, dict):
+            return set()
+        rows = block.get("reported")
+        if not isinstance(rows, list):
+            return set()
+        return {json_as_str(item).strip() for item in rows if json_as_str(item).strip()}
+
+    @staticmethod
+    def human_interval(secs: int | None) -> str:
+        """``every N minutes`` from interval seconds."""
+        if secs is None or secs <= 0:
+            return ""
+        if secs % 3600 == 0:
+            hours = secs // 3600
+            return f"every {hours} hour" if hours == 1 else f"every {hours} hours"
+        if secs % 60 == 0:
+            mins = secs // 60
+            return f"every {mins} minute" if mins == 1 else f"every {mins} minutes"
+        return f"every {secs} seconds"
+
+    @classmethod
+    def schedules_from(cls, events: list[TraceEvent], state: JsonObject) -> list[ScheduleTask]:
+        """Merge timeline bookends with ``grok_build.Scheduler`` state."""
+        by_id: dict[str, ScheduleTask] = {}
+        for ev in events:
+            if not ev.event_type.startswith("scheduled_task_"):
+                continue
+            raw_in = ev.raw_input
+            bag = raw_in.raw() if isinstance(raw_in, ToolInputBag) else {}
+            mapping = as_json_object(bag) if isinstance(bag, dict) else {}
+            task_id = json_as_str(mapping.get("task_id")).strip()
+            if not task_id:
+                continue
+            prompt = json_as_str(mapping.get("prompt")).replace("\n", " ").strip()
+            by_id[task_id] = ScheduleTask(
+                task_id=task_id,
+                interval_secs=None,
+                human_schedule=json_as_str(mapping.get("human_schedule")).strip(),
+                next_fire_at=json_as_str(mapping.get("next_fire_at")).strip(),
+                last_fired_at="",
+                last_subagent_id="",
+                prompt_preview=prompt[:200],
+                durable=False,
+                recurring=False,
+            )
+        scheduler = state.get("grok_build.Scheduler")
+        tasks_raw = scheduler.get("tasks") if isinstance(scheduler, dict) else None
+        if isinstance(tasks_raw, list):
+            for item in tasks_raw:
+                if not isinstance(item, dict):
+                    continue
+                row = as_json_object(item)
+                task_id = json_as_str(row.get("id")).strip()
+                if not task_id:
+                    continue
+                prompt = json_as_str(row.get("prompt")).replace("\n", " ").strip()
+                prev = by_id.get(task_id)
+                interval = cls.optional_int(row.get("intervalSecs"))
+                by_id[task_id] = ScheduleTask(
+                    task_id=task_id,
+                    interval_secs=interval,
+                    human_schedule=(prev.human_schedule if prev else "")
+                    or cls.human_interval(interval),
+                    next_fire_at=prev.next_fire_at if prev else "",
+                    last_fired_at=json_as_str(row.get("lastFiredAt")).strip(),
+                    last_subagent_id=json_as_str(row.get("lastSubagentId")).strip(),
+                    prompt_preview=(prev.prompt_preview if prev else "") or prompt[:200],
+                    durable=row.get("durable") is True,
+                    recurring=row.get("recurring") is True,
+                    created_at=json_as_str(row.get("createdAt")).strip(),
+                )
+        return list(by_id.values())
+
+    @staticmethod
+    def bookend_key(events: list[TraceEvent]) -> tuple[tuple[str, str, str], ...]:
+        """Identity of timeline job / schedule bookends already in *events*."""
+        rows: list[tuple[str, str, str]] = []
+        for ev in events:
+            kind = ev.event_type or ""
+            if kind not in {"task_backgrounded", "task_completed"} and not kind.startswith(
+                "scheduled_task_"
+            ):
+                continue
+            rows.append((kind, event_task_id(ev), ev.tool_call_id or ""))
+        return tuple(rows)
+
+    _row_cache: ClassVar[BoundedCache[tuple[_JobReuseKey, _JobRowLists]]] = BoundedCache(
+        OVERVIEW_CACHE_MAXSIZE
+    )
+
+    @staticmethod
+    def copy_rows(
+        jobs: list[JsonObject],
+        schedules: list[JsonObject],
+        workflows: list[JsonObject],
+    ) -> tuple[list[JsonObject], list[JsonObject], list[JsonObject]]:
+        """Shallow-copy overview job rows so later index writes stay local."""
+        return (
+            [dict(row) for row in jobs],
+            [dict(row) for row in schedules],
+            [dict(row) for row in workflows],
+        )
+
+    @staticmethod
+    def json_rows(rows: list[JsonObject]) -> list[JsonValue]:
+        """Overview job rows as a JSON list value."""
+        return list(rows)
+
+    @classmethod
+    def overview_rows(
+        cls,
+        session_dir: Path,
+        events: list[TraceEvent],
+        cache_key: str,
+    ) -> tuple[list[JsonObject], list[JsonObject], list[JsonObject]]:
+        """Jobs / schedules / workflows, reused when files and bookends match."""
+        sd = Path(session_dir)
+        reuse_key = (job_input_stamp(sd), cls.bookend_key(events))
+        cached = cls._row_cache.get(cache_key)
+        if cached is not None and cached[0] == reuse_key:
+            jobs, schedules, workflows = cls.copy_rows(*cached[1])
+        else:
+            packed = cls.load(sd, events)
+            jobs = [job.mapping() for job in packed.jobs]
+            schedules = [task.mapping() for task in packed.schedules]
+            workflows = [workflow_mapping(run) for run in packed.workflows]
+            cls._row_cache[cache_key] = (
+                reuse_key,
+                cls.copy_rows(jobs, schedules, workflows),
+            )
+        set_bookend_indexes(events, jobs, workflows)
+        return jobs, schedules, workflows
+
 
 def session_jobs_for_view(
     overview: JsonObject | None,
@@ -69,8 +563,8 @@ def session_jobs_for_view(
 ) -> SessionJobs:
     """Owner payload when attached; disk merge when inspecting offline."""
     if overview is not None:
-        return jobs_from_overview(overview)
-    return load_session_jobs(session_dir, events)
+        return SessionJobs.from_overview(overview)
+    return SessionJobs.load(session_dir, events)
 
 
 def job_input_stamp(
@@ -100,7 +594,7 @@ def job_input_stamp(
         except OSError:
             paths = []
         for path in paths:
-            monitors.append((path.name, _last_line_status_class(path)))
+            monitors.append((path.name, BackgroundJob.last_line_class(path)))
     wf_root = sd / "workflows"
     if wf_root.is_dir():
         try:
@@ -127,48 +621,12 @@ def load_session_jobs(
     :param events: Optional pre-parsed timeline (avoids a second read).
     :returns: Stable job and schedule lists (id order).
     """
-    sd = Path(session_dir)
-    evs = events if events is not None else parse_timeline(sd)
-    resources = _read_json_object(sd / "resources_state.json")
-    state = _resources_state(resources)
-    reported = _reported_ids(state)
-    jobs: dict[str, BackgroundJob] = {}
-    for ev in evs:
-        if ev.event_type not in {"task_backgrounded", "task_completed"}:
-            continue
-        job = _job_from_event(ev, sd)
-        if not job.job_id:
-            continue
-        prev = jobs.get(job.job_id)
-        jobs[job.job_id] = _merge_job(prev, job) if prev else job
-    for row in _read_json_list(sd / "background_tasks_manifest.json"):
-        job = _job_from_mapping(row, sd)
-        if not job.job_id:
-            continue
-        prev = jobs.get(job.job_id)
-        jobs[job.job_id] = _merge_job(prev, job) if prev else job
-    for job_id, job in list(jobs.items()):
-        log_status = _status_from_log(job.output_path)
-        status = log_status or job.status
-        jobs[job_id] = replace(job, status=status, reported=job_id in reported)
-    schedules = _merge_schedules(evs, state)
-    return SessionJobs(
-        jobs=sorted(jobs.values(), key=lambda j: (j.started_at or 0, j.job_id)),
-        schedules=sorted(schedules, key=lambda s: (s.created_at, s.task_id)),
-        workflows=load_session_workflows(sd),
-    )
+    return SessionJobs.load(session_dir, events)
 
 
 def job_event_index(job: BackgroundJob, events: list[TraceEvent]) -> int | None:
     """First Timeline bookend for *job*, or None."""
-    wanted = (job.job_id or "").strip()
-    call = (job.tool_call_id or "").strip()
-    for ev in events:
-        ev_id = event_task_id(ev)
-        ev_call = ev.tool_call_id or ""
-        if (wanted and ev_id == wanted) or (call and ev_call == call):
-            return int(ev.index)
-    return None
+    return job.event_index(events)
 
 
 def set_bookend_indexes(
@@ -221,37 +679,12 @@ def set_bookend_indexes(
 
 def job_mapping(job: BackgroundJob, *, events: list[TraceEvent] | None = None) -> JsonObject:
     """CamelCase overview row for one background or monitor job."""
-    ev_i = job_event_index(job, events) if events else None
-    return {
-        "id": job.job_id,
-        "kind": job.kind,
-        "status": job.status,
-        "description": job.description,
-        "command": job.command,
-        "cwd": job.cwd,
-        "startedAt": job.started_at,
-        "endedAt": job.ended_at,
-        "outputPath": job.output_path,
-        "reported": job.reported,
-        "toolCallId": job.tool_call_id,
-        "eventIndex": ev_i,
-    }
+    return job.mapping(events=events)
 
 
 def schedule_mapping(task: ScheduleTask) -> JsonObject:
     """CamelCase overview row for one scheduler task."""
-    return {
-        "id": task.task_id,
-        "intervalSecs": task.interval_secs,
-        "humanSchedule": task.human_schedule,
-        "nextFireAt": task.next_fire_at,
-        "lastFiredAt": task.last_fired_at,
-        "lastSubagentId": task.last_subagent_id,
-        "promptPreview": task.prompt_preview,
-        "durable": task.durable,
-        "recurring": task.recurring,
-        "createdAt": task.created_at,
-    }
+    return task.mapping()
 
 
 def schedule_for_event(event: TraceEvent, schedules: list[ScheduleTask]) -> ScheduleTask | None:
@@ -291,13 +724,13 @@ def job_status_for_event(event: TraceEvent, *, mate: TraceEvent | None = None) -
         fmap = as_json_object(fbag) if isinstance(fbag, dict) else {}
         path = path or json_as_str(fmap.get("output_file"))
         mapping = {**mapping, **fmap}
-    log_st = _status_from_log(path)
+    log_st = BackgroundJob.status_from_log(path)
     if (
         event.event_type == "task_completed"
         or (finish is not None and finish.event_type == "task_completed")
         or mapping.get("completed") is True
     ):
-        return log_st or _completed_status(mapping)
+        return log_st or BackgroundJob.completed_status(mapping)
     return log_st or "running"
 
 
@@ -331,59 +764,12 @@ def event_job_kind(event: TraceEvent) -> str:
     mapping = as_json_object(bag) if isinstance(bag, dict) else {}
     output = json_as_str(mapping.get("output_file"))
     desc = json_as_str(mapping.get("description") or mapping.get("monitor_description"))
-    return _job_kind(mapping, output, desc)
+    return BackgroundJob.kind_from(mapping, output, desc)
 
 
 def jobs_from_overview(overview: JsonObject) -> SessionJobs:
     """Hydrate domain rows from a ``session/overview`` payload."""
-    jobs: list[BackgroundJob] = []
-    raw_jobs = overview.get("backgroundJobs")
-    if isinstance(raw_jobs, list):
-        for item in raw_jobs:
-            if not isinstance(item, dict):
-                continue
-            row = as_json_object(item)
-            jobs.append(
-                BackgroundJob(
-                    job_id=json_as_str(row.get("id")),
-                    kind=json_as_str(row.get("kind")) or "background",
-                    status=json_as_str(row.get("status")) or "running",
-                    description=json_as_str(row.get("description")),
-                    command=json_as_str(row.get("command")),
-                    cwd=json_as_str(row.get("cwd")),
-                    started_at=_as_int(row.get("startedAt")),
-                    ended_at=_as_int(row.get("endedAt")),
-                    output_path=json_as_str(row.get("outputPath")),
-                    reported=row.get("reported") is True,
-                    tool_call_id=json_as_str(row.get("toolCallId")),
-                )
-            )
-    schedules: list[ScheduleTask] = []
-    raw_sch = overview.get("schedules")
-    if isinstance(raw_sch, list):
-        for item in raw_sch:
-            if not isinstance(item, dict):
-                continue
-            row = as_json_object(item)
-            schedules.append(
-                ScheduleTask(
-                    task_id=json_as_str(row.get("id")),
-                    interval_secs=_as_int(row.get("intervalSecs")),
-                    human_schedule=json_as_str(row.get("humanSchedule")),
-                    next_fire_at=json_as_str(row.get("nextFireAt")),
-                    last_fired_at=json_as_str(row.get("lastFiredAt")),
-                    last_subagent_id=json_as_str(row.get("lastSubagentId")),
-                    prompt_preview=json_as_str(row.get("promptPreview")),
-                    durable=row.get("durable") is True,
-                    recurring=row.get("recurring") is True,
-                    created_at=json_as_str(row.get("createdAt")),
-                )
-            )
-    return SessionJobs(
-        jobs=jobs,
-        schedules=schedules,
-        workflows=workflows_from_overview(overview),
-    )
+    return SessionJobs.from_overview(overview)
 
 
 def read_log_tail(path: Path, *, max_chars: int = 8_000) -> str:
@@ -409,234 +795,4 @@ def monitor_line_status(text: str) -> str | None:
         token = line.strip().split(maxsplit=1)[0] if line.strip() else ""
         if token in _MONITOR_LINE:
             return _MONITOR_LINE[token]
-    return None
-
-
-def _last_line_status_class(path: Path) -> str:
-    """``done`` / ``failed`` / ``cancelled`` / ``running`` from the log tail."""
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, 2)
-            size = handle.tell()
-            handle.seek(max(0, size - 512))
-            chunk = handle.read()
-    except OSError:
-        return "running"
-    text = chunk.decode("utf-8", errors="replace")
-    return monitor_line_status(text) or "running"
-
-
-def _status_from_log(output_path: str) -> str | None:
-    if not output_path:
-        return None
-    return monitor_line_status(read_log_tail(Path(output_path), max_chars=4_000))
-
-
-def _job_from_event(event: TraceEvent, session_dir: Path) -> BackgroundJob:
-    raw_in = event.raw_input
-    bag = raw_in.raw() if isinstance(raw_in, ToolInputBag) else {}
-    mapping = as_json_object(bag) if isinstance(bag, dict) else {}
-    job = _job_from_mapping(mapping, session_dir)
-    started = job.started_at
-    ended = job.ended_at
-    if event.event_type == "task_backgrounded" and started is None:
-        started = event.timestamp
-    if event.event_type == "task_completed":
-        if ended is None:
-            ended = event.timestamp
-        if job.status == "running":
-            job = replace(job, status=_completed_status(mapping))
-    if not job.tool_call_id:
-        job = replace(job, tool_call_id=event.tool_call_id)
-    return replace(job, started_at=started, ended_at=ended)
-
-
-def _job_from_mapping(row: JsonObject, session_dir: Path) -> BackgroundJob:
-    job_id = json_as_str(row.get("task_id") or row.get("id")).strip()
-    tool_call_id = json_as_str(row.get("tool_call_id")).strip()
-    command = json_as_str(row.get("command") or row.get("display_command"))
-    cwd = json_as_str(row.get("cwd"))
-    desc = json_as_str(row.get("description") or row.get("monitor_description")).strip()
-    output = json_as_str(row.get("output_file")).strip()
-    if output and not Path(output).is_absolute():
-        output = str(session_dir / output)
-    kind = _job_kind(row, output, desc)
-    status = "running"
-    if row.get("completed") is True:
-        status = _completed_status(row)
-    return BackgroundJob(
-        job_id=job_id or tool_call_id,
-        kind=kind,
-        status=status,
-        description=desc,
-        command=command,
-        cwd=cwd,
-        started_at=_epoch(row.get("start_time")),
-        ended_at=_epoch(row.get("end_time")),
-        output_path=output,
-        reported=False,
-        tool_call_id=tool_call_id,
-    )
-
-
-def _completed_status(row: JsonObject) -> str:
-    signal = json_as_str(row.get("signal")).casefold()
-    if row.get("explicitly_killed") is True or signal in {"killed", "sigkill", "sigterm"}:
-        return "cancelled"
-    code = row.get("exit_code")
-    if isinstance(code, int) and code != 0:
-        return "failed"
-    return "done"
-
-
-def _job_kind(row: JsonObject, output_path: str, description: str) -> str:
-    raw = json_as_str(row.get("kind")).casefold()
-    if raw == "monitor" or "monitor-call" in output_path.replace("\\", "/"):
-        return "monitor"
-    if json_as_str(row.get("monitor_description")).strip():
-        return "monitor"
-    if description.casefold().startswith("live ") and "watch" in description.casefold():
-        return "monitor"
-    return "background"
-
-
-def _merge_job(base: BackgroundJob, extra: BackgroundJob) -> BackgroundJob:
-    return BackgroundJob(
-        job_id=extra.job_id or base.job_id,
-        kind=extra.kind if extra.kind == "monitor" else base.kind,
-        status=_prefer_status(base.status, extra.status),
-        description=extra.description or base.description,
-        command=extra.command or base.command,
-        cwd=extra.cwd or base.cwd,
-        started_at=base.started_at if base.started_at is not None else extra.started_at,
-        ended_at=extra.ended_at if extra.ended_at is not None else base.ended_at,
-        output_path=extra.output_path or base.output_path,
-        reported=base.reported or extra.reported,
-        tool_call_id=extra.tool_call_id or base.tool_call_id,
-    )
-
-
-def _prefer_status(old: str, new: str) -> str:
-    rank = {"running": 0, "done": 1, "failed": 2, "cancelled": 2}
-    return new if rank.get(new, 0) >= rank.get(old, 0) else old
-
-
-def _merge_schedules(events: list[TraceEvent], state: JsonObject) -> list[ScheduleTask]:
-    by_id: dict[str, ScheduleTask] = {}
-    for ev in events:
-        if not ev.event_type.startswith("scheduled_task_"):
-            continue
-        raw_in = ev.raw_input
-        bag = raw_in.raw() if isinstance(raw_in, ToolInputBag) else {}
-        mapping = as_json_object(bag) if isinstance(bag, dict) else {}
-        task_id = json_as_str(mapping.get("task_id")).strip()
-        if not task_id:
-            continue
-        prompt = json_as_str(mapping.get("prompt")).replace("\n", " ").strip()
-        by_id[task_id] = ScheduleTask(
-            task_id=task_id,
-            interval_secs=None,
-            human_schedule=json_as_str(mapping.get("human_schedule")).strip(),
-            next_fire_at=json_as_str(mapping.get("next_fire_at")).strip(),
-            last_fired_at="",
-            last_subagent_id="",
-            prompt_preview=prompt[:200],
-            durable=False,
-            recurring=False,
-        )
-    scheduler = state.get("grok_build.Scheduler")
-    tasks_raw = scheduler.get("tasks") if isinstance(scheduler, dict) else None
-    if isinstance(tasks_raw, list):
-        for item in tasks_raw:
-            if not isinstance(item, dict):
-                continue
-            row = as_json_object(item)
-            task_id = json_as_str(row.get("id")).strip()
-            if not task_id:
-                continue
-            prompt = json_as_str(row.get("prompt")).replace("\n", " ").strip()
-            prev = by_id.get(task_id)
-            by_id[task_id] = ScheduleTask(
-                task_id=task_id,
-                interval_secs=_as_int(row.get("intervalSecs")),
-                human_schedule=(prev.human_schedule if prev else "")
-                or _human_interval(_as_int(row.get("intervalSecs"))),
-                next_fire_at=prev.next_fire_at if prev else "",
-                last_fired_at=json_as_str(row.get("lastFiredAt")).strip(),
-                last_subagent_id=json_as_str(row.get("lastSubagentId")).strip(),
-                prompt_preview=(prev.prompt_preview if prev else "") or prompt[:200],
-                durable=row.get("durable") is True,
-                recurring=row.get("recurring") is True,
-                created_at=json_as_str(row.get("createdAt")).strip(),
-            )
-    return list(by_id.values())
-
-
-def _human_interval(secs: int | None) -> str:
-    if secs is None or secs <= 0:
-        return ""
-    if secs % 3600 == 0:
-        hours = secs // 3600
-        return f"every {hours} hour" if hours == 1 else f"every {hours} hours"
-    if secs % 60 == 0:
-        mins = secs // 60
-        return f"every {mins} minute" if mins == 1 else f"every {mins} minutes"
-    return f"every {secs} seconds"
-
-
-def _resources_state(raw: JsonObject) -> JsonObject:
-    state = raw.get("state")
-    return as_json_object(state) if isinstance(state, dict) else {}
-
-
-def _reported_ids(state: JsonObject) -> set[str]:
-    block = state.get("grok_build.ReportedTaskCompletions")
-    if not isinstance(block, dict):
-        return set()
-    rows = block.get("reported")
-    if not isinstance(rows, list):
-        return set()
-    return {json_as_str(item).strip() for item in rows if json_as_str(item).strip()}
-
-
-def _read_json_object(path: Path) -> JsonObject:
-    raw = _read_json(path)
-    return as_json_object(raw) if isinstance(raw, dict) else {}
-
-
-def _read_json_list(path: Path) -> list[JsonObject]:
-    raw = _read_json(path)
-    if not isinstance(raw, list):
-        return []
-    return [as_json_object(item) for item in raw if isinstance(item, dict)]
-
-
-def _read_json(path: Path) -> JsonValue:
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return None
-
-
-def _epoch(val: JsonValue) -> int | None:
-    if isinstance(val, dict):
-        secs = val.get("secs_since_epoch")
-        if isinstance(secs, bool):
-            return None
-        if isinstance(secs, (int, float)):
-            return int(secs)
-    if isinstance(val, bool):
-        return None
-    if isinstance(val, (int, float)):
-        return int(val)
-    return None
-
-
-def _as_int(val: JsonValue) -> int | None:
-    if isinstance(val, bool):
-        return None
-    if isinstance(val, (int, float)):
-        return int(val)
     return None

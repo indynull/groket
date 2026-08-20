@@ -38,6 +38,7 @@ from .models import (
 from .paths import RUN_PREFIXES, is_run_dir_name, strip_run_prefix
 from .scan import find_sessions as walk_sessions
 from .scan import keep_updates_line, skip_dir_name
+from .session.workflows import WorkflowRun
 from .tool_display import job_list_preview, web_search_from_raw_output
 
 logger = logging.getLogger(__name__)
@@ -515,27 +516,6 @@ def _merge_search_into_bag(bag: ToolInputBag, query: str, url: str = "") -> Tool
     return ToolInputBag(data) if changed else bag
 
 
-def _merge_workflow_output_ids(
-    bag: ToolInputBag, raw_output: object, *, tool_name: str = ""
-) -> ToolInputBag:
-    """Copy ``run_id`` / ``name`` from a Workflow ``rawOutput`` onto the tool bag."""
-    if not isinstance(raw_output, dict):
-        return bag
-    kind = json_as_str(raw_output.get("type")).strip()
-    if (tool_name or "") != "workflow" and kind != "Workflow":
-        return bag
-    rid = json_as_str(raw_output.get("run_id")).strip()
-    if not rid:
-        return bag
-    data = dict(bag.raw())
-    if not json_as_str(data.get("run_id")).strip():
-        data["run_id"] = rid
-    name = json_as_str(raw_output.get("name")).strip()
-    if name and not json_as_str(data.get("name")).strip():
-        data["name"] = name
-    return ToolInputBag(data)
-
-
 def _apply_tool_result_meta(tc: ToolCall, update: dict) -> None:
     """Apply rawOutput metadata and error status from a tool_call_update."""
     raw_output = update.get("rawOutput")
@@ -751,7 +731,7 @@ def _coalesce_tool_result(
         if failed:
             pending.is_error = True
 
-    call_input = _merge_workflow_output_ids(call_input, raw_output, tool_name=tool_name)
+    call_input = WorkflowRun.merge_output_ids(call_input, raw_output, tool_name=tool_name)
     if call_id in pending_tools:
         pending_tools[call_id].raw_input = call_input
 
@@ -769,7 +749,7 @@ def _coalesce_tool_result(
         if call_input.raw() and not ev.raw_input.raw():
             ev.raw_input = call_input
         else:
-            ev.raw_input = _merge_workflow_output_ids(
+            ev.raw_input = WorkflowRun.merge_output_ids(
                 ev.raw_input if isinstance(ev.raw_input, ToolInputBag) else call_input,
                 raw_output,
                 tool_name=tool_name or ev.tool_name,

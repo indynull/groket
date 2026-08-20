@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import JsonObject, JsonValue, ToolInputBag, TraceEvent, as_json_object, json_as_str
+from ..tool_display import clip_preview
 from .turns import TurnSegment
 
 _KIND_KEYS = ("session_kind", "sessionKind")
@@ -50,7 +51,7 @@ def read_session_kind(path: Path) -> str:
         return ""
     if not isinstance(raw, dict):
         return ""
-    return _first_str(raw, _KIND_KEYS)
+    return SubagentRun.first_str(raw, _KIND_KEYS)
 
 
 def is_nested_subagent_stub(path: Path) -> bool:
@@ -172,28 +173,9 @@ def resolve_child_session_path(
         if root not in roots:
             roots.append(root)
     for root in roots:
-        hit = _named_session_under(root, cid)
+        hit = SubagentRun.named_under(root, cid)
         if hit is not None and is_full_session_mirror(hit):
             return hit
-    return None
-
-
-def _named_session_under(root: Path, name: str) -> Path | None:
-    if not root.is_dir():
-        return None
-    direct = root / name
-    if is_full_session_mirror(direct):
-        return direct
-    try:
-        with os.scandir(root) as it:
-            for ent in it:
-                if not ent.is_dir(follow_symlinks=False):
-                    continue
-                cand = Path(ent.path) / name
-                if is_full_session_mirror(cand):
-                    return cand
-    except OSError:
-        return None
     return None
 
 
@@ -221,29 +203,293 @@ class SubagentRun:
     def openable(self) -> bool:
         return self.child_path is not None and is_full_session_mirror(self.child_path)
 
+    @staticmethod
+    def first_str(data: Mapping[str, JsonValue], keys: tuple[str, ...]) -> str:
+        """First non-empty string among *keys*."""
+        for key in keys:
+            val = data.get(key)
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def first_int(data: Mapping[str, JsonValue], keys: tuple[str, ...]) -> int | None:
+        """First integer among *keys*."""
+        for key in keys:
+            val = data.get(key)
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, int):
+                return val
+            if isinstance(val, float) and val.is_integer():
+                return int(val)
+            if isinstance(val, str) and val.strip().isdigit():
+                return int(val.strip())
+        return None
+
+    @staticmethod
+    def optional_int(value: JsonValue) -> int | None:
+        """Int from JSON, or None when missing or not numeric."""
+        from .workflows import WorkflowRun
+
+        return WorkflowRun.optional_int(value)
+
+    @staticmethod
+    def named_under(root: Path, name: str) -> Path | None:
+        """Full session named *name* under *root* or one encoded-cwd child."""
+        if not root.is_dir():
+            return None
+        direct = root / name
+        if is_full_session_mirror(direct):
+            return direct
+        try:
+            with os.scandir(root) as it:
+                for ent in it:
+                    if not ent.is_dir(follow_symlinks=False):
+                        continue
+                    cand = Path(ent.path) / name
+                    if is_full_session_mirror(cand):
+                        return cand
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def key(child_id: str, sub_id: str) -> str:
+        """Dict key: child session id, else subagent id."""
+        return child_id or sub_id
+
+    @staticmethod
+    def bag(event: TraceEvent) -> dict[str, JsonValue]:
+        """Tool bag from a spawn/finish bookend."""
+        raw = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
+        return raw if isinstance(raw, dict) else {}
+
+    @classmethod
+    def empty(cls, *, child_id: str, sub_id: str) -> SubagentRun:
+        """Bare running row for *child_id* / *sub_id*."""
+        return cls(
+            subagent_id=sub_id,
+            child_session_id=child_id,
+            child_path=None,
+            subagent_type="",
+            description="",
+            status="running",
+            parent_turn_index=None,
+            parent_prompt_id="",
+            spawn_event_index=None,
+            finish_event_index=None,
+            duration_ms=None,
+            tool_calls=None,
+            turns=None,
+            tokens_used=None,
+            output_preview="",
+        )
+
+    @classmethod
+    def spawn_from_content(cls, content: str) -> dict[str, str]:
+        """Parse a ``spawned type: desc`` dump line."""
+        text = (content or "").strip()
+        if not text.lower().startswith("spawned "):
+            return {}
+        rest = text[8:].strip()
+        typ, sep, after = rest.partition(":")
+        if not sep:
+            return {"description": rest} if rest else {}
+        return {"subagent_type": typ.strip(), "description": after.strip()}
+
+    @classmethod
+    def finish_from_content(cls, content: str) -> dict[str, int | str]:
+        """Parse a ``subagent finished … duration_ms=`` dump line."""
+        text = (content or "").strip()
+        if not text.lower().startswith("subagent finished"):
+            return {}
+        rest = text[len("subagent finished") :].strip()
+        out: dict[str, int | str] = {}
+        if "duration_ms=" in rest:
+            head, _, tail = rest.partition("duration_ms=")
+            num = tail.split()[0] if tail else ""
+            if num.isdigit():
+                out["duration_ms"] = int(num)
+            rest = head.strip()
+        for part in rest.split():
+            if "-" in part and len(part) >= 8:
+                out["child_session_id"] = part
+            elif part.isalpha():
+                out["status"] = part
+        return out
+
+    @classmethod
+    def apply_spawn(
+        cls,
+        by_key: dict[str, SubagentRun],
+        ev: TraceEvent,
+        parent_dir: Path,
+        search_roots: list[Path] | None,
+    ) -> None:
+        """Merge a spawn bookend into *by_key*."""
+        bag = cls.bag(ev)
+        child = cls.first_str(bag, _SPAWN_CHILD_KEYS)
+        sub_id = cls.first_str(bag, _SPAWN_ID_KEYS)
+        key = cls.key(child, sub_id)
+        if not key:
+            return
+        run = by_key.get(key) or cls.empty(child_id=child, sub_id=sub_id)
+        run.child_session_id = child or run.child_session_id
+        run.subagent_id = sub_id or run.subagent_id
+        run.subagent_type = cls.first_str(bag, _SPAWN_TYPE_KEYS) or run.subagent_type
+        run.description = cls.first_str(bag, _SPAWN_DESC_KEYS) or run.description
+        run.parent_prompt_id = cls.first_str(bag, _SPAWN_PROMPT_KEYS) or run.parent_prompt_id
+        run.spawn_event_index = ev.index
+        if run.child_path is None and run.child_session_id:
+            run.child_path = resolve_child_session_path(
+                parent_dir, run.child_session_id, search_roots=search_roots
+            )
+        by_key[key] = run
+
+    @classmethod
+    def apply_finish(
+        cls,
+        by_key: dict[str, SubagentRun],
+        ev: TraceEvent,
+        parent_dir: Path,
+        search_roots: list[Path] | None,
+    ) -> None:
+        """Merge a finish bookend into *by_key*."""
+        bag = cls.bag(ev)
+        child = cls.first_str(bag, _SPAWN_CHILD_KEYS)
+        sub_id = cls.first_str(bag, _SPAWN_ID_KEYS)
+        key = cls.key(child, sub_id)
+        if not key:
+            return
+        run = by_key.get(key) or cls.empty(child_id=child, sub_id=sub_id)
+        run.child_session_id = child or run.child_session_id
+        run.subagent_id = sub_id or run.subagent_id
+        raw_st = cls.first_str(bag, _FINISH_STATUS_KEYS)
+        run.status = normalize_run_status(raw_st, finished=True)
+        run.duration_ms = cls.first_int(bag, _FINISH_DUR_KEYS)
+        run.tool_calls = cls.first_int(bag, _FINISH_TOOLS_KEYS)
+        run.turns = cls.first_int(bag, _FINISH_TURNS_KEYS)
+        run.tokens_used = cls.first_int(bag, _FINISH_TOKENS_KEYS)
+        out = cls.first_str(bag, _FINISH_OUTPUT_KEYS)
+        if out:
+            run.output_preview = out[:240]
+        run.finish_event_index = ev.index
+        if run.child_path is None and run.child_session_id:
+            run.child_path = resolve_child_session_path(
+                parent_dir, run.child_session_id, search_roots=search_roots
+            )
+        by_key[key] = run
+
+    @classmethod
+    def merge_meta(
+        cls,
+        by_key: dict[str, SubagentRun],
+        parent_dir: Path,
+        search_roots: list[Path] | None,
+    ) -> None:
+        """Fill gaps from ``subagents/*/meta.json``."""
+        sub_root = parent_dir / "subagents"
+        if not sub_root.is_dir():
+            return
+        try:
+            names = [ent.name for ent in os.scandir(sub_root) if ent.is_dir(follow_symlinks=False)]
+        except OSError:
+            return
+        for name in names:
+            meta = cls.read_meta(sub_root / name / "meta.json")
+            child = cls.first_str(meta, _SPAWN_CHILD_KEYS) or name
+            sub_id = cls.first_str(meta, _SPAWN_ID_KEYS) or name
+            key = cls.key(child, sub_id)
+            run = by_key.get(key) or cls.empty(child_id=child, sub_id=sub_id)
+            run.child_session_id = child or run.child_session_id
+            run.subagent_id = sub_id or run.subagent_id
+            run.subagent_type = cls.first_str(meta, _SPAWN_TYPE_KEYS) or run.subagent_type
+            run.description = cls.first_str(meta, _SPAWN_DESC_KEYS) or run.description
+            if run.finish_event_index is None:
+                raw_st = cls.first_str(meta, _FINISH_STATUS_KEYS)
+                if raw_st:
+                    run.status = normalize_run_status(raw_st, finished=raw_st.lower() != "running")
+            if run.child_path is None:
+                run.child_path = resolve_child_session_path(
+                    parent_dir, run.child_session_id, search_roots=search_roots
+                )
+            by_key[key] = run
+
+    @staticmethod
+    def read_meta(path: Path) -> dict[str, JsonValue]:
+        """``meta.json`` mapping, or empty when missing or not JSON."""
+        if not path.is_file():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def link_turn(
+        self,
+        segments: list[TurnSegment],
+        turn_by_index: Mapping[int, int],
+    ) -> None:
+        """Set parent turn from prompt id or spawn event index."""
+        needle = (self.parent_prompt_id or "").strip()
+        if needle:
+            for seg in segments:
+                if seg.prompt_index is not None and str(seg.prompt_index) == needle:
+                    self.parent_turn_index = seg.turn_index
+                    return
+        if self.spawn_event_index is not None:
+            self.parent_turn_index = turn_by_index.get(self.spawn_event_index)
+
+    @classmethod
+    def from_overview(cls, row: JsonObject) -> SubagentRun:
+        """Hydrate one ``session/overview`` subagent row."""
+        path_s = json_as_str(row.get("childPath")).strip()
+        return cls(
+            subagent_id=json_as_str(row.get("subagentId")),
+            child_session_id=json_as_str(row.get("childSessionId")),
+            child_path=Path(path_s) if path_s else None,
+            subagent_type=json_as_str(row.get("subagentType")),
+            description=json_as_str(row.get("description")),
+            status=json_as_str(row.get("status")) or "running",
+            parent_turn_index=cls.optional_int(row.get("turnIndex")),
+            parent_prompt_id=json_as_str(row.get("parentPromptId")),
+            spawn_event_index=cls.optional_int(row.get("spawnEventIndex")),
+            finish_event_index=cls.optional_int(row.get("finishEventIndex")),
+            duration_ms=cls.optional_int(row.get("durationMs")),
+            tool_calls=cls.optional_int(row.get("toolCalls")),
+            turns=cls.optional_int(row.get("turns")),
+            tokens_used=cls.optional_int(row.get("tokensUsed")),
+            output_preview=json_as_str(row.get("outputPreview")),
+        )
+
 
 def spawn_fields(update: Mapping[str, JsonValue]) -> dict[str, str]:
     """Pick spawn identity fields from a Grok ``subagent_spawned`` update."""
     return {
-        "child_session_id": _first_str(update, _SPAWN_CHILD_KEYS),
-        "subagent_id": _first_str(update, _SPAWN_ID_KEYS),
-        "parent_prompt_id": _first_str(update, _SPAWN_PROMPT_KEYS),
-        "subagent_type": _first_str(update, _SPAWN_TYPE_KEYS),
-        "description": _first_str(update, _SPAWN_DESC_KEYS),
+        "child_session_id": SubagentRun.first_str(update, _SPAWN_CHILD_KEYS),
+        "subagent_id": SubagentRun.first_str(update, _SPAWN_ID_KEYS),
+        "parent_prompt_id": SubagentRun.first_str(update, _SPAWN_PROMPT_KEYS),
+        "subagent_type": SubagentRun.first_str(update, _SPAWN_TYPE_KEYS),
+        "description": SubagentRun.first_str(update, _SPAWN_DESC_KEYS),
     }
 
 
 def finish_fields(update: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     """Pick finish stats from a Grok ``subagent_finished`` update."""
     return {
-        "child_session_id": _first_str(update, _SPAWN_CHILD_KEYS),
-        "subagent_id": _first_str(update, _SPAWN_ID_KEYS),
-        "status": _first_str(update, _FINISH_STATUS_KEYS),
-        "duration_ms": _first_int(update, _FINISH_DUR_KEYS),
-        "tool_calls": _first_int(update, _FINISH_TOOLS_KEYS),
-        "turns": _first_int(update, _FINISH_TURNS_KEYS),
-        "tokens_used": _first_int(update, _FINISH_TOKENS_KEYS),
-        "output": _first_str(update, _FINISH_OUTPUT_KEYS),
+        "child_session_id": SubagentRun.first_str(update, _SPAWN_CHILD_KEYS),
+        "subagent_id": SubagentRun.first_str(update, _SPAWN_ID_KEYS),
+        "status": SubagentRun.first_str(update, _FINISH_STATUS_KEYS),
+        "duration_ms": SubagentRun.first_int(update, _FINISH_DUR_KEYS),
+        "tool_calls": SubagentRun.first_int(update, _FINISH_TOOLS_KEYS),
+        "turns": SubagentRun.first_int(update, _FINISH_TURNS_KEYS),
+        "tokens_used": SubagentRun.first_int(update, _FINISH_TOKENS_KEYS),
+        "output": SubagentRun.first_str(update, _FINISH_OUTPUT_KEYS),
     }
 
 
@@ -271,12 +517,12 @@ def subagent_runs_for_session(
     by_key: dict[str, SubagentRun] = {}
     for ev in events:
         if ev.event_type == "subagent_spawned":
-            _apply_spawn(by_key, ev, parent_dir, search_roots)
+            SubagentRun.apply_spawn(by_key, ev, parent_dir, search_roots)
         elif ev.event_type == "subagent_finished":
-            _apply_finish(by_key, ev, parent_dir, search_roots)
-    _merge_meta_dirs(by_key, parent_dir, search_roots)
+            SubagentRun.apply_finish(by_key, ev, parent_dir, search_roots)
+    SubagentRun.merge_meta(by_key, parent_dir, search_roots)
     for run in by_key.values():
-        _link_turn(run, segments, turn_by_index)
+        run.link_turn(segments, turn_by_index)
     return sorted(
         by_key.values(),
         key=lambda r: (
@@ -316,30 +562,30 @@ def event_subagent_fields(event: TraceEvent) -> JsonObject:
     if not isinstance(bag, dict):
         return {}
     out: JsonObject = {}
-    child = _first_str(bag, _SPAWN_CHILD_KEYS)
+    child = SubagentRun.first_str(bag, _SPAWN_CHILD_KEYS)
     if child:
         out["childSessionId"] = child
-    sid = _first_str(bag, _SPAWN_ID_KEYS)
+    sid = SubagentRun.first_str(bag, _SPAWN_ID_KEYS)
     if sid:
         out["subagentId"] = sid
-    typ = _first_str(bag, _SPAWN_TYPE_KEYS)
+    typ = SubagentRun.first_str(bag, _SPAWN_TYPE_KEYS)
     if typ:
         out["subagentType"] = typ
-    desc = _first_str(bag, _SPAWN_DESC_KEYS)
+    desc = SubagentRun.first_str(bag, _SPAWN_DESC_KEYS)
     if desc:
         out["description"] = desc
-    st = _first_str(bag, _FINISH_STATUS_KEYS)
+    st = SubagentRun.first_str(bag, _FINISH_STATUS_KEYS)
     if st:
         out["subagentStatus"] = normalize_run_status(
             st, finished=event.event_type == "subagent_finished"
         )
-    dur = _first_int(bag, _FINISH_DUR_KEYS)
+    dur = SubagentRun.first_int(bag, _FINISH_DUR_KEYS)
     if dur is not None:
         out["durationMs"] = dur
-    tools = _first_int(bag, _FINISH_TOOLS_KEYS)
+    tools = SubagentRun.first_int(bag, _FINISH_TOOLS_KEYS)
     if tools is not None:
         out["toolCalls"] = tools
-    tokens = _first_int(bag, _FINISH_TOKENS_KEYS)
+    tokens = SubagentRun.first_int(bag, _FINISH_TOKENS_KEYS)
     if tokens is not None:
         out["tokensUsed"] = tokens
     return out
@@ -348,10 +594,10 @@ def event_subagent_fields(event: TraceEvent) -> JsonObject:
 def event_child_session_id(event: TraceEvent) -> str:
     """Child session id from a spawn/finish bookend, or empty."""
     bag = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
-    child = _first_str(bag, _SPAWN_CHILD_KEYS) if isinstance(bag, dict) else ""
+    child = SubagentRun.first_str(bag, _SPAWN_CHILD_KEYS) if isinstance(bag, dict) else ""
     if child:
         return child
-    dumped = _finish_from_content(event.content or "").get("child_session_id")
+    dumped = SubagentRun.finish_from_content(event.content or "").get("child_session_id")
     return dumped if isinstance(dumped, str) else ""
 
 
@@ -389,11 +635,11 @@ def subagent_inspect(
         if isinstance(bag, dict) and bag:
             bags.append(bag)
         if ev.event_type == "subagent_spawned":
-            rec = _spawn_from_content(ev.content or "")
+            rec = SubagentRun.spawn_from_content(ev.content or "")
             if rec:
                 bags.append(rec)
         elif ev.event_type == "subagent_finished":
-            rec_f = _finish_from_content(ev.content or "")
+            rec_f = SubagentRun.finish_from_content(ev.content or "")
             if rec_f:
                 bags.append(rec_f)
     kind = ""
@@ -402,17 +648,17 @@ def subagent_inspect(
     duration_s: float | None = None
     for item in bags:
         if not kind:
-            kind = _first_str(item, _SPAWN_TYPE_KEYS)
+            kind = SubagentRun.first_str(item, _SPAWN_TYPE_KEYS)
         if not description:
-            description = _first_str(item, _SPAWN_DESC_KEYS)
+            description = SubagentRun.first_str(item, _SPAWN_DESC_KEYS)
         if not status:
-            raw_st = _first_str(item, _FINISH_STATUS_KEYS)
+            raw_st = SubagentRun.first_str(item, _FINISH_STATUS_KEYS)
             if raw_st:
                 status = normalize_run_status(
                     raw_st, finished=event.event_type == "subagent_finished"
                 )
         if duration_s is None:
-            ms = _first_int(item, _FINISH_DUR_KEYS)
+            ms = SubagentRun.first_int(item, _FINISH_DUR_KEYS)
             if ms is not None and ms >= 0:
                 duration_s = ms / 1000.0
     return SubagentInspect(kind=kind, description=description, status=status, duration_s=duration_s)
@@ -421,9 +667,9 @@ def subagent_inspect(
 def subagent_duration_seconds(event: TraceEvent) -> float | None:
     """Harness run length for a finish bookend, or None."""
     bag = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
-    ms = _first_int(bag, _FINISH_DUR_KEYS) if isinstance(bag, dict) else None
+    ms = SubagentRun.first_int(bag, _FINISH_DUR_KEYS) if isinstance(bag, dict) else None
     if ms is None:
-        dumped = _finish_from_content(event.content or "").get("duration_ms")
+        dumped = SubagentRun.finish_from_content(event.content or "").get("duration_ms")
         ms = dumped if isinstance(dumped, int) else None
     if isinstance(ms, int) and ms >= 0:
         return ms / 1000.0
@@ -442,233 +688,24 @@ def subagent_list_preview(
     if event_type == "subagent_spawned":
         fields = spawn_fields(bag)
         if not fields["subagent_type"] and not fields["description"]:
-            rec = _spawn_from_content(content)
+            rec = SubagentRun.spawn_from_content(content)
             fields = {**fields, **{k: v for k, v in rec.items() if v}}
         text = fields.get("description") or fields.get("subagent_type") or ""
-        return _clip_preview(text, max_chars)
+        return clip_preview(text, max_chars)
     if event_type == "subagent_finished":
         desc = json_as_str(bag.get("description")).strip()
         if desc:
-            return _clip_preview(desc, max_chars)
+            return clip_preview(desc, max_chars)
         fin = finish_fields(bag)
         status = json_as_str(fin.get("status"))
         if not status:
-            dumped_fin = _finish_from_content(content)
+            dumped_fin = SubagentRun.finish_from_content(content)
             raw_status = dumped_fin.get("status")
             status = raw_status if isinstance(raw_status, str) else ""
         if status:
-            return _clip_preview(normalize_run_status(status, finished=True), max_chars)
+            return clip_preview(normalize_run_status(status, finished=True), max_chars)
         return ""
     return ""
-
-
-def _clip_preview(text: str, max_chars: int) -> str:
-    one = (text or "").replace("\n", " ").strip()
-    if max_chars <= 0 or len(one) <= max_chars:
-        return one
-    return one[: max(1, max_chars - 1)] + "…"
-
-
-def _spawn_from_content(content: str) -> dict[str, str]:
-    text = (content or "").strip()
-    if not text.lower().startswith("spawned "):
-        return {}
-    rest = text[8:].strip()
-    typ, sep, after = rest.partition(":")
-    if not sep:
-        return {"description": rest} if rest else {}
-    desc = after.strip()
-    return {"subagent_type": typ.strip(), "description": desc}
-
-
-def _finish_from_content(content: str) -> dict[str, int | str]:
-    text = (content or "").strip()
-    if not text.lower().startswith("subagent finished"):
-        return {}
-    rest = text[len("subagent finished") :].strip()
-    out: dict[str, int | str] = {}
-    if "duration_ms=" in rest:
-        head, _, tail = rest.partition("duration_ms=")
-        num = tail.split()[0] if tail else ""
-        if num.isdigit():
-            out["duration_ms"] = int(num)
-        rest = head.strip()
-    for part in rest.split():
-        if "-" in part and len(part) >= 8:
-            out["child_session_id"] = part
-        elif part.isalpha():
-            out["status"] = part
-    return out
-
-
-def _run_key(child_id: str, sub_id: str) -> str:
-    return child_id or sub_id
-
-
-def _empty_run(*, child_id: str, sub_id: str) -> SubagentRun:
-    return SubagentRun(
-        subagent_id=sub_id,
-        child_session_id=child_id,
-        child_path=None,
-        subagent_type="",
-        description="",
-        status="running",
-        parent_turn_index=None,
-        parent_prompt_id="",
-        spawn_event_index=None,
-        finish_event_index=None,
-        duration_ms=None,
-        tool_calls=None,
-        turns=None,
-        tokens_used=None,
-        output_preview="",
-    )
-
-
-def _bag(event: TraceEvent) -> dict[str, JsonValue]:
-    raw = event.raw_input.raw() if isinstance(event.raw_input, ToolInputBag) else {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _apply_spawn(
-    by_key: dict[str, SubagentRun],
-    ev: TraceEvent,
-    parent_dir: Path,
-    search_roots: list[Path] | None,
-) -> None:
-    bag = _bag(ev)
-    child = _first_str(bag, _SPAWN_CHILD_KEYS)
-    sub_id = _first_str(bag, _SPAWN_ID_KEYS)
-    key = _run_key(child, sub_id)
-    if not key:
-        return
-    run = by_key.get(key) or _empty_run(child_id=child, sub_id=sub_id)
-    run.child_session_id = child or run.child_session_id
-    run.subagent_id = sub_id or run.subagent_id
-    run.subagent_type = _first_str(bag, _SPAWN_TYPE_KEYS) or run.subagent_type
-    run.description = _first_str(bag, _SPAWN_DESC_KEYS) or run.description
-    run.parent_prompt_id = _first_str(bag, _SPAWN_PROMPT_KEYS) or run.parent_prompt_id
-    run.spawn_event_index = ev.index
-    if run.child_path is None and run.child_session_id:
-        run.child_path = resolve_child_session_path(
-            parent_dir, run.child_session_id, search_roots=search_roots
-        )
-    by_key[key] = run
-
-
-def _apply_finish(
-    by_key: dict[str, SubagentRun],
-    ev: TraceEvent,
-    parent_dir: Path,
-    search_roots: list[Path] | None,
-) -> None:
-    bag = _bag(ev)
-    child = _first_str(bag, _SPAWN_CHILD_KEYS)
-    sub_id = _first_str(bag, _SPAWN_ID_KEYS)
-    key = _run_key(child, sub_id)
-    if not key:
-        return
-    run = by_key.get(key) or _empty_run(child_id=child, sub_id=sub_id)
-    run.child_session_id = child or run.child_session_id
-    run.subagent_id = sub_id or run.subagent_id
-    raw_st = _first_str(bag, _FINISH_STATUS_KEYS)
-    run.status = normalize_run_status(raw_st, finished=True)
-    run.duration_ms = _first_int(bag, _FINISH_DUR_KEYS)
-    run.tool_calls = _first_int(bag, _FINISH_TOOLS_KEYS)
-    run.turns = _first_int(bag, _FINISH_TURNS_KEYS)
-    run.tokens_used = _first_int(bag, _FINISH_TOKENS_KEYS)
-    out = _first_str(bag, _FINISH_OUTPUT_KEYS)
-    if out:
-        run.output_preview = out[:240]
-    run.finish_event_index = ev.index
-    if run.child_path is None and run.child_session_id:
-        run.child_path = resolve_child_session_path(
-            parent_dir, run.child_session_id, search_roots=search_roots
-        )
-    by_key[key] = run
-
-
-def _merge_meta_dirs(
-    by_key: dict[str, SubagentRun],
-    parent_dir: Path,
-    search_roots: list[Path] | None,
-) -> None:
-    sub_root = parent_dir / "subagents"
-    if not sub_root.is_dir():
-        return
-    try:
-        names = [ent.name for ent in os.scandir(sub_root) if ent.is_dir(follow_symlinks=False)]
-    except OSError:
-        return
-    for name in names:
-        meta = _read_meta(sub_root / name / "meta.json")
-        child = _first_str(meta, _SPAWN_CHILD_KEYS) or name
-        sub_id = _first_str(meta, _SPAWN_ID_KEYS) or name
-        key = _run_key(child, sub_id)
-        run = by_key.get(key) or _empty_run(child_id=child, sub_id=sub_id)
-        run.child_session_id = child or run.child_session_id
-        run.subagent_id = sub_id or run.subagent_id
-        run.subagent_type = _first_str(meta, _SPAWN_TYPE_KEYS) or run.subagent_type
-        run.description = _first_str(meta, _SPAWN_DESC_KEYS) or run.description
-        if run.finish_event_index is None:
-            raw_st = _first_str(meta, _FINISH_STATUS_KEYS)
-            if raw_st:
-                run.status = normalize_run_status(raw_st, finished=raw_st.lower() != "running")
-        if run.child_path is None:
-            run.child_path = resolve_child_session_path(
-                parent_dir, run.child_session_id, search_roots=search_roots
-            )
-        by_key[key] = run
-
-
-def _read_meta(path: Path) -> dict[str, JsonValue]:
-    if not path.is_file():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _link_turn(
-    run: SubagentRun,
-    segments: list[TurnSegment],
-    turn_by_index: Mapping[int, int],
-) -> None:
-    needle = (run.parent_prompt_id or "").strip()
-    if needle:
-        for seg in segments:
-            if seg.prompt_index is not None and str(seg.prompt_index) == needle:
-                run.parent_turn_index = seg.turn_index
-                return
-    if run.spawn_event_index is not None:
-        run.parent_turn_index = turn_by_index.get(run.spawn_event_index)
-
-
-def _first_str(data: Mapping[str, JsonValue], keys: tuple[str, ...]) -> str:
-    for key in keys:
-        val = data.get(key)
-        if val is None:
-            continue
-        text = str(val).strip()
-        if text:
-            return text
-    return ""
-
-
-def _first_int(data: Mapping[str, JsonValue], keys: tuple[str, ...]) -> int | None:
-    for key in keys:
-        val = data.get(key)
-        if isinstance(val, bool):
-            continue
-        if isinstance(val, int):
-            return val
-        if isinstance(val, float) and val.is_integer():
-            return int(val)
-        if isinstance(val, str) and val.strip().isdigit():
-            return int(val.strip())
-    return None
 
 
 def as_run_list(value: JsonValue) -> list[JsonObject]:
@@ -689,27 +726,7 @@ def subagent_runs_from_overview(overview: JsonObject) -> list[SubagentRun]:
         return []
     out: list[SubagentRun] = []
     for row in as_run_list(turns.get("subagentRuns")):
-        path_s = json_as_str(row.get("childPath")).strip()
-        child_path = Path(path_s) if path_s else None
-        out.append(
-            SubagentRun(
-                subagent_id=json_as_str(row.get("subagentId")),
-                child_session_id=json_as_str(row.get("childSessionId")),
-                child_path=child_path,
-                subagent_type=json_as_str(row.get("subagentType")),
-                description=json_as_str(row.get("description")),
-                status=json_as_str(row.get("status")) or "running",
-                parent_turn_index=_opt_int(row.get("turnIndex")),
-                parent_prompt_id=json_as_str(row.get("parentPromptId")),
-                spawn_event_index=_opt_int(row.get("spawnEventIndex")),
-                finish_event_index=_opt_int(row.get("finishEventIndex")),
-                duration_ms=_opt_int(row.get("durationMs")),
-                tool_calls=_opt_int(row.get("toolCalls")),
-                turns=_opt_int(row.get("turns")),
-                tokens_used=_opt_int(row.get("tokensUsed")),
-                output_preview=json_as_str(row.get("outputPreview")),
-            )
-        )
+        out.append(SubagentRun.from_overview(row))
     return out
 
 
@@ -724,15 +741,3 @@ def subagent_runs_for_view(
     if overview is not None:
         return subagent_runs_from_overview(overview)
     return subagent_runs_for_session(parent_dir, events, segments, turn_by_index)
-
-
-def _opt_int(value: JsonValue) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value.strip())
-    return None

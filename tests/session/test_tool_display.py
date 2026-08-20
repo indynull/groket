@@ -354,3 +354,11 @@ def test_job_list_preview_is_command_not_event_type() -> None:
     )
     assert "hourly ping" in sched
     assert "every 1 hour" in sched
+
+
+def test_clip_preview_ellipsis_and_short() -> None:
+    from groket.tool_display import clip_preview
+
+    assert clip_preview("short", 80) == "short"
+    assert clip_preview("abcdefgh", 4) == "abc…"
+    assert clip_preview("a\nb", 80) == "a b"

@@ -205,18 +205,19 @@ def job_list_preview(
             json_as_str(bag.get("prompt")).replace("\n", " ").strip()[:48],
         ]
         text = " · ".join(b for b in bits if b) or json_as_str(bag.get("task_id")).strip()
-        return _clip_preview(text, max_chars)
+        return clip_preview(text, max_chars)
     if command:
-        return _clip_preview(f"$ {command.replace(chr(10), ' ').strip()}", max_chars)
+        return clip_preview(f"$ {command.replace(chr(10), ' ').strip()}", max_chars)
     if desc:
-        return _clip_preview(desc, max_chars)
+        return clip_preview(desc, max_chars)
     one = (content or "").replace("\n", " ").strip()
     if not one or one.startswith(event_type) or one.startswith("{"):
         return ""
-    return _clip_preview(one, max_chars)
+    return clip_preview(one, max_chars)
 
 
-def _clip_preview(text: str, max_chars: int) -> str:
+def clip_preview(text: str, max_chars: int) -> str:
+    """One-line preview, ellipsis when longer than *max_chars*."""
     one = (text or "").replace("\n", " ").strip()
     if max_chars <= 0 or len(one) <= max_chars:
         return one
