@@ -1715,6 +1715,18 @@ ContentSwitcher {
     background: $surface-darken-1;
 }
 
+/* Same box as unfocused: a tall focus border shifts rows under the click. */
+.panel-card DataTable:focus,
+#findings-table:focus {
+    border: none;
+}
+
+.panel-card DataTable:focus > .datatable--header,
+#findings-table:focus > .datatable--header {
+    background: $accent;
+    color: $text;
+}
+
 #findings-table {
     height: 1fr;
     min-height: 8;

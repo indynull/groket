@@ -10,7 +10,7 @@ from pathlib import Path
 from textual import on, work
 from textual.app import ComposeResult
 
-from ..data_table import cursor_row_key, restore_cursor, style_data_table
+from ..data_table import ListDataTable, cursor_row_key, restore_cursor, style_data_table
 from ..i18n import join_ui, t
 
 logger = logging.getLogger(__name__)
@@ -320,16 +320,16 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                     with Horizontal(id="summary-turns-pair", classes="summary-pair"):
                         with Vertical(id="summary-turns-card", classes="panel-card"):
                             yield Static(t("ui-turns-1"), classes="panel-card-title")
-                            yield DataTable(id="stats-turns-table")
+                            yield ListDataTable(id="stats-turns-table")
                         with Vertical(id="summary-subagents-card", classes="panel-card"):
                             yield Static(t("ui-subagent-runs"), classes="panel-card-title")
-                            yield DataTable(id="stats-subagents-table")
+                            yield ListDataTable(id="stats-subagents-table")
                     with Vertical(id="summary-jobs-card", classes="panel-card"):
                         yield Static(t("ui-background-jobs"), classes="panel-card-title")
-                        yield DataTable(id="stats-jobs-table")
+                        yield ListDataTable(id="stats-jobs-table")
                     with Vertical(id="summary-workflows-card", classes="panel-card"):
                         yield Static(t("ui-workflows"), classes="panel-card-title")
-                        yield DataTable(id="stats-workflows-table")
+                        yield ListDataTable(id="stats-workflows-table")
                     with Horizontal(id="summary-stats-pair", classes="summary-pair"):
                         with Vertical(classes="panel-card"):
                             yield Static(U.event_types(), classes="panel-card-title")

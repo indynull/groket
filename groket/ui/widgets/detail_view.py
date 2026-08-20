@@ -14,7 +14,7 @@ from ...models import Flag, TraceEvent
 from ...session.jobs import ScheduleTask
 from ...session.subagents import SubagentRun
 from ...session.workflows import WorkflowChild, WorkflowRun
-from ..data_table import style_data_table
+from ..data_table import ListDataTable, style_data_table
 from ..i18n import t
 from ..render_detail import render_event_detail, render_workflow_detail, set_static_renderable
 from ..selectable_static import SelectableStatic, plain_from_renderable
@@ -58,7 +58,7 @@ class DetailView(VerticalScroll):
 
     def compose(self) -> ComposeResult:
         yield SelectableStatic("", id="detail-body")
-        yield DataTable(id="workflow-children-table")
+        yield ListDataTable(id="workflow-children-table")
 
     def show_event(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from groket.ui.data_table import (
+    ListDataTable,
     cursor_row_key,
     preserving_cursor,
     preserving_scroll,
@@ -114,10 +115,55 @@ async def test_preserving_scroll_keeps_horizontal_offset():
         assert table.scroll_x == 14
 
 
+@pytest.mark.asyncio
+async def test_list_data_table_click_highlights_then_activates() -> None:
+    """Same as the session list: first click moves the cursor, second activates."""
+    from rich.style import Style
+    from textual.events import Click
+
+    class _ListApp(App[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hits: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield ListDataTable(id="j")
+
+        def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+            self.hits.append(str(event.row_key.value))
+
+    app = _ListApp()
+    async with app.run_test() as pilot:
+        table = app.query_one("#j", ListDataTable)
+        style_data_table(table)
+        table.add_columns("name")
+        table.add_row("one", key="r0")
+        table.add_row("two", key="r1")
+        table.move_cursor(row=0, animate=False)
+        click = Click(
+            table,
+            1,
+            1,
+            0,
+            0,
+            1,
+            False,
+            False,
+            False,
+            style=Style(meta={"row": 1, "column": 0}),
+        )
+        await table._on_click(click)
+        await pilot.pause()
+        assert cursor_row_key(table) == "r1"
+        assert app.hits == []
+        await table._on_click(click)
+        await pilot.pause()
+        assert app.hits == ["r1"]
+
+
 # ── Cell updates and marker columns ──────────────────────────────────────
 
 from groket.ui.data_table import (
-    ListDataTable,
     set_marker_column,
     update_row_cell,
 )
