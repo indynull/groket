@@ -38,6 +38,9 @@ is tagged.
 
 ### Bug fix
 
+- Summary tables keep their size when focused, so a click lands on the
+  row under the pointer. Click highlights; Enter or a second click
+  opens, same as the session list and Timeline.
 - Report clears loading when analysis finishes on an open session.
 - Jobs Clear resets logs, activity, and buffers. The banner reads
   analysis cache and inflight.
