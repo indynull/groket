@@ -125,6 +125,7 @@ class TestParserCachesAreBounded:
             parser_mod._list_runtime_cache,
             parser_mod._system_prompt_cache,
             cv_mod._overview_cache,
+            cv_mod._job_payload_cache,
             cv_mod._turn_view_cache,
         ):
             assert isinstance(cache, BoundedCache)

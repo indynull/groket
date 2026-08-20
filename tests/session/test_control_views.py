@@ -352,6 +352,61 @@ def test_overview_includes_workflows_without_script_or_journal_body(tmp_path: Pa
     assert "fn gathering" not in dumped
 
 
+def test_overview_does_not_resolve_workflow_child_paths(tmp_path: Path) -> None:
+    """Glance leaves child ids; open still finds the sibling directory."""
+    from unittest.mock import patch
+
+    from groket.session.subagents import resolve_child_session_path
+
+    sd = tmp_path / "sess-wf-child"
+    sd.mkdir()
+    child = tmp_path / "ag-1"
+    child.mkdir()
+    (child / "summary.json").write_text(
+        json.dumps({"info": {"id": "ag-1"}, "generated_title": "aik"}),
+        encoding="utf-8",
+    )
+    (child / "updates.jsonl").write_text("{}\n", encoding="utf-8")
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": "sess-wf-child"}, "generated_title": "wf"}),
+        encoding="utf-8",
+    )
+    (sd / "updates.jsonl").write_text("", encoding="utf-8")
+    d = sd / "workflows" / "wf_child"
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "state": {
+                    "run_id": "wf_child",
+                    "name": "sprint",
+                    "status": "complete",
+                    "agents": [{"agent_id": "ag-1", "label": "aik", "state": "done"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = 0
+    real = resolve_child_session_path
+
+    def counting(parent_dir: Path, child_session_id: str, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return real(parent_dir, child_session_id, **kwargs)
+
+    with patch("groket.session.subagents.resolve_child_session_path", side_effect=counting):
+        ov = build_session_overview(sd)
+    assert calls == 0
+    kids = ov["workflows"][0]["children"]
+    assert kids[0]["id"] == "ag-1"
+    assert "path" not in kids[0]
+    found = resolve_child_session_path(sd, "ag-1")
+    assert found is not None
+    assert found.resolve() == child.resolve()
+
+
 def test_timeline_kind_workflows_keeps_workflow_tools(tmp_path: Path) -> None:
     sd = tmp_path / "sess-wf-kind"
     sd.mkdir()
@@ -672,6 +727,381 @@ def test_overview_stamp_monitor_done_not_signals_or_shell_log(tmp_path: Path) ->
         assert done is not first
         assert done["backgroundJobs"][0]["status"] == "done"
         assert parses == 2
+
+
+def _write_jobs_workflows_session(root: Path, name: str = "sess-reuse") -> Path:
+    """Session with two jobs, two workflow runs, and many non-matching events."""
+    sd = root / name
+    sd.mkdir()
+    (sd / "summary.json").write_text(
+        json.dumps({"info": {"id": name}, "generated_title": "reuse"}),
+        encoding="utf-8",
+    )
+    term = sd / "terminal"
+    term.mkdir()
+    mon_a = term / "monitor-call-a.log"
+    mon_a.write_text("DONE\n", encoding="utf-8")
+    mon_b = term / "monitor-call-b.log"
+    mon_b.write_text("FAILED\n", encoding="utf-8")
+    updates: list[dict[str, object]] = []
+    for i in range(40):
+        updates.append(
+            {
+                "timestamp": i,
+                "params": {
+                    "update": {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": f"fill-{i}",
+                        "title": "read_file",
+                        "rawInput": {"target_file": f"/tmp/f{i}"},
+                    }
+                },
+            }
+        )
+    updates.append(
+        {
+            "timestamp": 100,
+            "params": {
+                "update": {
+                    "sessionUpdate": "task_backgrounded",
+                    "task_id": "job-a",
+                    "tool_call_id": "call-a",
+                    "command": "watch a",
+                    "cwd": "/tmp",
+                    "output_file": str(mon_a),
+                    "description": "Watch a",
+                }
+            },
+        }
+    )
+    updates.append(
+        {
+            "timestamp": 101,
+            "params": {
+                "update": {
+                    "sessionUpdate": "task_backgrounded",
+                    "task_id": "job-b",
+                    "tool_call_id": "call-b",
+                    "command": "watch b",
+                    "cwd": "/tmp",
+                    "output_file": str(mon_b),
+                    "description": "Watch b",
+                }
+            },
+        }
+    )
+    updates.append(
+        {
+            "timestamp": 102,
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-wf-a",
+                    "title": "workflow",
+                    "rawInput": {"run_id": "wf_a", "name": "sprint-a"},
+                }
+            },
+        }
+    )
+    updates.append(
+        {
+            "timestamp": 103,
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-wf-b",
+                    "title": "workflow",
+                    "rawInput": {"run_id": "wf_b", "name": "sprint-b"},
+                }
+            },
+        }
+    )
+    (sd / "updates.jsonl").write_text(
+        "".join(json.dumps(u) + "\n" for u in updates),
+        encoding="utf-8",
+    )
+    for run_id, wf_name, status in (
+        ("wf_a", "sprint-a", "complete"),
+        ("wf_b", "sprint-b", "failed"),
+    ):
+        d = sd / "workflows" / run_id
+        d.mkdir(parents=True)
+        (d / "state.json").write_text(
+            json.dumps(
+                {
+                    "version": 4,
+                    "state": {
+                        "run_id": run_id,
+                        "name": wf_name,
+                        "status": status,
+                        "current_phase": "Kickoff",
+                        "objective": wf_name,
+                        "agents": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    return sd
+
+
+def test_overview_reuses_jobs_when_only_timeline_grows(tmp_path: Path) -> None:
+    """Timeline-only append keeps prior job/workflow rows; bookends stay first hits."""
+    import groket.session.control_views as cv
+    from groket.parser import parse_timeline
+    from groket.session.jobs import job_event_index, load_session_jobs
+    from groket.session.workflows import workflow_event_index
+
+    sd = _write_jobs_workflows_session(tmp_path)
+    cv._overview_cache.clear()
+    cv._overview_inflight.clear()
+    if hasattr(cv, "_job_payload_cache"):
+        cv._job_payload_cache.clear()
+
+    loads = 0
+    real = cv.load_session_jobs
+
+    def counting_load(session_dir: Path, events: object = None) -> object:
+        nonlocal loads
+        loads += 1
+        return real(session_dir, events)  # type: ignore[arg-type]
+
+    cv.load_session_jobs = counting_load  # type: ignore[assignment]
+    try:
+        first = build_session_overview(sd)
+        assert loads == 1
+        assert {j["id"] for j in first["backgroundJobs"]} == {"job-a", "job-b"}
+        assert {w["id"] for w in first["workflows"]} == {"wf_a", "wf_b"}
+        (sd / "updates.jsonl").write_text(
+            (sd / "updates.jsonl").read_text(encoding="utf-8")
+            + json.dumps(
+                {
+                    "timestamp": 200,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "user_message_chunk",
+                            "content": {"type": "text", "text": "later"},
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        second = build_session_overview(sd)
+        assert loads == 1
+        assert [j["id"] for j in second["backgroundJobs"]] == [
+            j["id"] for j in first["backgroundJobs"]
+        ]
+        assert [j["status"] for j in second["backgroundJobs"]] == [
+            j["status"] for j in first["backgroundJobs"]
+        ]
+        assert [w["id"] for w in second["workflows"]] == [w["id"] for w in first["workflows"]]
+        assert [w["status"] for w in second["workflows"]] == [
+            w["status"] for w in first["workflows"]
+        ]
+        events = parse_timeline(sd)
+        packed = load_session_jobs(sd, events)
+        by_job = {j["id"]: j["eventIndex"] for j in second["backgroundJobs"]}
+        by_wf = {w["id"]: w["eventIndex"] for w in second["workflows"]}
+        for job in packed.jobs:
+            assert by_job[job.job_id] == job_event_index(job, events)
+        for run in packed.workflows:
+            assert by_wf[run.run_id] == workflow_event_index(run, events)
+    finally:
+        cv.load_session_jobs = real  # type: ignore[assignment]
+        cv._overview_cache.clear()
+        cv._overview_inflight.clear()
+        if hasattr(cv, "_job_payload_cache"):
+            cv._job_payload_cache.clear()
+
+
+def test_overview_includes_new_timeline_job_after_first_build(tmp_path: Path) -> None:
+    """A later task_backgrounded bookend must appear even when job files are still."""
+    import groket.session.control_views as cv
+
+    sd = _write_session(tmp_path, "sess-new-job")
+    term = sd / "terminal"
+    term.mkdir()
+    bg_log = term / "call-shell.log"
+    bg_log.write_text("hello from bg\n", encoding="utf-8")
+    cv._overview_cache.clear()
+    cv._overview_inflight.clear()
+    if hasattr(cv, "_job_payload_cache"):
+        cv._job_payload_cache.clear()
+    try:
+        first = build_session_overview(sd)
+        assert first["backgroundJobs"] == []
+        (sd / "updates.jsonl").write_text(
+            (sd / "updates.jsonl").read_text(encoding="utf-8")
+            + json.dumps(
+                {
+                    "timestamp": 2000,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "task_backgrounded",
+                            "task_id": "job-bg-1",
+                            "tool_call_id": "call-bg",
+                            "command": "sleep 30",
+                            "cwd": "/tmp/work",
+                            "output_file": str(bg_log),
+                            "description": "long sleep",
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        second = build_session_overview(sd)
+        assert [j["id"] for j in second["backgroundJobs"]] == ["job-bg-1"]
+        assert second["backgroundJobs"][0]["status"] == "running"
+    finally:
+        cv._overview_cache.clear()
+        cv._overview_inflight.clear()
+        if hasattr(cv, "_job_payload_cache"):
+            cv._job_payload_cache.clear()
+
+
+def test_overview_updates_job_status_when_timeline_gains_completed(
+    tmp_path: Path,
+) -> None:
+    """A later task_completed bookend must refresh status when job files are still."""
+    import groket.session.control_views as cv
+
+    sd = _write_session(tmp_path, "sess-finish-job")
+    term = sd / "terminal"
+    term.mkdir()
+    bg_log = term / "call-shell.log"
+    bg_log.write_text("hello from bg\n", encoding="utf-8")
+    (sd / "updates.jsonl").write_text(
+        (sd / "updates.jsonl").read_text(encoding="utf-8")
+        + json.dumps(
+            {
+                "timestamp": 2000,
+                "params": {
+                    "update": {
+                        "sessionUpdate": "task_backgrounded",
+                        "task_id": "job-bg-1",
+                        "tool_call_id": "call-bg",
+                        "command": "sleep 30",
+                        "cwd": "/tmp/work",
+                        "output_file": str(bg_log),
+                        "description": "long sleep",
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cv._overview_cache.clear()
+    cv._overview_inflight.clear()
+    if hasattr(cv, "_job_payload_cache"):
+        cv._job_payload_cache.clear()
+    try:
+        first = build_session_overview(sd)
+        assert first["backgroundJobs"][0]["id"] == "job-bg-1"
+        assert first["backgroundJobs"][0]["status"] == "running"
+        (sd / "updates.jsonl").write_text(
+            (sd / "updates.jsonl").read_text(encoding="utf-8")
+            + json.dumps(
+                {
+                    "timestamp": 2001,
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "task_completed",
+                            "will_wake": False,
+                            "task_snapshot": {
+                                "task_id": "job-bg-1",
+                                "command": "sleep 30",
+                                "cwd": "/tmp/work",
+                                "output_file": str(bg_log),
+                                "description": "long sleep",
+                                "kind": "bash",
+                                "completed": True,
+                                "start_time": {"secs_since_epoch": 1_700_000_000},
+                                "end_time": {"secs_since_epoch": 1_700_000_010},
+                            },
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        second = build_session_overview(sd)
+        assert [j["id"] for j in second["backgroundJobs"]] == ["job-bg-1"]
+        assert second["backgroundJobs"][0]["status"] == "done"
+    finally:
+        cv._overview_cache.clear()
+        cv._overview_inflight.clear()
+        if hasattr(cv, "_job_payload_cache"):
+            cv._job_payload_cache.clear()
+
+
+def test_overview_bookend_indexes_one_event_walk(tmp_path: Path) -> None:
+    """Overview sets bookend indexes from one shared walk, not one scan per row."""
+    import groket.session.control_views as cv
+    from groket.session import jobs as jobs_mod
+
+    sd = _write_jobs_workflows_session(tmp_path)
+    cv._overview_cache.clear()
+    cv._overview_inflight.clear()
+    if hasattr(cv, "_job_payload_cache"):
+        cv._job_payload_cache.clear()
+
+    walks = 0
+    real_set = jobs_mod.set_bookend_indexes
+
+    def counting_set(
+        events: object,
+        jobs: object,
+        workflows: object,
+    ) -> None:
+        nonlocal walks
+        walks += 1
+        real_set(events, jobs, workflows)  # type: ignore[arg-type]
+
+    per_row = 0
+    real_job_idx = jobs_mod.job_event_index
+    from groket.session import workflows as wf_mod
+
+    real_wf_idx = wf_mod.workflow_event_index
+
+    def counting_job(*args: object, **kwargs: object) -> object:
+        nonlocal per_row
+        per_row += 1
+        return real_job_idx(*args, **kwargs)
+
+    def counting_wf(*args: object, **kwargs: object) -> object:
+        nonlocal per_row
+        per_row += 1
+        return real_wf_idx(*args, **kwargs)
+
+    jobs_mod.set_bookend_indexes = counting_set  # type: ignore[assignment]
+    jobs_mod.job_event_index = counting_job  # type: ignore[assignment]
+    wf_mod.workflow_event_index = counting_wf  # type: ignore[assignment]
+    if hasattr(cv, "set_bookend_indexes"):
+        cv.set_bookend_indexes = counting_set  # type: ignore[assignment]
+    try:
+        ov = build_session_overview(sd)
+        assert walks == 1
+        assert per_row == 0
+        by_job = {j["id"]: j["eventIndex"] for j in ov["backgroundJobs"]}
+        by_wf = {w["id"]: w["eventIndex"] for w in ov["workflows"]}
+        assert by_job["job-a"] == 40
+        assert by_job["job-b"] == 41
+        assert by_wf["wf_a"] == 42
+        assert by_wf["wf_b"] == 43
+    finally:
+        jobs_mod.set_bookend_indexes = real_set  # type: ignore[assignment]
+        jobs_mod.job_event_index = real_job_idx  # type: ignore[assignment]
+        wf_mod.workflow_event_index = real_wf_idx  # type: ignore[assignment]
+        cv._overview_cache.clear()
+        cv._overview_inflight.clear()
+        if hasattr(cv, "_job_payload_cache"):
+            cv._job_payload_cache.clear()
 
 
 def test_timeline_system_reminder_not_labeled_user() -> None:

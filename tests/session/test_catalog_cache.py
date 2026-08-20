@@ -156,19 +156,16 @@ def test_apply_fs_catalog_events_patches_dirty_row(tmp_path: Path) -> None:
     _write_sess(traces, "two", "Two")
     cache = SessionCatalogCache(work, traces_path=traces, include_host=False, ttl=3600.0)
     cache.get(force=True)
-    (one / "events.jsonl").write_text(
-        json.dumps({"ts": 1, "type": "turn_started", "turn_number": 0})
-        + "\n"
-        + json.dumps({"ts": 2, "type": "turn_ended", "outcome": "completed"})
-        + "\n",
+    (one / "summary.json").write_text(
+        json.dumps({"info": {"id": "one"}, "generated_title": "One live"}),
         encoding="utf-8",
     )
-    sessions, notes, changed = apply_fs_catalog_events(cache, [str(one / "events.jsonl")], [traces])
+    sessions, notes, changed = apply_fs_catalog_events(cache, [str(one / "summary.json")], [traces])
     assert one.resolve() in [p.resolve() for p in sessions]
     assert notes == []
     assert changed.get("one") is True
     by_id = {str(r["sessionId"]): r for r in cache.get()}
-    assert by_id["one"]["status"] == "complete"
+    assert by_id["one"]["title"] == "One live"
 
 
 def test_apply_fs_catalog_events_append_marks_list_unchanged(tmp_path: Path) -> None:
@@ -458,6 +455,76 @@ def test_refresh_rows_host_keeps_complete_when_tail_loses_outcome(tmp_path: Path
     by_id = {str(r["sessionId"]): r for r in rows}
     assert by_id["done-host"]["status"] == "complete"
     assert changed.get("done-host") is False
+
+
+def test_apply_fs_catalog_events_noise_does_not_open_events_or_bump(
+    tmp_path: Path,
+) -> None:
+    """Growing events.jsonl or writing under workspace/ is not a list rebuild."""
+    from unittest.mock import patch
+
+    from groket.integrations.daemon import apply_fs_catalog_events
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    one = _write_sess(traces, "one", "One")
+    cache = SessionCatalogCache(work, traces_path=traces, include_host=False, ttl=3600.0)
+    cache.get(force=True)
+    rev = cache.revision
+    events = one / "events.jsonl"
+    events.write_text(
+        json.dumps({"ts": 1, "type": "turn_started", "turn_number": 0}) + "\n",
+        encoding="utf-8",
+    )
+    ws = one / "workspace" / "src"
+    ws.mkdir(parents=True)
+    (ws / "main.py").write_text("print(1)\n", encoding="utf-8")
+    opened: list[str] = []
+    real_open = Path.open
+
+    def tracking_open(self: Path, *args: object, **kwargs: object) -> object:
+        opened.append(str(self))
+        return real_open(self, *args, **kwargs)
+
+    with patch.object(Path, "open", tracking_open):
+        sessions, _notes, changed = apply_fs_catalog_events(
+            cache,
+            [str(events), str(ws / "main.py")],
+            [traces],
+        )
+    assert [p.resolve() for p in sessions] == [one.resolve()]
+    assert changed.get("one") is False
+    assert cache.revision == rev
+    assert not any(p.endswith("events.jsonl") for p in opened)
+    poll = cache.list_for_rpc(since_revision=rev)
+    assert poll["unchanged"] is True
+
+
+def test_apply_fs_workflow_and_job_files_leave_list_still(tmp_path: Path) -> None:
+    """Workflow state and job logs do not rebuild painted catalog fields."""
+    from groket.integrations.daemon import apply_fs_catalog_events
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    one = _write_sess(traces, "one", "One")
+    cache = SessionCatalogCache(work, traces_path=traces, include_host=False, ttl=3600.0)
+    cache.get(force=True)
+    rev = cache.revision
+    state = one / "workflows" / "wf_1" / "state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{}", encoding="utf-8")
+    job_log = one / "tasks" / "bg_1" / "output.log"
+    job_log.parent.mkdir(parents=True)
+    job_log.write_text("ok\n", encoding="utf-8")
+    sessions, notes, changed = apply_fs_catalog_events(
+        cache,
+        [str(state), str(job_log)],
+        [traces],
+    )
+    assert [p.resolve() for p in sessions] == [one.resolve()]
+    assert notes == []
+    assert changed.get("one") is False
+    assert cache.revision == rev
 
 
 def test_refresh_rows_append_does_not_bump_revision(tmp_path: Path) -> None:

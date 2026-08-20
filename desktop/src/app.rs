@@ -3452,7 +3452,26 @@ impl Hud {
         )
     }
 
+    fn resolve_open_child_path(&self, path: &str, sid: &str) -> String {
+        if !path.is_empty() && std::path::Path::new(path).is_dir() {
+            return path.to_string();
+        }
+        let parent = self.session_path();
+        if parent.is_empty() || sid.is_empty() {
+            return path.to_string();
+        }
+        let mut cand = std::path::PathBuf::from(&parent);
+        if cand.pop() {
+            cand.push(sid);
+            if cand.is_dir() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+        path.to_string()
+    }
+
     fn open_child_session(&mut self, path: String, sid: String) -> Task<Message> {
+        let path = self.resolve_open_child_path(&path, &sid);
         if self.tab == Tab::Turns && self.turns_focus.is_none() {
             self.turns_focus = self
                 .subagent_run_for_child(&sid)

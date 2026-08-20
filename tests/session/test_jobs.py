@@ -288,6 +288,70 @@ def test_job_status_for_event_uses_log_then_finish(tmp_path: Path) -> None:
     assert job_status_for_event(start, mate=finish) == "failed"
 
 
+def test_set_bookend_indexes_matches_per_row_first_hits() -> None:
+    """One walk agrees with per-row job and workflow bookend indexes."""
+    from conftest import make_trace_event
+    from groket.session.jobs import (
+        BackgroundJob,
+        job_event_index,
+        job_mapping,
+        set_bookend_indexes,
+    )
+    from groket.session.workflows import WorkflowRun, workflow_event_index, workflow_mapping
+
+    job = BackgroundJob(
+        job_id="job-a",
+        kind="monitor",
+        status="done",
+        description="Watch",
+        command="watch",
+        cwd="/tmp",
+        started_at=1,
+        ended_at=2,
+        output_path="",
+        reported=False,
+        tool_call_id="call-a",
+    )
+    run = WorkflowRun(
+        run_id="wf_b",
+        name="sprint-11",
+        status="complete",
+        phase="",
+        objective="",
+        agents_used=None,
+        agent_budget=None,
+        elapsed_ms=None,
+        pause_message="",
+        children=[],
+    )
+    events = [
+        make_trace_event(index=0, tool_name="read_file", raw_input={"target_file": "/tmp/x"}),
+        make_trace_event(
+            index=1,
+            tool_name="workflow",
+            raw_input={"script_path": "/repo/.grok/workflows/sprint.rhai"},
+        ),
+        make_trace_event(
+            index=5,
+            event_type="task_backgrounded",
+            tool_call_id="call-a",
+            raw_input={"task_id": "job-a"},
+        ),
+        make_trace_event(
+            index=8,
+            tool_name="workflow",
+            raw_input={"run_id": "wf_b", "name": "sprint-11"},
+        ),
+    ]
+    jobs = [job_mapping(job)]
+    workflows = [workflow_mapping(run)]
+    set_bookend_indexes(events, jobs, workflows)
+    assert jobs[0]["eventIndex"] == job_event_index(job, events)
+    assert workflows[0]["eventIndex"] == workflow_event_index(run, events)
+    assert jobs[0]["eventIndex"] == 5
+    assert workflows[0]["eventIndex"] == 8
+
+
 def test_jobs_from_overview_does_not_parse_timeline(tmp_path: Path) -> None:
     from unittest.mock import patch
 
@@ -332,3 +396,40 @@ def test_jobs_from_overview_does_not_parse_timeline(tmp_path: Path) -> None:
     # Offline (no overview) still uses the disk merge.
     offline = session_jobs_for_view(None, sd, parse_timeline(sd))
     assert offline.jobs[0].job_id == "job-ov"
+
+
+def test_read_log_tail_reads_only_a_suffix(tmp_path: Path) -> None:
+    """A fat monitor log is tailed from the end, not read in full."""
+    from unittest.mock import patch
+
+    from groket.session.jobs import read_log_tail
+
+    path = tmp_path / "monitor-call-fat.log"
+    suffix = "UNIQUE_TAIL_XYZ\nDONE\n"
+    cap = 200
+    payload = ("head-line\n" * 8_000) + suffix
+    raw = payload.encode("utf-8")
+    path.write_bytes(raw)
+    read_n = 0
+    real_open = Path.open
+
+    def counting_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = real_open(self, *args, **kwargs)
+
+        def counted_read(*rargs: object, **rkwargs: object) -> bytes:
+            nonlocal read_n
+            chunk = orig_read(*rargs, **rkwargs)
+            read_n += len(chunk)
+            return chunk
+
+        orig_read = handle.read
+        handle.read = counted_read  # type: ignore[method-assign]
+        return handle
+
+    with patch.object(Path, "open", counting_open):
+        text = read_log_tail(path, max_chars=cap)
+    assert text.endswith(suffix)
+    assert text == payload[-cap:]
+    assert read_n > 0
+    assert read_n <= cap * 4
+    assert read_n < len(raw)
