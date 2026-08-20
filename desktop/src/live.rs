@@ -36,6 +36,12 @@ pub const TIMELINE_OVERSCAN: usize = 1;
 pub const CLOSED_TURN_CARD_H: f32 = 144.0;
 /// Extra mounted turn cards beyond the viewport.
 pub const TURNS_OVERSCAN: usize = 1;
+/// Overview Tasks / Workflows / Subagents card + gap (chips + name).
+pub const OVERVIEW_LIST_ROW_H: f32 = 80.0;
+/// Extra mounted Overview list cards beyond the viewport.
+pub const OVERVIEW_LIST_OVERSCAN: usize = 1;
+/// icedtea ``data_table`` body row on Overview Stats.
+pub const STATS_ROW_H: f32 = 32.0;
 /// Spotlight idle list: latest sessions by ``sort_epoch`` (not the full catalog).
 pub const SPOTLIGHT_RECENT: usize = 8;
 

@@ -16,6 +16,8 @@ is tagged.
   / Workflows. Summary and HUD rows jump to that bookend. Enter on a
   job bookend shows the host ``terminal/`` log (up to 50,000
   characters). A workflow child or subagent opens that session.
+  HUD Tasks, Workflows, and Subagents scroll as a virtual list.
+  Stats is an icedtea table (Kind, Name, Count).
 - Failed workflows and background jobs become Findings with
   paste-ready What/Where/Why/Should extras.
 - Timeline Filter and Turn stack. Flags and findings paint on the row.

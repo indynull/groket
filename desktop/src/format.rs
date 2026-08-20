@@ -285,9 +285,8 @@ pub fn overview_fields(
     out
 }
 
-/// One Stats-tab count row (human label, selectable value).
+/// One Stats-tab count row (human label, table cell value).
 pub struct OverviewStatRow {
-    pub id: String,
     pub section: &'static str,
     pub label: String,
     pub value: String,
@@ -314,7 +313,6 @@ pub fn overview_stat_rows(events: &[crate::wire::TimelineEvent]) -> Vec<Overview
     for (raw, n) in types {
         let label = human_event_type_label(&raw, "", "", false);
         out.push(OverviewStatRow {
-            id: format!("overview.stat.{raw}"),
             section: "Event types",
             label,
             value: n.to_string(),
@@ -322,13 +320,32 @@ pub fn overview_stat_rows(events: &[crate::wire::TimelineEvent]) -> Vec<Overview
     }
     for (raw, n) in tools {
         out.push(OverviewStatRow {
-            id: format!("overview.tool.{raw}"),
             section: "Tools",
             label: format_tool_display(&raw),
             value: n.to_string(),
         });
     }
     out
+}
+
+/// Sort Stats rows. Column 0 is Kind, 1 is Name, 2 is Count (numeric).
+pub fn sort_stat_rows(rows: &mut [OverviewStatRow], col: usize, asc: bool) {
+    rows.sort_by(|a, b| {
+        let cmp = match col {
+            0 => a.section.cmp(b.section),
+            2 => {
+                let an: usize = a.value.parse().unwrap_or(0);
+                let bn: usize = b.value.parse().unwrap_or(0);
+                an.cmp(&bn)
+            }
+            _ => a.label.cmp(&b.label),
+        };
+        if asc {
+            cmp
+        } else {
+            cmp.reverse()
+        }
+    });
 }
 
 /// Glance counts for Overview — not the job list or log tails.
@@ -2686,6 +2703,10 @@ mod tests {
             .iter()
             .any(|l| *l == "background start" || *l == "monitor"));
         assert!(!labels.iter().any(|l| l.contains('_')));
+        let mut sorted = rows;
+        sort_stat_rows(&mut sorted, 2, false);
+        assert_eq!(sorted[0].label, "tool call");
+        assert_eq!(sorted[0].value, "2");
     }
 
     #[test]
