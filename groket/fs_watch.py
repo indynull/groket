@@ -21,6 +21,21 @@ from .session.watch import (
 
 logger = logging.getLogger(__name__)
 
+# Basenames that should reload a Grok session (harness + tests).
+# Owner watch still subscribes only PLANE_FILE_NAMES.
+TRACE_FILE_HINTS: tuple[str, ...] = (
+    "updates.jsonl",
+    "events.jsonl",
+    "summary.json",
+    "signals.json",
+    "chat_history.jsonl",
+    "groket-interrupted.json",
+    "status.json",
+    "command",
+    "operator_notes.toml",
+)
+_TRACE_NAME_HINTS = TRACE_FILE_HINTS
+
 
 class TraceTreeWatch:
     """Watch *root* (or one *session_dir*) without descending ``workspace/``.

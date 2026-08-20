@@ -48,20 +48,8 @@ fn no_session_matches(tea: icedtea::theme::Tokens) -> Element<'static, Message> 
     )
 }
 
-fn loading_session(sid: &str, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    column![
-        icedtea::widget::progress(
-            0.0,
-            None,
-            None,
-            true,
-            tea,
-            A11y::new("Loading", Role::Progress),
-        ),
-        kit::status_empty("Loading", sid.to_string(), tea),
-    ]
-    .spacing(12)
-    .into()
+fn busy_pane() -> Element<'static, Message> {
+    Space::new().width(Length::Fill).height(Length::Fill).into()
 }
 
 fn select_session(tea: icedtea::theme::Tokens) -> Element<'static, Message> {
@@ -427,10 +415,10 @@ pub fn layout(hud: &Hud) -> Element<'_, Message> {
         .style(move |_| icedtea::style::shell(tea));
     let busy = icedtea::widget::busy_overlay(
         shell.into(),
-        hud.catalog_busy(),
+        hud.page_busy(),
         hud.spin_phase(),
         tea,
-        A11y::new("Catalog", Role::Progress),
+        A11y::new("Loading", Role::Progress),
     );
     let chrome: Element<'_, Message> = if hud.look_open() {
         icedtea::pattern::drawer(true, look_pane(hud, tea), busy, 1.0, tea)
@@ -575,7 +563,7 @@ fn session_picker_at(hud: &Hud, viewport: f32) -> Element<'_, Message> {
         if idle {
             // Catalog empty vs still loading — same honest empty; no full dump.
             return if hud.catalog_busy() {
-                loading_session("sessions", tea)
+                busy_pane()
             } else {
                 empty_sessions(tea)
             };
@@ -679,7 +667,7 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
     }
     let body: Element<'_, Message> = if hud.overview().is_none() {
         if !hud.overview_pending().is_empty() {
-            loading_session(hud.overview_pending(), hud.body_tokens())
+            busy_pane()
         } else {
             select_session(hud.body_tokens())
         }
@@ -792,7 +780,7 @@ fn browse_session_bar<'a>(
             s
         }
     } else {
-        "Loading…".into()
+        String::new()
     };
     let mut row = row![text(title)
         .size(tea.body())
@@ -1072,7 +1060,7 @@ fn overview_run_list<'a>(
 fn overview_stats(hud: &Hud) -> Element<'_, Message> {
     let tea = hud.body_tokens();
     if hud.timeline_loading() && hud.stats_table().rows.is_empty() {
-        return loading_session("events", tea);
+        return busy_pane();
     }
     if hud.stats_table().rows.is_empty() {
         return kit::status_empty(
@@ -1881,15 +1869,15 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
         && !hud.timeline_loading()
     {
         // Should be rare: SetTab/All turns loads immediately. Honest fallback.
-        return loading_session("events", hud.body_tokens());
+        return busy_pane();
     }
     if hud.timeline_loading() && hud.filtered_indices().is_empty() {
-        return loading_session("events", hud.body_tokens());
+        return busy_pane();
     }
     let idxs = hud.filtered_indices();
     if idxs.is_empty() {
         if hud.timeline_loading() || !hud.timeline_complete() {
-            return loading_session("matching events", hud.tokens());
+            return busy_pane();
         }
         return kit::status_empty("No events", "Nothing matches this filter.", hud.tokens());
     }
@@ -1949,13 +1937,10 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
 fn event_detail_pane(hud: &Hud, ix: i64) -> Element<'_, Message> {
     let tea = hud.body_tokens();
     let Some(ev) = hud.timeline_events().iter().find(|e| e.index == ix) else {
-        return column![
-            event_detail_chrome(hud, ix, None, tea),
-            loading_session("event", tea),
-        ]
-        .spacing(10)
-        .height(Length::Fill)
-        .into();
+        return column![event_detail_chrome(hud, ix, None, tea), busy_pane(),]
+            .spacing(10)
+            .height(Length::Fill)
+            .into();
     };
     let (_, ev_marks) = hud.card_marks();
     let mark = ev_marks.get(&ix).cloned();
@@ -3391,7 +3376,7 @@ mod tests {
     #[test]
     fn empty_loading_and_select_use_icedtea_status() {
         let _ = empty_sessions(tea());
-        let _ = loading_session("sess-1", tea());
+        let _ = busy_pane();
         let _ = select_session(tea());
         let _ = status_copy("control socket down · run: groket serve -d", true, tea());
         let _ = status_copy("12 sessions · ready", false, tea());
@@ -3399,11 +3384,14 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("prod");
-        assert!(prod.contains("fn loading_session"));
-        assert!(prod.contains("widget::progress("));
+        assert!(prod.contains("fn busy_pane"));
+        assert!(prod.contains("page_busy()"));
+        assert!(prod.contains("busy_overlay"));
+        assert!(!prod.contains("fn loading_session"));
         assert!(!prod.contains("Loading events…"));
         assert!(!prod.contains("Loading matching events…"));
         assert!(!prod.contains("Loading event…"));
+        assert!(!prod.contains("\"Loading…\""));
     }
 
     #[test]
@@ -3567,7 +3555,7 @@ mod tests {
         assert!(prod.contains("fn select_bound"));
         assert!(prod.contains("event.{}.in.{}"));
         assert!(prod.contains("icedtea::widget::image_slot"));
-        assert!(prod.contains("icedtea::widget::progress"));
+        assert!(prod.contains("icedtea::widget::busy_overlay"));
         assert!(prod.contains("kit::status_empty"));
         assert!(prod.contains("icedtea::widget::info_bar"));
         assert!(prod.contains("fn diff_chrome"));

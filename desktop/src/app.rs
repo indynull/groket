@@ -2781,6 +2781,7 @@ impl Hud {
         self.overlay.is_animating(now)
             || self.page.is_animating(now)
             || self.expanders_moving()
+            || self.page_busy()
             || (!self.visible && self.window_id.is_some() && !self.window_mode)
     }
 
@@ -5080,6 +5081,34 @@ impl Hud {
     }
     pub fn catalog_busy(&self) -> bool {
         self.catalog_busy
+    }
+
+    /// True while the icedtea busy overlay should cover the shell.
+    pub fn page_busy(&self) -> bool {
+        self.catalog_busy
+            || !self.overview_pending.is_empty()
+            || self.timeline_waiting()
+            || self.stats_waiting()
+    }
+
+    fn timeline_waiting(&self) -> bool {
+        if self.tab != Tab::Timeline || self.overview.is_none() {
+            return false;
+        }
+        if let Some(ix) = self.timeline_open {
+            return !self.timeline.iter().any(|e| e.index == ix);
+        }
+        if !self.filtered_indices().is_empty() {
+            return false;
+        }
+        self.timeline_loading || self.last_timeline.is_none() || !self.timeline_complete()
+    }
+
+    fn stats_waiting(&self) -> bool {
+        self.tab == Tab::Overview
+            && self.overview_section == crate::model::OverviewSection::Stats
+            && self.timeline_loading
+            && self.stats_table.rows.is_empty()
     }
     pub fn spin_phase(&self) -> f32 {
         self.spin_phase
@@ -8474,6 +8503,17 @@ mod tests {
         let req = hud.last_timeline().expect("all-turns page");
         assert!(req.prompt_index.is_none());
         assert!(req.query.is_empty());
+    }
+
+    #[test]
+    fn page_busy_while_overview_pending() {
+        let mut hud = Hud::default();
+        assert!(!hud.page_busy());
+        hud.overview_pending = "s1".into();
+        assert!(hud.page_busy());
+        hud.overview_pending.clear();
+        hud.catalog_busy = true;
+        assert!(hud.page_busy());
     }
 
     #[test]

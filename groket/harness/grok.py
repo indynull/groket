@@ -12,7 +12,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from ..fs_watch import _TRACE_NAME_HINTS
+from ..fs_watch import TRACE_FILE_HINTS
 from ..models import SessionMeta, TraceEvent
 from ..parser import _looks_like_session_dir, find_sessions, load_session_meta_list
 from ..parser import parse_timeline as parse_grok_timeline
@@ -109,11 +109,11 @@ def parse_timeline(ref: Path | str) -> list[TraceEvent]:
 def watch_hints() -> tuple[str, ...]:
     """Filenames that should trigger a live reload for Grok sessions.
 
-    Same names as :data:`groket.fs_watch._TRACE_NAME_HINTS`.
+    Same names as :data:`groket.fs_watch.TRACE_FILE_HINTS`.
 
     :returns: Basename hints (``updates.jsonl``, ``events.jsonl``, …).
     """
-    return _TRACE_NAME_HINTS
+    return TRACE_FILE_HINTS
 
 
 __all__ = [
