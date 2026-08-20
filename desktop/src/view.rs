@@ -922,18 +922,15 @@ fn overview_tab(hud: &Hud) -> Element<'_, Message> {
         ));
     }
     if summary != title && summary != "No summary text for this session." {
-        let summary_el = if hud.markdown("overview.summary").is_some() {
-            markdown_bound(hud, "overview.summary".into(), &summary, hud.tokens())
-        } else {
-            select_bound(
-                hud,
-                "overview.summary".into(),
-                &summary,
-                hud.tokens(),
-                icedtea::typo::FontFace::Ui,
-            )
-        };
-        col = col.push(summary_el);
+        // One selectable buffer. markdown_view lays out every item on each
+        // wheel tick (same tax as Turns cards before they went plain).
+        col = col.push(select_bound(
+            hud,
+            "overview.summary".into(),
+            &summary,
+            hud.tokens(),
+            icedtea::typo::FontFace::Ui,
+        ));
     } else if summary == "No summary text for this session." {
         col = col.push(icedtea::widget::meta(
             summary,
@@ -3301,6 +3298,8 @@ mod tests {
             .expect("overview body");
         assert!(overview.contains("session_state_from_meta("));
         assert!(overview.contains("overview.summary"));
+        assert!(overview.contains("select_bound"));
+        assert!(!overview.contains("markdown_bound"));
         assert!(overview.contains("overview_job_fields"));
         assert!(!overview.contains("overview_run_jumps"));
         assert!(!overview.contains("\"{} · {} · {}\""));
