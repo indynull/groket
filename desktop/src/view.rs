@@ -1372,7 +1372,8 @@ fn turn_run_chips(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, 
         return Space::new().height(0).into();
     }
     let mut col = column![].spacing(4);
-    for run in &t.subagent_runs {
+    // Paint budget matches ``rebuild_turn_heights`` (22px * min(4, n)).
+    for run in t.subagent_runs.iter().take(4) {
         let kind = if run.subagent_type.is_empty() {
             "subagent".to_string()
         } else {
@@ -1420,7 +1421,9 @@ fn turn_note(t: &TurnRow) -> Message {
     }
 }
 
-/// Open Timeline with this turn’s events only (list, not a single-event detail).
+/// Open Diff at this turn. Kept for focused-turn commands; closed list
+/// cards do not remount a Diff tooltip per row.
+#[allow(dead_code)]
 fn turn_diff(t: &TurnRow) -> Message {
     Message::OpenTurnDiff {
         prompt_index: t.prompt_index,
@@ -1745,10 +1748,11 @@ fn plain_face(
         .into()
 }
 
-/// Fixed Turns card: prompt + light meta + jump/note (no expander / assistant body).
+/// Fixed Turns card: prompt + light meta (no expander / assistant body).
 ///
-/// Title row carries chips so the 2-line prompt is not pushed under the
-/// virtual clip (``CLOSED_TURN_CARD_H``).
+/// Closed rows match the session-list recipe: no Follow tooltips, no
+/// "Add note" / jump / Diff chips. Those remount every frame through
+/// ``virtual_column``. Open the turn for commands.
 fn turn_list_card(
     hud: &Hud,
     t: &TurnRow,
@@ -1756,7 +1760,6 @@ fn turn_list_card(
     selected: bool,
     tea: icedtea::theme::Tokens,
 ) -> Element<'static, Message> {
-    let jump = turn_jump(t);
     let title = text(turn_title(t))
         .size(tea.body())
         .font(typo::UI_BOLD)
@@ -1764,13 +1767,8 @@ fn turn_list_card(
     let header = row![
         title,
         Space::new().width(Length::Fill),
-        card_chips_inline(
-            hud,
-            mark,
-            Some(turn_note(t)),
-            Some(jump.clone()),
-            hud.turn_has_diff(t.prompt_index).then(|| turn_diff(t)),
-        ),
+        card_marks_row(hud, mark),
+        chip_btn("→".into(), turn_jump(t), tea),
     ]
     .spacing(6)
     .align_y(Alignment::Center)
@@ -1826,9 +1824,13 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
         kit::status_empty("No matches", "No turns match this search.", tea)
     } else {
         let heights = hud.turn_heights();
-        icedtea::widget::virtual_column(
+        responsive(move |size| {
+            let mut window = hud.turn_window();
+            // List pane height, not window-minus-140.
+            window.viewport = size.height.max(1.0);
+            icedtea::widget::virtual_column(
             heights,
-            hud.turn_window(),
+            window,
             TURNS_OVERSCAN,
             None,
             Message::TurnScroll,
@@ -1851,6 +1853,9 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
             },
             A11y::new("Turns", Role::List),
         )
+        .into()
+        })
+        .into()
     };
     column![turns_filter(hud), list]
         .spacing(0)
@@ -1883,9 +1888,12 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
     let (_, ev_marks) = hud.card_marks();
     let tea = hud.tokens();
     let source = hud.timeline_events();
-    let list = icedtea::widget::virtual_column(
+    let list = responsive(move |size| {
+        let mut window = hud.timeline_window();
+        window.viewport = size.height.max(1.0);
+        icedtea::widget::virtual_column(
         hud.timeline_heights(),
-        hud.timeline_window(),
+        window,
         TIMELINE_OVERSCAN,
         None,
         Message::TimelineScroll,
@@ -1904,7 +1912,7 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
             let card = closed_list_card(
                 event_list_heading(ev, tea),
                 event_face(ev, tea),
-                card_chips_inline(hud, mark, Some(event_note(ev)), None, None),
+                card_marks_row(hud, mark),
                 Message::SelectTimeline(ix),
                 selected,
                 tea,
@@ -1912,7 +1920,10 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
             column![card, Space::new().height(crate::live::LIST_GAP)].into()
         },
         A11y::new("Timeline", Role::List),
-    );
+    )
+    .into()
+    })
+    .into();
     let more = crate::live::timeline_more_caption(
         hud.timeline_complete(),
         hud.timeline_at_live_end(),
@@ -3256,8 +3267,32 @@ mod tests {
             .expect("turns body");
         assert!(turns.contains("turn_list_card"));
         assert!(turns.contains("turns_filter"));
+        assert!(turns.contains("responsive"));
+        assert!(turns.contains("window.viewport"));
         assert!(!turns.contains("expand_card"));
         assert!(!turns.contains("fn turn_body"));
+        let card = prod
+            .split("fn turn_list_card")
+            .nth(1)
+            .expect("turn_list_card")
+            .split("fn turns_filter")
+            .next()
+            .expect("card body");
+        assert!(card.contains("card_marks_row"));
+        assert!(card.contains("turn_jump"));
+        assert!(!card.contains("card_chips_inline"));
+        assert!(!card.contains("tooltip_wrap"));
+        assert!(!card.contains("Add note"));
+        assert!(!card.contains("turn_has_diff"));
+        assert!(!card.contains("jump_control"));
+        let runs = prod
+            .split("fn turn_run_chips")
+            .nth(1)
+            .expect("turn_run_chips")
+            .split("fn turn_note")
+            .next()
+            .expect("runs body");
+        assert!(runs.contains("take(4)"));
     }
 
     #[test]

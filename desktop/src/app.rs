@@ -2390,12 +2390,16 @@ impl Hud {
                 self.bind_field("overview.summary", &summary);
             }
         }
-        for (i, prompt, asst) in turns {
-            if !prompt.is_empty() {
-                self.bind_markdown(format!("turn.{i}.prompt"), &prompt);
-            }
-            if !asst.is_empty() {
-                self.bind_markdown(format!("turn.{i}.assistant"), &asst);
+        // Closed turn cards use plain_face. Binding every prompt/assistant
+        // as markdown on each overview tick was the leftover list-scroll tax.
+        if let Some(face) = self.turns_focus {
+            if let Some((_, prompt, asst)) = turns.iter().find(|(i, _, _)| *i == face) {
+                if !prompt.is_empty() {
+                    self.bind_markdown(format!("turn.{face}.prompt"), prompt);
+                }
+                if !asst.is_empty() {
+                    self.bind_markdown(format!("turn.{face}.assistant"), asst);
+                }
             }
         }
         for (id, body) in findings {
