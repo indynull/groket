@@ -5572,7 +5572,12 @@ impl Hud {
         let Some(row) = rows.get(i) else {
             return Task::none();
         };
+        if !row.openable {
+            self.toasts.push_warning("No Timeline bookend for this row");
+            return Task::none();
+        }
         let Some(ix) = row.event_index else {
+            self.toasts.push_warning("No Timeline bookend for this row");
             return Task::none();
         };
         self.update(Message::JumpTimeline(ix))
@@ -8423,6 +8428,67 @@ mod tests {
         assert!(hud.timeline_open().is_none());
         let _ = hud.update(Message::FocusOverviewRow(0));
         assert_eq!(hud.timeline_open(), Some(4));
+    }
+
+    #[test]
+    fn overview_schedule_second_click_opens_bookend() {
+        let mut hud = hud_with_session();
+        hud.tab = Tab::Overview;
+        let data = json!({
+            "meta": { "sessionId": "s1", "path": "/tmp/s1", "status": "complete" },
+            "schedules": [{
+                "id": "sched-1",
+                "humanSchedule": "every 1 hour",
+                "promptPreview": "hourly ping",
+                "eventIndex": 9
+            }],
+            "turns": { "total": 0, "turns": [] },
+            "findings": { "count": 0, "findings": [] },
+            "notes": { "count": 0, "notes": [] }
+        });
+        let _ = hud.update(Message::OverviewLoaded {
+            gen: hud.overview_gen,
+            sid: "s1".into(),
+            quiet: true,
+            result: Ok(data),
+        });
+        let _ = hud.update(Message::SetOverviewSection(
+            crate::model::OverviewSection::Tasks,
+        ));
+        let _ = hud.update(Message::FocusOverviewRow(0));
+        assert!(hud.timeline_open().is_none());
+        let _ = hud.update(Message::FocusOverviewRow(0));
+        assert_eq!(hud.timeline_open(), Some(9));
+    }
+
+    #[test]
+    fn overview_schedule_without_bookend_stays_closed() {
+        let mut hud = hud_with_session();
+        hud.tab = Tab::Overview;
+        let data = json!({
+            "meta": { "sessionId": "s1", "path": "/tmp/s1", "status": "complete" },
+            "schedules": [{
+                "id": "sched-1",
+                "humanSchedule": "every 1 hour",
+                "promptPreview": "hourly ping"
+            }],
+            "turns": { "total": 0, "turns": [] },
+            "findings": { "count": 0, "findings": [] },
+            "notes": { "count": 0, "notes": [] }
+        });
+        let _ = hud.update(Message::OverviewLoaded {
+            gen: hud.overview_gen,
+            sid: "s1".into(),
+            quiet: true,
+            result: Ok(data),
+        });
+        let _ = hud.update(Message::SetOverviewSection(
+            crate::model::OverviewSection::Tasks,
+        ));
+        let _ = hud.update(Message::FocusOverviewRow(0));
+        let _ = hud.update(Message::FocusOverviewRow(0));
+        assert!(hud.timeline_open().is_none());
+        assert_eq!(hud.tab(), Tab::Overview);
     }
 
     #[test]

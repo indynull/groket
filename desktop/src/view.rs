@@ -1036,6 +1036,7 @@ fn overview_run_list<'a>(
             let selected = focus == Some(i);
             let status = list_status_label(&row.status, "");
             let kind = format_tool_display(&row.kind);
+            let ink = if row.openable { tea.text } else { tea.muted };
             let chips = row![
                 status_chip(status.clone(), status_tone(&status), tea),
                 status_chip(kind, "", tea),
@@ -1045,9 +1046,16 @@ fn overview_run_list<'a>(
             let name = text(row.label.clone())
                 .size(tea.body())
                 .font(typo::UI)
-                .color(tea.text)
+                .color(ink)
                 .wrapping(iced::widget::text::Wrapping::None);
-            let face = column![chips, name].spacing(4).width(Length::Fill);
+            let mut header = row![chips, Space::new().width(Length::Fill)]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .width(Length::Fill);
+            if row.openable {
+                header = header.push(text("›").size(tea.meta()).color(tea.muted));
+            }
+            let face = column![header, name].spacing(4).width(Length::Fill);
             let card = container(face)
                 .padding(tea.density.inset())
                 .width(Length::Fill)

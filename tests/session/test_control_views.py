@@ -1088,10 +1088,11 @@ def test_overview_bookend_indexes_one_event_walk(tmp_path: Path) -> None:
         events: object,
         jobs: object,
         workflows: object,
+        schedules: object = None,
     ) -> None:
         nonlocal walks
         walks += 1
-        real_set(events, jobs, workflows)  # type: ignore[arg-type]
+        real_set(events, jobs, workflows, schedules)  # type: ignore[arg-type]
 
     per_row = 0
     real_job_idx = jobs_mod.job_event_index

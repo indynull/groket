@@ -321,6 +321,7 @@ class ScheduleTask:
     durable: bool
     recurring: bool
     created_at: str = ""
+    event_index: int | None = None
 
     @classmethod
     def from_overview(cls, row: JsonObject) -> ScheduleTask:
@@ -336,6 +337,7 @@ class ScheduleTask:
             durable=row.get("durable") is True,
             recurring=row.get("recurring") is True,
             created_at=json_as_str(row.get("createdAt")),
+            event_index=SessionJobs.optional_int(row.get("eventIndex")),
         )
 
     def mapping(self) -> JsonObject:
@@ -351,6 +353,7 @@ class ScheduleTask:
             "durable": self.durable,
             "recurring": self.recurring,
             "createdAt": self.created_at,
+            "eventIndex": self.event_index,
         }
 
 
@@ -495,6 +498,16 @@ class SessionJobs:
             if not task_id:
                 continue
             prompt = json_as_str(mapping.get("prompt")).replace("\n", " ").strip()
+            prev = by_id.get(task_id)
+            ev_i = int(ev.index)
+            if (
+                prev is None
+                or prev.event_index is None
+                or ev.event_type == "scheduled_task_created"
+            ):
+                bookend = ev_i
+            else:
+                bookend = prev.event_index
             by_id[task_id] = ScheduleTask(
                 task_id=task_id,
                 interval_secs=None,
@@ -505,6 +518,7 @@ class SessionJobs:
                 prompt_preview=prompt[:200],
                 durable=False,
                 recurring=False,
+                event_index=bookend,
             )
         scheduler = state.get("grok_build.Scheduler")
         tasks_raw = scheduler.get("tasks") if isinstance(scheduler, dict) else None
@@ -531,6 +545,7 @@ class SessionJobs:
                     durable=row.get("durable") is True,
                     recurring=row.get("recurring") is True,
                     created_at=json_as_str(row.get("createdAt")).strip(),
+                    event_index=prev.event_index if prev else None,
                 )
         return list(by_id.values())
 
@@ -591,7 +606,7 @@ class SessionJobs:
                 reuse_key,
                 cls.copy_rows(jobs, schedules, workflows),
             )
-        set_bookend_indexes(events, jobs, workflows)
+        set_bookend_indexes(events, jobs, workflows, schedules)
         return jobs, schedules, workflows
 
 
@@ -672,12 +687,14 @@ def set_bookend_indexes(
     events: list[TraceEvent],
     jobs: list[JsonObject],
     workflows: list[JsonObject],
+    schedules: list[JsonObject] | None = None,
 ) -> None:
-    """Set ``eventIndex`` on each job and workflow row from one event walk."""
+    """Set ``eventIndex`` on each job, workflow, and schedule row from one walk."""
     job_id_first: dict[str, int] = {}
     call_first: dict[str, int] = {}
     wf_id_first: dict[str, int] = {}
     wf_name_first: dict[str, int] = {}
+    sched_first: dict[str, int] = {}
     for ev in events:
         ev_id = event_task_id(ev)
         if ev_id and ev_id not in job_id_first:
@@ -685,6 +702,10 @@ def set_bookend_indexes(
         ev_call = (ev.tool_call_id or "").strip()
         if ev_call and ev_call not in call_first:
             call_first[ev_call] = int(ev.index)
+        if ev.event_type.startswith("scheduled_task_") and ev_id:
+            prev = sched_first.get(ev_id)
+            if prev is None or ev.event_type == "scheduled_task_created":
+                sched_first[ev_id] = int(ev.index)
         if (ev.tool_name or "") != "workflow":
             continue
         rid = workflow_run_id_from_raw(ev.raw_input) or workflow_run_id_from_raw(ev.content)
@@ -714,6 +735,9 @@ def set_bookend_indexes(
                 if named is None or idx < named:
                     named = idx
         row["eventIndex"] = named
+    for row in schedules or []:
+        sid = json_as_str(row.get("id")).strip()
+        row["eventIndex"] = sched_first.get(sid)
 
 
 def job_mapping(job: BackgroundJob, *, events: list[TraceEvent] | None = None) -> JsonObject:

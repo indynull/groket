@@ -1642,6 +1642,8 @@ ui-subagent-none = No subagent runs
 
 ui-subagent-missing = Child session is not on disk
 
+ui-task-no-timeline = No Timeline bookend for this row
+
 ui-subagent-opened = Opened subagent session
 
 ui-status-running = running

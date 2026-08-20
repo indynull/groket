@@ -426,6 +426,8 @@ pub struct OverviewTaskRow {
     pub status: String,
     pub label: String,
     pub event_index: Option<i64>,
+    /// Enter / second click opens Timeline or a child session.
+    pub openable: bool,
 }
 
 /// Jobs, then schedules — Workflows have their own tab.
@@ -452,6 +454,7 @@ pub fn overview_task_rows(
             status: job.status.clone(),
             label,
             event_index: job.event_index,
+            openable: job.event_index.is_some(),
         });
     }
     for sch in schedules {
@@ -466,7 +469,8 @@ pub fn overview_task_rows(
             kind: "schedule".into(),
             status: "scheduled".into(),
             label,
-            event_index: None,
+            event_index: sch.event_index,
+            openable: sch.event_index.is_some(),
         });
     }
     out
@@ -485,6 +489,7 @@ pub fn overview_workflow_rows(workflows: &[crate::wire::WorkflowRow]) -> Vec<Ove
                 run.name.clone()
             },
             event_index: run.event_index,
+            openable: run.event_index.is_some(),
         })
         .collect()
 }
@@ -509,6 +514,7 @@ pub fn overview_subagent_rows(runs: &[crate::wire::SubagentRunRow]) -> Vec<Overv
                 status: run.status.clone(),
                 label,
                 event_index: run.spawn_event_index,
+                openable: run.openable || run.spawn_event_index.is_some(),
             }
         })
         .collect()
@@ -2726,12 +2732,16 @@ mod tests {
                 id: "sch-1".into(),
                 human_schedule: "every 1 hour".into(),
                 prompt_preview: "hourly ping".into(),
+                event_index: Some(7),
                 ..ScheduleRow::default()
             }],
         );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].kind, "monitor");
         assert_eq!(rows[0].label, "Watch board");
+        assert!(rows[0].openable);
+        assert_eq!(rows[1].event_index, Some(7));
+        assert!(rows[1].openable);
         let wfs = overview_workflow_rows(&[WorkflowRow {
             id: "wf_sprint8".into(),
             name: "sprint-8".into(),

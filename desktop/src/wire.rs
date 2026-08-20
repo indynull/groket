@@ -602,6 +602,8 @@ pub struct ScheduleRow {
     pub recurring: bool,
     #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
+    pub event_index: Option<i64>,
 }
 
 /// One ``workflows`` child on an overview row (id / label / success only).
