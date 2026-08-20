@@ -938,6 +938,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 self._live_watch_root(),
                 _on_fs,
                 debounce_s=LIVE_BROWSER_FS_DEBOUNCE_S,
+                session_dir=self.session_dir,
             )
             if watch.start():
                 self._trace_watch = watch

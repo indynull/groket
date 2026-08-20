@@ -877,7 +877,6 @@ async def test_serve_watch_apply_runs_off_observer_timer(
     traces = work / "runs" / "traces"
     session_dir = _write_session(traces, "watch-apply")
     sock = _short_sock("watch-apply.sock")
-    monkeypatch.setattr(daemon, "CONTROL_FS_DEBOUNCE_S", 0.05)
     apply_hits: list[dict[str, object]] = []
     orig_apply = daemon.apply_fs_catalog_events
     loop_thread = threading.current_thread()

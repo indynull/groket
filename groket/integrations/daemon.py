@@ -21,6 +21,7 @@ from ..session.catalog import (
 )
 from ..session.sources import session_dir_for_watch_path
 from ..session.subagents import session_changed_targets
+from ..session.watch import PLANE_FILE_NAMES, JournalTail
 from .control import (
     ControlError,
     ControlServer,
@@ -34,14 +35,6 @@ from .control_client import ControlClient, is_transient_unix_connect_error
 from .control_contract import NOTIFY_SESSION_CHANGED
 
 logger = logging.getLogger(__name__)
-
-# Background catalog refresh while the headless owner is alive (seconds).
-CATALOG_WARM_INTERVAL = 15.0
-# Coalesce live jsonl/signals writes on the serve loop. Still notifies
-# session/changed so Emacs, Neovim, and the terminal list refresh the trace.
-CONTROL_FS_DEBOUNCE_S = 3.0
-# Observer-thread coalesce only. Catalog apply debounce is CONTROL_FS_DEBOUNCE_S.
-_WATCH_PATH_COALESCE_S = 0.05
 
 
 def configure_serve_logging() -> None:
@@ -297,31 +290,13 @@ def build_domain_control_server(
     return server
 
 
-async def _catalog_warm_loop(
-    cache: SessionCatalogCache,
-    *,
-    interval: float = CATALOG_WARM_INTERVAL,
-) -> None:
-    """Background refresh: keep session/list warm while the owner is alive."""
+async def _catalog_warm_once(cache: SessionCatalogCache) -> None:
+    """Load the catalog snapshot once at serve start."""
     try:
         rows = await asyncio.to_thread(lambda: cache.get(force=True))
         logger.info("control catalog warm complete rows=%s", len(rows))
     except Exception:
         logger.debug("control catalog warm failed", exc_info=True)
-    while True:
-        try:
-            await asyncio.sleep(max(5.0, float(interval)))
-
-            def _refresh() -> None:
-                cache.get()
-                cache.drop_subagent_rows()
-
-            await asyncio.to_thread(_refresh)
-            logger.debug("control catalog refresh complete")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("control catalog refresh failed", exc_info=True)
 
 
 def control_watch_roots(cache: SessionCatalogCache) -> list[Path]:
@@ -349,19 +324,9 @@ def control_watch_roots(cache: SessionCatalogCache) -> list[Path]:
     return out
 
 
-# Catalog list rows only care about these names (and notes). Workspace,
-# images, compaction, and events.jsonl must not rebuild the list.
-_CATALOG_LIST_FILE_NAMES = frozenset(
-    {
-        "summary.json",
-        "signals.json",
-        "updates.jsonl",
-        "chat_history.jsonl",
-        "operator_notes.toml",
-        "status.json",
-        "groket-interrupted.json",
-    }
-)
+# Catalog list rows only care about plane files (and notes). Workspace
+# is never subscribed; events.jsonl must not rebuild the list.
+_CATALOG_LIST_FILE_NAMES = frozenset(PLANE_FILE_NAMES)
 _CATALOG_NOISE_DIR_NAMES = frozenset(
     {
         "workspace",
@@ -408,7 +373,11 @@ def apply_fs_catalog_events(
 
 
 class CatalogWatchApply:
-    """Coalesce watch paths on the serve loop; run catalog disk I/O off it."""
+    """Apply watch paths on the serve loop; disk I/O off it.
+
+    One in-flight refresh per session id. Further events collapse to the
+    latest pending paths (no debounce timer).
+    """
 
     def __init__(
         self,
@@ -417,16 +386,15 @@ class CatalogWatchApply:
         cache: SessionCatalogCache | None,
         roots: list[Path],
         loop: asyncio.AbstractEventLoop,
-        debounce_s: float,
     ) -> None:
         self._server = server
         self._cache = cache
         self._roots = roots
         self._loop = loop
-        self._debounce_s = max(0.0, float(debounce_s))
-        self._pending: set[str] = set()
-        self._handle: asyncio.TimerHandle | None = None
-        self._task: asyncio.Task[None] | None = None
+        self._pending: dict[str, set[str]] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._open: set[str] = set()
+        self._tails: dict[str, JournalTail] = {}
 
     @staticmethod
     def ignore_path(path: Path) -> bool:
@@ -472,6 +440,22 @@ class CatalogWatchApply:
                 break
         return list(found.values())
 
+    def mark_open(self, session: Path) -> None:
+        """Start a journal tail at the current end of ``updates.jsonl``."""
+        sid = Path(session).name
+        self._open.add(sid)
+        path = Path(session) / "updates.jsonl"
+        tail = JournalTail(path)
+        if path.is_file():
+            st = path.stat()
+            tail.inode = int(st.st_ino)
+            tail.offset = int(st.st_size)
+        self._tails[sid] = tail
+
+    def tail_for(self, session: Path) -> JournalTail | None:
+        """Open-session journal tail, if any."""
+        return self._tails.get(Path(session).name)
+
     def enqueue(self, paths: list[str]) -> None:
         """Watch-thread entry: marshal paths onto the serve loop."""
         if not paths:
@@ -479,53 +463,63 @@ class CatalogWatchApply:
         self._loop.call_soon_threadsafe(self._accept, tuple(paths))
 
     def close(self) -> None:
-        """Cancel a pending debounce and in-flight apply."""
-        if self._handle is not None:
-            self._handle.cancel()
-            self._handle = None
-        if self._task is not None:
-            self._task.cancel()
+        """Cancel in-flight applies."""
+        for task in self._tasks.values():
+            task.cancel()
+        self._tasks.clear()
 
     def _accept(self, paths: tuple[str, ...]) -> None:
-        self._pending.update(paths)
-        if self._handle is not None:
-            self._handle.cancel()
-        if self._debounce_s <= 0:
-            self._kick()
+        sessions = self.session_dirs(list(paths), roots=self._roots)
+        if not sessions:
             return
-        self._handle = self._loop.call_later(self._debounce_s, self._kick)
+        for session in sessions:
+            sid = session.name
+            self._pending.setdefault(sid, set()).update(paths)
+            self._kick(sid)
 
-    def _kick(self) -> None:
-        self._handle = None
-        if self._task is not None and not self._task.done():
+    def _kick(self, sid: str) -> None:
+        task = self._tasks.get(sid)
+        if task is not None and not task.done():
             return
-        self._task = self._loop.create_task(self._run(), name="control-fs-apply")
+        self._tasks[sid] = self._loop.create_task(self._run(sid), name=f"control-fs-apply-{sid}")
 
-    async def _run(self) -> None:
+    async def _run(self, sid: str) -> None:
         try:
-            while self._pending:
-                paths = sorted(self._pending)
-                self._pending.clear()
+            while self._pending.get(sid):
+                paths = sorted(self._pending.pop(sid, set()))
                 sessions, notes, list_changed = await asyncio.to_thread(self._apply_disk, paths)
                 await self._publish(sessions, notes, list_changed)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.debug("control FS apply failed", exc_info=True)
-        if self._pending:
-            self._kick()
+        if self._pending.get(sid):
+            self._kick(sid)
 
     def _apply_disk(self, paths: list[str]) -> tuple[list[Path], list[Path], dict[str, bool]]:
         if isinstance(self._cache, SessionCatalogCache):
-            return apply_fs_catalog_events(self._cache, paths, self._roots)
-        sessions = CatalogWatchApply.session_dirs(paths, roots=self._roots)
-        notes = [
-            session
-            for session in sessions
-            if any(Path(p).name == "operator_notes.toml" for p in paths)
-            or any("operator_notes.toml" in p for p in paths)
-        ]
-        return sessions, notes, {}
+            result = apply_fs_catalog_events(self._cache, paths, self._roots)
+        else:
+            sessions = CatalogWatchApply.session_dirs(paths, roots=self._roots)
+            notes = [
+                session
+                for session in sessions
+                if any(Path(p).name == "operator_notes.toml" for p in paths)
+                or any("operator_notes.toml" in p for p in paths)
+            ]
+            result = sessions, notes, {}
+        sessions, notes, list_changed = result
+        for session in sessions:
+            if session.name not in self._open:
+                continue
+            if not any(Path(p).name == "updates.jsonl" for p in paths):
+                continue
+            tail = self._tails.get(session.name)
+            if tail is None:
+                tail = JournalTail(session / "updates.jsonl")
+                self._tails[session.name] = tail
+            tail.consume()
+        return sessions, notes, list_changed
 
     async def _publish(
         self,
@@ -558,17 +552,18 @@ async def serve_control_forever(
     server: ControlServer,
     *,
     write_pid: bool = True,
-    warm_interval: float = CATALOG_WARM_INTERVAL,
+    warm_interval: float = 0.0,
 ) -> None:
     """Start *server*, optionally write a PID file, and serve until cancelled.
 
     :param server: Control server instance.
     :param write_pid: When true, write/remove the paired PID file.
-    :param warm_interval: Seconds between background catalog rebuilds.
+    :param warm_interval: Ignored; catalog warms once at start.
     :raises ControlSocketInUse: When another live owner holds the socket.
     """
     from ..fs_watch import TraceTreeWatch
 
+    del warm_interval
     await server.start()
     if write_pid:
         write_control_pid(server.socket_path)
@@ -576,7 +571,7 @@ async def serve_control_forever(
     cache = getattr(server, "_catalog_cache", None)
     if isinstance(cache, SessionCatalogCache):
         warm_task = asyncio.create_task(
-            _catalog_warm_loop(cache, interval=warm_interval),
+            _catalog_warm_once(cache),
             name="control-catalog-warm",
         )
     elif server._list_sessions is not None:
@@ -590,7 +585,7 @@ async def serve_control_forever(
 
         asyncio.create_task(asyncio.to_thread(_warm))
 
-    # FS watch: incremental catalog row refresh + session/changed.
+    # FS watch: membership + plane files; session/changed on apply.
     watches: list[TraceTreeWatch] = []
     loop = asyncio.get_running_loop()
     uniq_roots: list[Path] = []
@@ -613,13 +608,12 @@ async def serve_control_forever(
         cache=cache if isinstance(cache, SessionCatalogCache) else None,
         roots=uniq_roots,
         loop=loop,
-        debounce_s=CONTROL_FS_DEBOUNCE_S,
     )
+    server._catalog_apply = apply  # type: ignore[attr-defined]
     for root in uniq_roots:
         watch = TraceTreeWatch(
             root,
             on_change=lambda: None,
-            debounce_s=_WATCH_PATH_COALESCE_S,
             on_paths=apply.enqueue,
         )
         if watch.start():

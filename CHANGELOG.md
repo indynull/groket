@@ -7,6 +7,10 @@ is tagged.
 
 ### Feature
 
+- Serve watches membership directories and four session files with
+  watchfiles. Workspace is not subscribed. An open session tails new
+  ``updates.jsonl`` bytes. The 15-second catalog warm loop and the HUD
+  3-second live list poll are gone.
 - Session Overview and Summary share Session, Tasks, Workflows,
   Subagents, and Stats tabs (click the strip). Session is the glance.
   Tasks is shells, monitors, and schedules. Timeline filter Background

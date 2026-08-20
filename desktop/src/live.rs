@@ -363,21 +363,13 @@ pub fn plan_tick(input: TickInput<'_>) -> TickPlan {
             plan.load_overview = true;
         }
     }
-    if !input.palette_live && !input.catch_up {
-        return plan;
-    }
-    let interval = if input.any_live {
-        LIVE_POLL_MS
-    } else {
-        IDLE_POLL_MS
-    };
-    if input.catch_up || input.list_elapsed_ms >= interval {
+    if input.catch_up {
         plan.fetch_list = true;
-        // Only refresh an *open* session — never open one from a list highlight alone.
         if input.selected_live && !input.overview_sid.is_empty() && input.on_timeline {
             plan.refresh_timeline = true;
         }
     }
+    let _ = (input.palette_live, input.any_live, input.list_elapsed_ms);
     plan
 }
 
@@ -1327,7 +1319,7 @@ mod tests {
             notes_locked: false,
             catch_up: false,
         });
-        assert!(plan.fetch_list);
+        assert!(!plan.fetch_list);
         assert!(
             !plan.load_overview,
             "Spotlight must not auto-open from a list highlight"
@@ -1691,9 +1683,9 @@ mod tests {
             notes_locked: false,
             catch_up: false,
         });
-        assert!(plan.fetch_list);
+        assert!(!plan.fetch_list);
         assert!(!plan.load_overview);
-        assert!(plan.refresh_timeline);
+        assert!(!plan.refresh_timeline);
     }
 
     #[test]
@@ -1710,7 +1702,7 @@ mod tests {
             notes_locked: false,
             catch_up: false,
         });
-        assert!(plan.fetch_list);
+        assert!(!plan.fetch_list);
         assert!(!plan.load_overview);
     }
 

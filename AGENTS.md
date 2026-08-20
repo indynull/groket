@@ -254,8 +254,12 @@ Static Docker/YAML templates load via :mod:`groket.assets_loader`.
 
 ### 3.1 Live sessions (product behaviour)
 
-- **FS watch** (``fs_watch.TraceTreeWatch``) discovers / reloads live sessions;
-  fallback timer when inotify is unavailable.
+- **FS watch** (``fs_watch.TraceTreeWatch`` / ``session.watch``) is
+  non-recursive ``watchfiles`` on membership dirs and the four plane
+  files (``summary.json``, ``signals.json``, ``updates.jsonl``,
+  ``operator_notes.toml``). ``workspace/`` is never subscribed. The
+  owner has no 15 s catalog warm loop; clients follow socket
+  notifications, not a 3 s list poll.
 - **60s read-only heartbeat** re-reads ``signals.json`` (context meter) without
   writing the traces tree or meta cache.
 - **Single-flight refresh** per session via ``session_inflight.KIND_REFRESH`` +

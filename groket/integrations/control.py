@@ -850,6 +850,12 @@ class ControlServer:
             raise ControlError(404, "session not found", {"session": reference})
         return session
 
+    def _mark_session_interest(self, session: Path) -> None:
+        apply = getattr(self, "_catalog_apply", None)
+        mark = getattr(apply, "mark_open", None)
+        if callable(mark):
+            mark(session)
+
     async def _access_call(
         self,
         ref: str,
@@ -916,6 +922,7 @@ class ControlServer:
         self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
     ) -> JsonValue:
         ref = self._session_ref(params)
+        self._mark_session_interest(self._resolve_session(ref) or Path(ref))
         return await self._access_call(ref, self._access.session_get, ref)
 
     @_rpc("session/overview")
@@ -923,6 +930,7 @@ class ControlServer:
         self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
     ) -> JsonValue:
         ref = self._session_ref(params)
+        self._mark_session_interest(self._resolve_session(ref) or Path(ref))
         return await self._access_call(ref, self._access.session_overview, ref)
 
     @_rpc("session/timeline")
@@ -930,6 +938,7 @@ class ControlServer:
         self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
     ) -> JsonValue:
         ref = self._session_ref(params)
+        self._mark_session_interest(self._resolve_session(ref) or Path(ref))
         return await self._access_call(
             ref,
             self._access.session_timeline,
@@ -1009,6 +1018,7 @@ class ControlServer:
         raw_prompt = params.get("promptIndex")
         prompt_index = None if raw_prompt is None else json_as_int(raw_prompt)
         session = self._session(params)
+        self._mark_session_interest(session)
         opened = True
         if self._open_session is not None:
             opened = bool(await self._open_session(session, prompt_index))
