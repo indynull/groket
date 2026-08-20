@@ -50,7 +50,12 @@ from ...notes import (
     upsert_note,
 )
 from ...parser import load_session_meta, parse_timeline
-from ...session.jobs import SessionJobs, schedule_for_event, session_jobs_for_view
+from ...session.jobs import (
+    ScheduleTask,
+    SessionJobs,
+    schedule_for_event,
+    session_jobs_for_view,
+)
 from ...session.subagents import (
     SubagentRun,
     compact_child_chrome,
@@ -1961,19 +1966,31 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             t("ui-tools"),
         )
         if not self._subagent_runs:
-            table.add_row("—", "—", t("ui-subagent-none"), "—", "—", "—")
+            table.add_row(
+                *self._summary_cells(
+                    ["—", "—", t("ui-subagent-none"), "—", "—", "—"], followable=False
+                )
+            )
             return
         for i, run in enumerate(self._subagent_runs):
             dur = self._fmt_dur(run.duration_ms / 1000.0) if run.duration_ms is not None else "—"
             tools = str(run.tool_calls) if run.tool_calls is not None else "—"
             turn = str(run.parent_turn_index) if run.parent_turn_index is not None else "—"
+            followable = bool(run.openable and run.child_path is not None) or (
+                run.spawn_event_index is not None
+            )
             table.add_row(
-                turn,
-                run.subagent_type or "—",
-                run.description or run.child_session_id or run.subagent_id or "—",
-                self._status_label(run.status),
-                dur,
-                tools,
+                *self._summary_cells(
+                    [
+                        turn,
+                        run.subagent_type or "—",
+                        run.description or run.child_session_id or run.subagent_id or "—",
+                        self._status_label(run.status),
+                        dur,
+                        tools,
+                    ],
+                    followable=followable,
+                ),
                 key=f"sub-{i}",
             )
 
@@ -1995,7 +2012,11 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         jobs = self._session_jobs.jobs
         schedules = self._session_jobs.schedules
         if not jobs and not schedules:
-            table.add_row("—", "—", t("ui-background-none"), "—", "—", "—")
+            table.add_row(
+                *self._summary_cells(
+                    ["—", "—", t("ui-background-none"), "—", "—", "—"], followable=False
+                )
+            )
             return
         for i, job in enumerate(jobs):
             dur = "—"
@@ -2003,22 +2024,32 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 dur = self._fmt_dur(float(job.ended_at - job.started_at))
             log_name = Path(job.output_path).name if job.output_path else "—"
             table.add_row(
-                job.kind or "—",
-                self._status_label(job.status),
-                job.description or job.command or job.job_id,
-                str(job.started_at) if job.started_at is not None else "—",
-                dur,
-                log_name,
+                *self._summary_cells(
+                    [
+                        job.kind or "—",
+                        self._status_label(job.status),
+                        job.description or job.command or job.job_id,
+                        str(job.started_at) if job.started_at is not None else "—",
+                        dur,
+                        log_name,
+                    ],
+                    followable=self._task_bookend(job.job_id, job.tool_call_id) is not None,
+                ),
                 key=f"job-{i}",
             )
         for i, sch in enumerate(schedules):
             table.add_row(
-                t("ui-schedule"),
-                t("ui-scheduled"),
-                sch.prompt_preview or sch.human_schedule or sch.task_id,
-                sch.next_fire_at or "—",
-                sch.human_schedule or "—",
-                "—",
+                *self._summary_cells(
+                    [
+                        t("ui-schedule"),
+                        t("ui-scheduled"),
+                        sch.prompt_preview or sch.human_schedule or sch.task_id,
+                        sch.next_fire_at or "—",
+                        sch.human_schedule or "—",
+                        "—",
+                    ],
+                    followable=self._schedule_bookend(sch) is not None,
+                ),
                 key=f"sched-{i}",
             )
 
@@ -2038,7 +2069,9 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         )
         runs = self._session_jobs.workflows
         if not runs:
-            table.add_row(t("ui-workflows-none"), "—", "—", "—", "—")
+            table.add_row(
+                *self._summary_cells([t("ui-workflows-none"), "—", "—", "—", "—"], followable=False)
+            )
             return
         for i, run in enumerate(runs):
             used = "—" if run.agents_used is None else str(run.agents_used)
@@ -2049,11 +2082,16 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 else "—"
             )
             table.add_row(
-                run.name or run.run_id,
-                self._status_label(run.status),
-                run.phase or "—",
-                f"{used}/{budget}",
-                dur,
+                *self._summary_cells(
+                    [
+                        run.name or run.run_id,
+                        self._status_label(run.status),
+                        run.phase or "—",
+                        f"{used}/{budget}",
+                        dur,
+                    ],
+                    followable=self._timeline_event_for_workflow(run) is not None,
+                ),
                 key=f"wf-{i}",
             )
 
@@ -2140,15 +2178,30 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         if not (0 <= idx < len(self._subagent_runs)):
             return
         run = self._subagent_runs[idx]
-        if not run.openable or run.child_path is None:
-            self.notify(t("ui-subagent-missing"))
+        if run.openable and run.child_path is not None:
+            opener = getattr(self.app, "open_session_path", None)
+            if callable(opener):
+                opener(run.child_path)
             return
-        opener = getattr(self.app, "open_session_path", None)
-        if callable(opener):
-            opener(run.child_path)
+        if run.spawn_event_index is not None:
+            self._jump_timeline_to_event(int(run.spawn_event_index))
+            return
+        self.notify(t("ui-subagent-missing"))
 
-    def _focus_task_event(self, task_id: str, tool_call_id: str = "") -> None:
-        """Select the matching task / schedule bookend on Timeline."""
+    @staticmethod
+    def _summary_cells(cells: list[str], *, followable: bool) -> tuple[str | Text, ...]:
+        """Plain cells when the row opens; dim when Enter cannot follow."""
+        if followable:
+            return tuple(cells)
+        return tuple(Text(c, style="dim") for c in cells)
+
+    def _schedule_bookend(self, sch: ScheduleTask) -> int | None:
+        if sch.event_index is not None:
+            return int(sch.event_index)
+        return self._task_bookend(sch.task_id, "")
+
+    def _task_bookend(self, task_id: str, tool_call_id: str = "") -> int | None:
+        """Timeline index for this job or schedule, or None."""
         wanted = (task_id or "").strip()
         call = (tool_call_id or "").strip()
         hit: TraceEvent | None = None
@@ -2167,8 +2220,22 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             elif call and ev_call == call:
                 hit = ev
         if hit is None:
+            return None
+        return int(hit.index)
+
+    def _focus_task_event(self, task_id: str, tool_call_id: str = "") -> None:
+        """Select the matching task / schedule bookend on Timeline."""
+        idx = self._task_bookend(task_id, tool_call_id)
+        if idx is None:
+            self.notify(t("ui-task-no-timeline"))
             return
-        self._jump_timeline_to_event(hit.index)
+        self._jump_timeline_to_event(idx)
+
+    def _open_bookend_or_notify(self, index: int | None) -> None:
+        if index is None:
+            self.notify(t("ui-task-no-timeline"))
+            return
+        self._jump_timeline_to_event(index)
 
     @on(DataTable.RowSelected, "#stats-jobs-table")
     def _on_jobs_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -2180,7 +2247,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 return
             if 0 <= idx < len(self._session_jobs.jobs):
                 job = self._session_jobs.jobs[idx]
-                self._focus_task_event(job.job_id, job.tool_call_id)
+                self._open_bookend_or_notify(self._task_bookend(job.job_id, job.tool_call_id))
             return
         if raw.startswith("sched-"):
             try:
@@ -2188,7 +2255,9 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             except ValueError:
                 return
             if 0 <= idx < len(self._session_jobs.schedules):
-                self._focus_task_event(self._session_jobs.schedules[idx].task_id)
+                self._open_bookend_or_notify(
+                    self._schedule_bookend(self._session_jobs.schedules[idx])
+                )
 
     @on(DataTable.RowSelected, "#stats-workflows-table")
     def _on_workflows_row_selected(self, event: DataTable.RowSelected) -> None:

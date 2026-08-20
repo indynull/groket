@@ -246,6 +246,7 @@ def test_job_and_schedule_mappings_use_camel_case(tmp_path: Path) -> None:
     assert "task_id" not in job
     sch = schedule_mapping(packed.schedules[0])
     assert sch["id"] == "sched-map"
+    assert sch["eventIndex"] is not None
     assert sch["humanSchedule"] == "every 1 hour"
     assert sch["nextFireAt"].startswith("2026-08-18T23:00:00")
     assert sch["promptPreview"] == "hourly ping"
@@ -342,14 +343,21 @@ def test_set_bookend_indexes_matches_per_row_first_hits() -> None:
             tool_name="workflow",
             raw_input={"run_id": "wf_b", "name": "sprint-11"},
         ),
+        make_trace_event(
+            index=6,
+            event_type="scheduled_task_created",
+            raw_input={"task_id": "sched-a", "prompt": "hourly"},
+        ),
     ]
     jobs = [job_mapping(job)]
     workflows = [workflow_mapping(run)]
-    set_bookend_indexes(events, jobs, workflows)
+    schedules = [{"id": "sched-a"}]
+    set_bookend_indexes(events, jobs, workflows, schedules)
     assert jobs[0]["eventIndex"] == job_event_index(job, events)
     assert workflows[0]["eventIndex"] == workflow_event_index(run, events)
     assert jobs[0]["eventIndex"] == 5
     assert workflows[0]["eventIndex"] == 8
+    assert schedules[0]["eventIndex"] == 6
 
 
 def test_jobs_from_overview_does_not_parse_timeline(tmp_path: Path) -> None:

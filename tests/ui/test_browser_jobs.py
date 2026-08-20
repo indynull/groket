@@ -157,6 +157,39 @@ async def test_summary_job_click_opens_that_job_log_tail(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_summary_schedule_click_opens_timeline_bookend(tmp_path: Path) -> None:
+    sd = _write_jobs_session(tmp_path)
+    app = _Host(sd)
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = app.query_one(BrowserScreen)
+        await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        screen._stop_live_refresh()
+        sched_ev = next(e for e in screen.timeline if e.event_type == "scheduled_task_created")
+        screen.action_tab_summary()
+        await wait_until(
+            pilot,
+            lambda: screen.query_one("#stats-jobs-table").row_count >= 2,
+            description="jobs table filled",
+        )
+        table = screen.query_one("#stats-jobs-table", DataTable)
+        table.post_message(DataTable.RowSelected(table, cursor_row=1, row_key=RowKey("sched-0")))
+        await wait_until(
+            pilot,
+            lambda: (
+                screen._current_event is not None
+                and screen._current_event.event_type == "scheduled_task_created"
+                and cursor_row_key(screen.query_one("#timeline-list", TimelineTable))
+                == str(sched_ev.index)
+            ),
+            description="timeline cursor on the schedule bookend",
+        )
+        ev = screen._current_event
+        assert ev is not None
+        assert ev.index == sched_ev.index
+        assert ev.raw_input.as_str("task_id") == "sched-1"
+
+
+@pytest.mark.asyncio
 async def test_status_only_overview_refresh_paints_jobs_table(tmp_path: Path) -> None:
     sd = tmp_path / "sess-live"
     sd.mkdir()
@@ -273,7 +306,6 @@ async def test_summary_t_cycles_session_and_tasks(tmp_path: Path) -> None:
         screen.action_overview_section()
         await wait_until(
             pilot,
-            lambda: screen.query_one("#summary-tabs", TabbedContent).active
-            == "summary-workflows",
+            lambda: screen.query_one("#summary-tabs", TabbedContent).active == "summary-workflows",
             description="workflows section",
         )
