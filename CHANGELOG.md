@@ -62,9 +62,8 @@ is tagged.
 - Summary and HUD Tasks open a schedule the same way as a job: Enter
   or a second click jumps to the Timeline bookend. A row with no
   bookend is dim and stays put.
-- HUD Turns and Timeline measure the list pane with ``responsive``,
-  same as the session picker. Closed cards no longer remount Follow
-  tooltips or Add note on every scroll frame. Turn markdown binds
+- HUD Turns tiles match the session list: title plus one status badge.
+  The list pane is measured with ``responsive``. Turn markdown binds
   only the focused turn.
 - Summary tables keep their size when focused, so a click lands on the
   row under the pointer. Click highlights; Enter or a second click

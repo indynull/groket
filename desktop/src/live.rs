@@ -32,8 +32,8 @@ pub const LIST_GAP: f32 = 8.0;
 pub const TIMELINE_ROW_H: f32 = 100.0;
 /// Extra mounted timeline cards beyond the viewport.
 pub const TIMELINE_OVERSCAN: usize = 1;
-/// Fixed Turns card + gap: title+chips, stats, 2-line prompt.
-pub const CLOSED_TURN_CARD_H: f32 = 144.0;
+/// Closed Turns card + gap. Same budget as a one-line session tile.
+pub const CLOSED_TURN_CARD_H: f32 = 70.0;
 /// Extra mounted turn cards beyond the viewport.
 pub const TURNS_OVERSCAN: usize = 1;
 /// Overview Tasks / Workflows / Subagents card + gap (chips + name).

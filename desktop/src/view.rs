@@ -1185,6 +1185,7 @@ fn card_chips(
 }
 
 /// Compact chips for closed-card title rows (no flex fill — sits beside title).
+#[allow(dead_code)]
 fn card_chips_inline(
     hud: &Hud,
     mark: Option<CardMark>,
@@ -1330,7 +1331,8 @@ fn turn_title(t: &TurnRow) -> String {
     t.face_caption()
 }
 
-/// Outcome plus duration / counts as the same small badges as session chrome.
+/// Outcome plus duration / counts. Closed list uses ``turn_state_row``.
+#[allow(dead_code)]
 fn turn_stats_row(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
     let status = if t.open {
         "open".to_string()
@@ -1367,6 +1369,7 @@ fn turn_stats_row(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, 
     chips.into()
 }
 
+#[allow(dead_code)]
 fn turn_run_chips(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
     if t.subagent_runs.is_empty() {
         return Space::new().height(0).into();
@@ -1414,6 +1417,7 @@ fn turn_run_chips(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, 
     col.into()
 }
 
+#[allow(dead_code)]
 fn turn_note(t: &TurnRow) -> Message {
     Message::StartNote {
         turn: t.face_id().map(|n| n.to_string()).unwrap_or_default(),
@@ -1748,47 +1752,48 @@ fn plain_face(
         .into()
 }
 
-/// Fixed Turns card: prompt + light meta (no expander / assistant body).
-///
-/// Closed rows match the session-list recipe: no Follow tooltips, no
-/// "Add note" / jump / Diff chips. Those remount every frame through
-/// ``virtual_column``. Open the turn for commands.
+/// Closed Turns tile. Same tree as ``session_list_card``: title + one
+/// badge row. Extra chips remount every frame through ``virtual_column``.
 fn turn_list_card(
-    hud: &Hud,
+    _hud: &Hud,
     t: &TurnRow,
-    mark: Option<CardMark>,
+    _mark: Option<CardMark>,
     selected: bool,
     tea: icedtea::theme::Tokens,
 ) -> Element<'static, Message> {
     let title = text(turn_title(t))
         .size(tea.body())
-        .font(typo::UI_BOLD)
-        .color(tea.text);
-    let header = row![
-        title,
-        Space::new().width(Length::Fill),
-        card_marks_row(hud, mark),
-        chip_btn("→".into(), turn_jump(t), tea),
+        .font(if selected { typo::UI_BOLD } else { typo::UI })
+        .color(tea.text)
+        .width(Length::Fill);
+    let body = column![title, turn_state_row(t, tea)]
+        .spacing(4)
+        .width(Length::Fill);
+    column![
+        mouse_area(
+            container(body)
+                .padding(tea.density.inset())
+                .width(Length::Fill)
+                .style(move |_| icedtea::style::card(tea, selected)),
+        )
+        .on_press(Message::FocusTurn(t.turn_index)),
+        Space::new().height(crate::live::LIST_CARD_GAP),
     ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .width(Length::Fill);
-    let body = column![
-        header,
-        turn_stats_row(t, tea),
-        turn_run_chips(t, tea),
-        closed_turn_face(&t.summary, tea),
-    ]
-    .spacing(4)
-    .width(Length::Fill);
-    mouse_area(
-        container(body)
-            .padding(tea.density.inset())
-            .width(Length::Fill)
-            .style(move |_| icedtea::style::card(tea, selected)),
-    )
-    .on_press(Message::FocusTurn(t.turn_index))
     .into()
+}
+
+fn turn_state_row(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
+    let status = if t.open {
+        "open".to_string()
+    } else {
+        list_status_label(&t.outcome, &t.outcome)
+    };
+    let tone = if t.open {
+        "running"
+    } else {
+        status_tone(&status)
+    };
+    status_chip(status, tone, tea)
 }
 
 fn turns_filter(hud: &Hud) -> Element<'_, Message> {
@@ -1845,11 +1850,7 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
                 };
                 let mark = turn_marks.get(&t.turn_index).cloned();
                 let selected = hud.turns_focus() == Some(t.turn_index);
-                column![
-                    turn_list_card(hud, t, mark, selected, tea),
-                    Space::new().height(crate::live::LIST_GAP),
-                ]
-                .into()
+                turn_list_card(hud, t, mark, selected, tea)
             },
             A11y::new("Turns", Role::List),
         )
@@ -3278,21 +3279,15 @@ mod tests {
             .split("fn turns_filter")
             .next()
             .expect("card body");
-        assert!(card.contains("card_marks_row"));
-        assert!(card.contains("turn_jump"));
+        assert!(card.contains("turn_state_row"));
+        assert!(card.contains("LIST_CARD_GAP"));
         assert!(!card.contains("card_chips_inline"));
+        assert!(!card.contains("turn_stats_row"));
+        assert!(!card.contains("turn_run_chips"));
         assert!(!card.contains("tooltip_wrap"));
         assert!(!card.contains("Add note"));
         assert!(!card.contains("turn_has_diff"));
         assert!(!card.contains("jump_control"));
-        let runs = prod
-            .split("fn turn_run_chips")
-            .nth(1)
-            .expect("turn_run_chips")
-            .split("fn turn_note")
-            .next()
-            .expect("runs body");
-        assert!(runs.contains("take(4)"));
     }
 
     #[test]

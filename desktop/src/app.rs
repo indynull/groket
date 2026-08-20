@@ -2069,17 +2069,9 @@ impl Hud {
             .turns_filter
             .iter()
             .map(|&src| {
-                let extra = ov
-                    .and_then(|o| o.turns.turns.get(src))
-                    .map(|t| {
-                        if t.subagent_runs.is_empty() {
-                            0.0
-                        } else {
-                            22.0 * (t.subagent_runs.len().min(4) as f32)
-                        }
-                    })
-                    .unwrap_or(0.0);
-                CLOSED_TURN_CARD_H + extra
+                ov.and_then(|o| o.turns.turns.get(src))
+                    .map(|t| session_card_height(&t.face_caption(), "", false))
+                    .unwrap_or(CLOSED_TURN_CARD_H)
             })
             .collect();
         let view_h = self.turn_window.viewport.max(1.0);
