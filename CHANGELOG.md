@@ -27,7 +27,7 @@ is tagged.
   split on both surfaces. ``/`` finds path or hunk text.
 - Live Timeline has a Tail switch. Opening an event asks for the
   50,000-character body, including the paired tool result.
-- HUD uses icedtea 0.12: search, badges, tabs, selectable bodies,
+- HUD uses icedtea 0.11: search, badges, tabs, selectable bodies,
   Diff hunks, and an F12 Look drawer.
 - Session walk uses ``groket._scan``. ``GROKET_SCAN=0`` uses the
   Python body.
