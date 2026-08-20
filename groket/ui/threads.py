@@ -29,13 +29,10 @@ def call_ui[R](
 
     From a worker: blocking ``App.call_from_thread`` (waits for the result).
     Already on the app thread: call *callback* directly (``call_from_thread``
-    raises ``RuntimeError`` on the UI thread). When the app loop is gone,
-    skip the callback (do not query a dead DOM). When *app* is missing,
-    invoke *callback* inline if possible.
+    raises ``RuntimeError`` on the UI thread). When *app* is missing or the
+    loop is gone, skip the callback — do not start timers or query a dead DOM.
     """
     if app is None:
-        with suppress(Exception):
-            return callback(*args, **kwargs)
         return None
     try:
         return app.call_from_thread(callback, *args, **kwargs)

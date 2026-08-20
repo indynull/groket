@@ -18,15 +18,16 @@ def test_resolve_ui_app_returns_mounted_app() -> None:
     assert resolve_ui_app(SimpleNamespace(app=app)) is app
 
 
-def test_call_ui_none_app_invokes_inline() -> None:
-    assert call_ui(None, lambda x: x + 1, 3) == 4
+def test_call_ui_none_app_skips() -> None:
+    called = False
 
+    def _cb() -> int:
+        nonlocal called
+        called = True
+        return 1
 
-def test_call_ui_none_app_swallows_callback_error() -> None:
-    def _boom() -> None:
-        raise RuntimeError("nope")
-
-    assert call_ui(None, _boom) is None
+    assert call_ui(None, _cb) is None
+    assert called is False
 
 
 def test_call_ui_runtime_error_falls_back_inline() -> None:
