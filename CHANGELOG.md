@@ -28,7 +28,7 @@ is tagged.
   split on both surfaces. ``/`` finds path or hunk text.
 - Live Timeline has a Tail switch. Opening an event asks for the
   50,000-character body, including the paired tool result.
-- HUD uses icedtea 0.11: search, badges, tabs, selectable bodies,
+- HUD uses icedtea 0.12: search, badges, tabs, selectable bodies,
   Diff hunks, and an F12 Look drawer.
 - Session walk uses ``groket._scan``. ``GROKET_SCAN=0`` uses the
   Python body.
@@ -42,6 +42,12 @@ is tagged.
 - Marketplace list previews use ``server · method``. Paths keep
   underscores and hyphens. Light themes keep type and tool faces
   readable.
+- Control serve applies catalog watch on the serve loop, with disk
+  work off that loop, so a live write does not stall RPC.
+- Filesystem watch does not install inotify on ``workspace/``,
+  ``images/``, or ``compaction/`` trees.
+- Filesystem watch ignores read open/close, so a catalog apply
+  does not retrigger itself.
 - A catalog ``search_tool`` query is a search, not proof an MCP
   server was available.
 - Analysis-failed notices use the analysis job. Stale analysis is a
@@ -49,6 +55,12 @@ is tagged.
 - An older ``groket serve`` missing a method asks the operator to
   restart serve.
 - ``groket config validate`` rejects missing or invalid TOML.
+- Catalog watch leaves the list still when only ``events.jsonl`` or
+  ``workspace/`` files grow.
+- Filesystem watch ignores ``workspace/``, ``images/``, and
+  ``compaction/`` trees.
+- A monitor log inspect reads only the tail of a large file.
+- Session overview leaves workflow child paths for open, not glance.
 
 ### Chore
 

@@ -9,7 +9,13 @@ from pathlib import Path
 from ..models import JsonObject, JsonValue, ToolInputBag, TraceEvent, as_json_object, json_as_str
 from ..parser import parse_timeline
 from ..tool_display import task_fields_from_content
-from .workflows import WorkflowRun, load_session_workflows, workflows_from_overview
+from .workflows import (
+    WorkflowRun,
+    load_session_workflows,
+    workflow_name_from_raw,
+    workflow_run_id_from_raw,
+    workflows_from_overview,
+)
 
 _MONITOR_LINE = {"DONE": "done", "FAILED": "failed", "CANCELLED": "cancelled"}
 
@@ -163,6 +169,54 @@ def job_event_index(job: BackgroundJob, events: list[TraceEvent]) -> int | None:
         if (wanted and ev_id == wanted) or (call and ev_call == call):
             return int(ev.index)
     return None
+
+
+def set_bookend_indexes(
+    events: list[TraceEvent],
+    jobs: list[JsonObject],
+    workflows: list[JsonObject],
+) -> None:
+    """Set ``eventIndex`` on each job and workflow row from one event walk."""
+    job_id_first: dict[str, int] = {}
+    call_first: dict[str, int] = {}
+    wf_id_first: dict[str, int] = {}
+    wf_name_first: dict[str, int] = {}
+    for ev in events:
+        ev_id = event_task_id(ev)
+        if ev_id and ev_id not in job_id_first:
+            job_id_first[ev_id] = int(ev.index)
+        ev_call = (ev.tool_call_id or "").strip()
+        if ev_call and ev_call not in call_first:
+            call_first[ev_call] = int(ev.index)
+        if (ev.tool_name or "") != "workflow":
+            continue
+        rid = workflow_run_id_from_raw(ev.raw_input) or workflow_run_id_from_raw(ev.content)
+        if rid and rid not in wf_id_first:
+            wf_id_first[rid] = int(ev.index)
+        name = workflow_name_from_raw(ev.raw_input)
+        if name and name not in wf_name_first:
+            wf_name_first[name] = int(ev.index)
+    for row in jobs:
+        hits: list[int] = []
+        jid = json_as_str(row.get("id")).strip()
+        call = json_as_str(row.get("toolCallId")).strip()
+        if jid and jid in job_id_first:
+            hits.append(job_id_first[jid])
+        if call and call in call_first:
+            hits.append(call_first[call])
+        row["eventIndex"] = min(hits) if hits else None
+    for row in workflows:
+        rid = json_as_str(row.get("id")).strip()
+        name = json_as_str(row.get("name")).strip()
+        if rid and rid in wf_id_first:
+            row["eventIndex"] = wf_id_first[rid]
+            continue
+        named: int | None = None
+        for ev_name, idx in wf_name_first.items():
+            if name == ev_name or name.startswith(f"{ev_name}-"):
+                if named is None or idx < named:
+                    named = idx
+        row["eventIndex"] = named
 
 
 def job_mapping(job: BackgroundJob, *, events: list[TraceEvent] | None = None) -> JsonObject:
@@ -336,12 +390,17 @@ def read_log_tail(path: Path, *, max_chars: int = 8_000) -> str:
     """Last *max_chars* of a terminal or monitor log (empty when missing)."""
     if max_chars <= 0 or not path.is_file():
         return ""
+    # Extra bytes so a multi-byte UTF-8 sequence at the cut is not lost.
+    byte_cap = max_chars + 4
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - byte_cap))
+            chunk = handle.read(byte_cap)
     except OSError:
         return ""
-    chunk = data[-max_chars:]
-    return chunk.decode("utf-8", errors="replace")
+    return chunk.decode("utf-8", errors="replace")[-max_chars:]
 
 
 def monitor_line_status(text: str) -> str | None:

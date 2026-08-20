@@ -46,7 +46,14 @@ from ..tool_display import (
     tool_input_fields,
 )
 from .catalog import session_catalog_row
-from .jobs import job_input_stamp, job_mapping, load_session_jobs, schedule_mapping
+from .jobs import (
+    event_task_id,
+    job_input_stamp,
+    job_mapping,
+    load_session_jobs,
+    schedule_mapping,
+    set_bookend_indexes,
+)
 from .subagents import (
     SubagentRun,
     event_child_session_id,
@@ -73,6 +80,13 @@ _OverviewStamp = tuple[
     _MonitorStatusStamp,
 ]
 _overview_cache: BoundedCache[tuple[_OverviewStamp, JsonObject]] = BoundedCache(
+    OVERVIEW_CACHE_MAXSIZE
+)
+_JobStamp = tuple[_JobFilesStamp, _MonitorStatusStamp]
+_JobBookendKey = tuple[tuple[str, str, str], ...]
+_JobReuseKey = tuple[_JobStamp, _JobBookendKey]
+_JobLists = tuple[list[JsonObject], list[JsonObject], list[JsonObject]]
+_job_payload_cache: BoundedCache[tuple[_JobReuseKey, _JobLists]] = BoundedCache(
     OVERVIEW_CACHE_MAXSIZE
 )
 _overview_inflight: dict[str, Future[JsonObject]] = {}
@@ -622,7 +636,7 @@ def _findings_cache_stamp(session_dir: Path) -> tuple[tuple[str, int, int], ...]
     return tuple(out)
 
 
-def _overview_input_stamp(session_dir: Path) -> _OverviewStamp:
+def overview_input_stamp(session_dir: Path) -> _OverviewStamp:
     """Inputs that must match for a cached overview to be reused."""
     sd = Path(session_dir)
     notes_rev = ""
@@ -638,6 +652,64 @@ def _overview_input_stamp(session_dir: Path) -> _OverviewStamp:
         job_files,
         monitor_status,
     )
+
+
+_overview_input_stamp = overview_input_stamp
+
+
+def _json_value_rows(rows: list[JsonObject]) -> list[JsonValue]:
+    """Overview job rows as a JSON list value."""
+    out: list[JsonValue] = []
+    for row in rows:
+        out.append(row)
+    return out
+
+
+def _copy_job_lists(
+    jobs: list[JsonObject],
+    schedules: list[JsonObject],
+    workflows: list[JsonObject],
+) -> _JobLists:
+    """Shallow-copy overview job rows so later index writes stay local."""
+    return (
+        [dict(row) for row in jobs],
+        [dict(row) for row in schedules],
+        [dict(row) for row in workflows],
+    )
+
+
+def _job_bookend_key(events: list[TraceEvent]) -> _JobBookendKey:
+    """Identity of timeline job / schedule bookends already in *events*."""
+    rows: list[tuple[str, str, str]] = []
+    for ev in events:
+        kind = ev.event_type or ""
+        if kind not in {"task_backgrounded", "task_completed"} and not kind.startswith(
+            "scheduled_task_"
+        ):
+            continue
+        rows.append((kind, event_task_id(ev), ev.tool_call_id or ""))
+    return tuple(rows)
+
+
+def _overview_job_payload(
+    session_dir: Path,
+    events: list[TraceEvent],
+    cache_key: str,
+) -> _JobLists:
+    """Jobs / schedules / workflows, reused when files and bookends match."""
+    sd = Path(session_dir)
+    reuse_key = (job_input_stamp(sd), _job_bookend_key(events))
+    cached = _job_payload_cache.get(cache_key)
+    if cached is not None and cached[0] == reuse_key:
+        jobs, schedules, workflows = _copy_job_lists(*cached[1])
+    else:
+        packed = load_session_jobs(sd, events)
+        jobs = [job_mapping(j) for j in packed.jobs]
+        schedules = [schedule_mapping(s) for s in packed.schedules]
+        workflows = [workflow_mapping(w) for w in packed.workflows]
+        _job_payload_cache[cache_key] = (reuse_key, _copy_job_lists(jobs, schedules, workflows))
+    set_bookend_indexes(events, jobs, workflows)
+    return jobs, schedules, workflows
 
 
 def _build_session_overview_uncached(
@@ -676,7 +748,7 @@ def _build_session_overview_uncached(
         logger.debug("notes for session/overview %s", sd, exc_info=True)
 
     findings_block = build_session_findings(sd, segs=segs)
-    packed = load_session_jobs(sd, events)
+    jobs, schedules, workflows = _overview_job_payload(sd, events, _session_cache_key(sd))
 
     summary = (meta.summary_text or "").strip()
     if len(summary) > 1200:
@@ -686,9 +758,9 @@ def _build_session_overview_uncached(
         "sessionId": (meta.session_id or sd.name).strip(),
         "meta": session_meta_mapping(meta, path=sd, origin=origin),
         "summary": summary,
-        "backgroundJobs": [job_mapping(j, events=events) for j in packed.jobs],
-        "schedules": [schedule_mapping(s) for s in packed.schedules],
-        "workflows": [workflow_mapping(w, events=events, parent_dir=sd) for w in packed.workflows],
+        "backgroundJobs": _json_value_rows(jobs),
+        "schedules": _json_value_rows(schedules),
+        "workflows": _json_value_rows(workflows),
         "turns": {
             "total": len(segs),
             # Short assistant preview for the list: full wrap-up is for open cards

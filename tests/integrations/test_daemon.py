@@ -9,6 +9,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import traceback
 from importlib import import_module
 from pathlib import Path
 
@@ -861,3 +864,67 @@ def test_ensure_does_not_stop_owner_when_protocol_probe_fails(
     assert result.already_running
     assert not result.spawned
     assert stopped == []
+
+
+@pytest.mark.asyncio
+async def test_serve_watch_apply_runs_off_observer_timer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live watch fire must apply catalog rows on a worker, not Timer."""
+    daemon = import_module("groket.integrations.daemon")
+    client_mod = import_module("groket.integrations.control_client")
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    session_dir = _write_session(traces, "watch-apply")
+    sock = _short_sock("watch-apply.sock")
+    monkeypatch.setattr(daemon, "CONTROL_FS_DEBOUNCE_S", 0.05)
+    apply_hits: list[dict[str, object]] = []
+    orig_apply = daemon.apply_fs_catalog_events
+    loop_thread = threading.current_thread()
+
+    def _recording_apply(cache: object, paths: list[str], roots: list[Path]) -> object:
+        apply_hits.append(
+            {
+                "thread": threading.current_thread().name,
+                "ident": threading.current_thread().ident,
+                "loop_ident": loop_thread.ident,
+                "stack": "".join(traceback.format_stack()),
+            }
+        )
+        time.sleep(0.25)
+        return orig_apply(cache, paths, roots)
+
+    monkeypatch.setattr(daemon, "apply_fs_catalog_events", _recording_apply)
+    server = daemon.build_domain_control_server(
+        socket_path=sock,
+        work_dir=work,
+        traces_path=traces,
+        include_host=False,
+    )
+    task = asyncio.create_task(
+        daemon.serve_control_forever(server, write_pid=False, warm_interval=3600.0)
+    )
+    try:
+        await wait_until(sock.exists, description="control socket accepts")
+        client = client_mod.ControlClient(sock, client_name="watch-apply", timeout=15)
+        await client.initialize()
+        (session_dir / "updates.jsonl").write_text("{}\n{}\n", encoding="utf-8")
+        await wait_until(
+            lambda: bool(apply_hits),
+            timeout=8.0,
+            description="watch fire applied catalog events",
+        )
+        started = time.monotonic()
+        listed = await client.session_list()
+        elapsed = time.monotonic() - started
+        assert listed["matched"] >= 1
+        assert elapsed < 0.2
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert apply_hits
+    stack = str(apply_hits[0]["stack"])
+    assert "TraceTreeWatch._fire" not in stack
+    assert "fs_watch.py" not in stack
+    assert apply_hits[0]["ident"] != loop_thread.ident

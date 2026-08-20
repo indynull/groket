@@ -196,6 +196,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._last_light_fp: tuple[str | int | float | bool | None, ...] | None = None
         # session_timeline_stamp() when set (mtime + sizes); not signals.json.
         self._last_trace_mtime: tuple[float, int, int, int] | None = None
+        self._last_overview_stamp: object | None = None
         self._last_signals_mtime: float | None = None
         self._delete_pending: bool = False
         self._live_refresh_busy = False
@@ -1154,7 +1155,11 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         async def _ov() -> object:
             return await session_overview(ref)
 
+        from ...session.control_views import overview_input_stamp
+
+        overview_stamp = overview_input_stamp(self.session_dir)
         overview = asyncio.run(_ov())
+        self._last_overview_stamp = overview_stamp
         ov = as_json_object(overview) if isinstance(overview, dict) else {}
         self._overview_payload = ov
         meta = session_meta_from_overview(ov, fallback_dir=Path(self.session_dir))
@@ -1256,7 +1261,16 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 prev_n = len(self.timeline or [])
                 prev_status = self.meta.list_status_label() if self.meta is not None else ""
                 prev_jobs = self._jobs_status_key()
-                # Always refresh meta/context via overview (serve-side stamp cache).
+                from ...session.control_views import overview_input_stamp
+
+                overview_stamp = overview_input_stamp(self.session_dir)
+                prev_stamp = getattr(self, "_last_overview_stamp", None)
+                if (
+                    prev_stamp is not None
+                    and prev_stamp == overview_stamp
+                    and self.meta is not None
+                ):
+                    return
                 app = resolve_ui_app(self)
                 access = getattr(app, "session_access", lambda: None)()
                 if access is None:
@@ -1269,6 +1283,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                     return await access.session_overview(ref)
 
                 overview = asyncio.run(_ov())
+                self._last_overview_stamp = overview_stamp
                 from ...session.wire_timeline import session_meta_from_overview
 
                 ov = as_json_object(overview) if isinstance(overview, dict) else {}

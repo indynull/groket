@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 
 # Background catalog refresh while the headless owner is alive (seconds).
 CATALOG_WARM_INTERVAL = 15.0
-# Coalesce live jsonl/signals writes. Still notifies session/changed so
-# Emacs, Neovim, and the terminal list refresh the trace.
+# Coalesce live jsonl/signals writes on the serve loop. Still notifies
+# session/changed so Emacs, Neovim, and the terminal list refresh the trace.
 CONTROL_FS_DEBOUNCE_S = 3.0
+# Observer-thread coalesce only. Catalog apply debounce is CONTROL_FS_DEBOUNCE_S.
+_WATCH_PATH_COALESCE_S = 0.05
 
 
 def configure_serve_logging() -> None:
@@ -347,6 +349,43 @@ def control_watch_roots(cache: SessionCatalogCache) -> list[Path]:
     return out
 
 
+# Catalog list rows only care about these names (and notes). Workspace,
+# images, compaction, and events.jsonl must not rebuild the list.
+_CATALOG_LIST_FILE_NAMES = frozenset(
+    {
+        "summary.json",
+        "signals.json",
+        "updates.jsonl",
+        "chat_history.jsonl",
+        "operator_notes.toml",
+        "status.json",
+        "groket-interrupted.json",
+    }
+)
+_CATALOG_NOISE_DIR_NAMES = frozenset(
+    {
+        "workspace",
+        "images",
+        "compaction",
+        "attachments",
+    }
+)
+
+
+def _catalog_ignore_watch_path(path: Path) -> bool:
+    """True for workspace / image / compaction trees (not list or timeline)."""
+    return any(part.casefold() in _CATALOG_NOISE_DIR_NAMES for part in path.parts)
+
+
+def _catalog_list_rebuild_path(path: Path) -> bool:
+    """True when a watch path can change a painted session/list field."""
+    if _catalog_ignore_watch_path(path) or path.name == "events.jsonl":
+        return False
+    if path.is_dir() or not path.name:
+        return True
+    return path.name in _CATALOG_LIST_FILE_NAMES
+
+
 def apply_fs_catalog_events(
     cache: SessionCatalogCache,
     paths: list[str],
@@ -367,9 +406,13 @@ def apply_fs_catalog_events(
         or any("operator_notes.toml" in p for p in paths)
     ]
     list_changed: dict[str, bool] = {}
-    if sessions:
+    list_sessions = _session_dirs_from_event_paths(
+        [p for p in paths if _catalog_list_rebuild_path(Path(p))],
+        roots=roots,
+    )
+    if list_sessions:
         try:
-            _rows, list_changed = cache.refresh_rows(sessions)
+            _rows, list_changed = cache.refresh_rows(list_sessions)
         except Exception:
             logger.debug("catalog row refresh after FS event failed", exc_info=True)
             try:
@@ -378,8 +421,113 @@ def apply_fs_catalog_events(
                 logger.debug("catalog force refresh after FS event failed", exc_info=True)
             # Fingerprint unknown after a failed incremental patch: clients
             # must treat every dirty session as a list change.
-            list_changed = {session.name: True for session in sessions}
+            list_changed = {session.name: True for session in list_sessions}
+    for session in sessions:
+        list_changed.setdefault(session.name, False)
     return sessions, notes_sessions, list_changed
+
+
+class _CatalogWatchApply:
+    """Coalesce watch paths on the serve loop; run catalog disk I/O off it."""
+
+    def __init__(
+        self,
+        *,
+        server: ControlServer,
+        cache: SessionCatalogCache | None,
+        roots: list[Path],
+        loop: asyncio.AbstractEventLoop,
+        debounce_s: float,
+    ) -> None:
+        self._server = server
+        self._cache = cache
+        self._roots = roots
+        self._loop = loop
+        self._debounce_s = max(0.0, float(debounce_s))
+        self._pending: set[str] = set()
+        self._handle: asyncio.TimerHandle | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    def enqueue(self, paths: list[str]) -> None:
+        """Watch-thread entry: marshal paths onto the serve loop."""
+        if not paths:
+            return
+        self._loop.call_soon_threadsafe(self._accept, tuple(paths))
+
+    def close(self) -> None:
+        """Cancel a pending debounce and in-flight apply."""
+        if self._handle is not None:
+            self._handle.cancel()
+            self._handle = None
+        if self._task is not None:
+            self._task.cancel()
+
+    def _accept(self, paths: tuple[str, ...]) -> None:
+        self._pending.update(paths)
+        if self._handle is not None:
+            self._handle.cancel()
+        if self._debounce_s <= 0:
+            self._kick()
+            return
+        self._handle = self._loop.call_later(self._debounce_s, self._kick)
+
+    def _kick(self) -> None:
+        self._handle = None
+        if self._task is not None and not self._task.done():
+            return
+        self._task = self._loop.create_task(self._run(), name="control-fs-apply")
+
+    async def _run(self) -> None:
+        try:
+            while self._pending:
+                paths = sorted(self._pending)
+                self._pending.clear()
+                sessions, notes, list_changed = await asyncio.to_thread(self._apply_disk, paths)
+                await self._publish(sessions, notes, list_changed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("control FS apply failed", exc_info=True)
+        if self._pending:
+            self._kick()
+
+    def _apply_disk(self, paths: list[str]) -> tuple[list[Path], list[Path], dict[str, bool]]:
+        if isinstance(self._cache, SessionCatalogCache):
+            return apply_fs_catalog_events(self._cache, paths, self._roots)
+        sessions = _session_dirs_from_event_paths(paths, roots=self._roots)
+        notes = [
+            session
+            for session in sessions
+            if any(Path(p).name == "operator_notes.toml" for p in paths)
+            or any("operator_notes.toml" in p for p in paths)
+        ]
+        return sessions, notes, {}
+
+    async def _publish(
+        self,
+        sessions: list[Path],
+        notes_sessions: list[Path],
+        list_changed: dict[str, bool],
+    ) -> None:
+        seen: set[str] = set()
+        for session in sessions:
+            for target in session_changed_targets(session):
+                key = str(target)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    await self._server.publish_session_changed(
+                        target,
+                        list_changed=bool(list_changed.get(target.name, True)),
+                    )
+                except Exception:
+                    logger.debug("publish session/changed failed", exc_info=True)
+        for session in notes_sessions:
+            try:
+                await self._server.publish_notes_changed(session)
+            except Exception:
+                logger.debug("publish notes/changed failed", exc_info=True)
 
 
 def _session_dirs_from_event_paths(
@@ -400,6 +548,8 @@ def _session_dirs_from_event_paths(
             p = Path(raw).expanduser().resolve()
         except OSError:
             p = Path(raw).expanduser()
+        if _catalog_ignore_watch_path(p):
+            continue
         for root in root_resolved:
             try:
                 rel = p.relative_to(root)
@@ -468,56 +618,19 @@ async def serve_control_forever(
 
         cache._on_rebuilt = _catalog_ready
 
-    def _on_paths(paths: list[str]) -> None:
-        sessions: list[Path] = []
-        notes_sessions: list[Path] = []
-        list_changed: dict[str, bool] = {}
-        if isinstance(cache, SessionCatalogCache):
-            sessions, notes_sessions, list_changed = apply_fs_catalog_events(
-                cache, paths, uniq_roots
-            )
-        else:
-            sessions = _session_dirs_from_event_paths(paths, roots=uniq_roots)
-            notes_sessions = [
-                s
-                for s in sessions
-                if any(Path(p).name == "operator_notes.toml" for p in paths)
-                or any("operator_notes.toml" in p for p in paths)
-            ]
-
-        async def _publish() -> None:
-            seen: set[str] = set()
-            for session in sessions:
-                for target in session_changed_targets(session):
-                    key = str(target)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    try:
-                        # Only False when refresh_rows proved painted fields
-                        # unchanged. Missing keys (force rebuild, parent of a
-                        # child watch, non-cache path) default to True.
-                        await server.publish_session_changed(
-                            target,
-                            list_changed=bool(list_changed.get(target.name, True)),
-                        )
-                    except Exception:
-                        logger.debug("publish session/changed failed", exc_info=True)
-            for session in notes_sessions:
-                try:
-                    await server.publish_notes_changed(session)
-                except Exception:
-                    logger.debug("publish notes/changed failed", exc_info=True)
-
-        if sessions or notes_sessions:
-            asyncio.run_coroutine_threadsafe(_publish(), loop)
-
+    apply = _CatalogWatchApply(
+        server=server,
+        cache=cache if isinstance(cache, SessionCatalogCache) else None,
+        roots=uniq_roots,
+        loop=loop,
+        debounce_s=CONTROL_FS_DEBOUNCE_S,
+    )
     for root in uniq_roots:
         watch = TraceTreeWatch(
             root,
             on_change=lambda: None,
-            debounce_s=CONTROL_FS_DEBOUNCE_S,
-            on_paths=_on_paths,
+            debounce_s=_WATCH_PATH_COALESCE_S,
+            on_paths=apply.enqueue,
         )
         if watch.start():
             watches.append(watch)
@@ -527,6 +640,7 @@ async def serve_control_forever(
         assert server._server is not None
         await server._server.serve_forever()
     finally:
+        apply.close()
         for watch in watches:
             with suppress(Exception):
                 watch.stop()

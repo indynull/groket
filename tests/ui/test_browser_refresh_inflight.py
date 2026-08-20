@@ -287,6 +287,100 @@ def test_load_data_light_always_parses_on_stamp_change(tmp_path: Path, monkeypat
     assert is_inflight(KIND_REFRESH, sd) is False
 
 
+def test_load_data_light_control_skips_overview_when_stamp_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Attached light refresh does not RPC session/overview when the stamp is still."""
+    from groket.models import SessionMeta
+    from groket.session.control_views import overview_input_stamp
+    from groket.ui.screens import browser as browser_mod
+
+    sd = tmp_path / "019f-sess"
+    sd.mkdir()
+    (sd / "updates.jsonl").write_text("", encoding="utf-8")
+    screen = _screen(sd)
+    screen._uses_control_data = lambda: True  # type: ignore[method-assign]
+    screen._session_control_ref = lambda: "s"  # type: ignore[method-assign]
+    screen.meta = SessionMeta(session_id="s", session_dir=sd)
+    screen.timeline = [object()]
+    screen._last_overview_stamp = overview_input_stamp(sd)
+    calls: list[str] = []
+
+    class _Access:
+        async def session_overview(self, _ref: str) -> object:
+            calls.append("overview")
+            return {"sessionId": "s", "timeline": {"total": 1}}
+
+    class _App:
+        def session_access(self) -> _Access:
+            return _Access()
+
+    monkeypatch.setattr(browser_mod, "resolve_ui_app", lambda _s: _App())
+    monkeypatch.setattr(
+        browser_mod,
+        "call_ui",
+        lambda _app, cb, *a, **k: (
+            cb(*a, **k) if getattr(cb, "__name__", "") == "_live_refresh_worker_done" else None
+        ),
+    )
+    assert try_begin(KIND_REFRESH, sd) is True
+    screen._live_refresh_busy = True
+    screen._load_data_light_job()
+    assert calls == []
+    assert is_inflight(KIND_REFRESH, sd) is False
+
+
+def test_load_data_light_control_keeps_decision_stamp_when_disk_grows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """After overview returns, keep the pre-RPC stamp so a mid-RPC append is fetched next."""
+    from groket.models import SessionMeta
+    from groket.session.control_views import overview_input_stamp
+    from groket.ui.screens import browser as browser_mod
+
+    sd = tmp_path / "019f-sess"
+    sd.mkdir()
+    (sd / "updates.jsonl").write_text("", encoding="utf-8")
+    screen = _screen(sd)
+    screen._uses_control_data = lambda: True  # type: ignore[method-assign]
+    screen._session_control_ref = lambda: "s"  # type: ignore[method-assign]
+    screen.meta = SessionMeta(session_id="s", session_dir=sd)
+    screen.timeline = [object()]
+    screen._overview_payload = None
+    calls: list[str] = []
+    before = overview_input_stamp(sd)
+
+    class _Access:
+        async def session_overview(self, _ref: str) -> object:
+            calls.append("overview")
+            (sd / "updates.jsonl").write_text("{}\n", encoding="utf-8")
+            return {"sessionId": "s", "timeline": {"total": 1}}
+
+    class _App:
+        def session_access(self) -> _Access:
+            return _Access()
+
+    monkeypatch.setattr(browser_mod, "resolve_ui_app", lambda _s: _App())
+    monkeypatch.setattr(
+        browser_mod,
+        "call_ui",
+        lambda _app, cb, *a, **k: (
+            cb(*a, **k) if getattr(cb, "__name__", "") == "_live_refresh_worker_done" else None
+        ),
+    )
+    assert try_begin(KIND_REFRESH, sd) is True
+    screen._live_refresh_busy = True
+    screen._load_data_light_job()
+    assert calls == ["overview"]
+    assert screen._last_overview_stamp == before
+    assert overview_input_stamp(sd) != before
+    assert try_begin(KIND_REFRESH, sd) is True
+    screen._live_refresh_busy = True
+    screen._load_data_light_job()
+    assert calls == ["overview", "overview"]
+    assert is_inflight(KIND_REFRESH, sd) is False
+
+
 def test_load_data_light_control_timeout_is_soft(tmp_path: Path, monkeypatch) -> None:
     """A hung session/overview must not crash the live-refresh worker."""
     from groket.ui.screens import browser as browser_mod
