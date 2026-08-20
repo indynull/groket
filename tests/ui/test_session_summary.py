@@ -66,7 +66,7 @@ class TestBuildSessionSummary:
         summary = build_session_summary(meta, timeline)
         assert "Fix auth tests" in summary
         assert "v9-dietcoke" in summary
-        assert "success" in summary
+        assert "complete" in summary
         assert "tool_call" in summary or "tools" in summary.lower()
         rich = render_session_summary(meta, timeline)
         assert_rich_contains(rich, "Fix auth tests")
@@ -247,6 +247,56 @@ class TestBuildSessionSummary:
         assert len(starts) == 4
         assert len(set(starts)) == 1, starts
 
+    def test_badge_row_is_status_model_origin_duration(self, session_dir):
+        meta = SessionMeta(
+            session_id="badge",
+            session_dir=session_dir,
+            title="Badge session",
+            model_id="grok-4.5",
+            turn_outcome="completed",
+            duration_seconds=120,
+            origin="host",
+            context_window_usage_pct=35,
+            context_tokens_used=178996,
+            context_window_tokens=500000,
+        )
+        plain = rich_plain(render_session_summary(meta, []))
+        lines = [ln for ln in plain.splitlines() if ln.strip()]
+        assert lines[0].strip() == "Badge session"
+        chips = lines[1]
+        assert "complete" in chips
+        assert "completed" not in chips
+        assert "grok-4.5" in chips
+        assert "Host" in chips
+        assert "2m" in chips
+        assert "Context usage" in plain
+        assert "Context tokens" not in plain
+        assert "178,996" in plain
+
+    def test_last_turn_says_complete(self, session_dir):
+        meta = SessionMeta(
+            session_id="lt",
+            session_dir=session_dir,
+            title="Last turn",
+            turn_outcome="completed",
+            turn_count=2,
+        )
+        timeline = [
+            make_trace_event(index=0, event_type="session", content="turn started  turn_number=0"),
+            make_trace_event(index=1, event_type="user_message_chunk", content="one"),
+            make_trace_event(
+                index=2, event_type="session", content="turn ended  outcome=completed"
+            ),
+            make_trace_event(index=3, event_type="session", content="turn started  turn_number=1"),
+            make_trace_event(index=4, event_type="user_message_chunk", content="two"),
+            make_trace_event(
+                index=5, event_type="session", content="turn ended  outcome=completed"
+            ),
+        ]
+        plain = rich_plain(render_session_summary(meta, timeline))
+        assert "(complete)" in plain
+        assert "(completed)" not in plain
+
     def test_long_path_truncated(self, session_dir):
         meta = SessionMeta(
             session_id="lp",
@@ -408,7 +458,7 @@ class TestSessionSummaryTurnSegmentationFail:
         ):
             result = render_session_summary(meta, timeline)
             # Segmentation failed; still render identity / outcome for the session.
-            assert_rich_contains(result, "segf", "success")
+            assert_rich_contains(result, "segf", "complete")
 
 
 class TestSessionSummaryShareDisplay:

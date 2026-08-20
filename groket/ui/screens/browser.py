@@ -50,6 +50,7 @@ from ...notes import (
     upsert_note,
 )
 from ...parser import load_session_meta, parse_timeline
+from ...session.control_views import overview_stat_counters
 from ...session.jobs import (
     ScheduleTask,
     SessionJobs,
@@ -3269,11 +3270,17 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         if not self.meta:
             return
         m = self.meta
-        type_counts = Counter(e.event_type for e in self.timeline)
+        parsed = overview_stat_counters(self._overview_payload)
+        if parsed is not None:
+            type_counts, tool_counts = parsed
+        else:
+            type_counts = Counter(e.event_type for e in self.timeline)
+            tool_counts = Counter(
+                e.tool_name for e in self.timeline if e.event_type == "tool_call" and e.tool_name
+            )
         timeline_table = self.query_one("#timeline-list", TimelineTable)
         durations = timeline_table.durations
         tool_call_events = [e for e in self.timeline if e.event_type == "tool_call" and e.tool_name]
-        tool_counts: Counter[str] = Counter(e.tool_name for e in tool_call_events)
         tool_errors: Counter[str] = Counter(e.tool_name for e in tool_call_events if e.is_error)
         tool_durations: dict[str, list[float]] = defaultdict(list)
         for e in tool_call_events:

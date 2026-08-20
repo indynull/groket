@@ -672,6 +672,27 @@ pub struct Overview {
     pub notes: NotesBlock,
     #[serde(default)]
     pub findings: FindingsBlock,
+    #[serde(default)]
+    pub stats: OverviewStats,
+}
+
+/// Event-type and tool counts from ``session/overview`` (full session).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewStats {
+    #[serde(default)]
+    pub event_types: Vec<StatCount>,
+    #[serde(default)]
+    pub tools: Vec<StatCount>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatCount {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub count: i64,
 }
 
 impl SessionListItem {

@@ -69,6 +69,28 @@
     }
   },
   "sessionId": "sess-wire",
+  "stats": {
+    "eventTypes": [
+      {
+        "count": 1,
+        "id": "user_message_chunk"
+      },
+      {
+        "count": 1,
+        "id": "agent_message_chunk"
+      },
+      {
+        "count": 1,
+        "id": "tool_call"
+      }
+    ],
+    "tools": [
+      {
+        "count": 1,
+        "id": "read_file"
+      }
+    ]
+  },
   "summary": "",
   "timeline": {
     "events": [],
