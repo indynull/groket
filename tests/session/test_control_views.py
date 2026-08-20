@@ -14,6 +14,8 @@ from groket.session.control_views import (
     build_session_timeline,
     build_session_turns,
     build_session_usage,
+    overview_stat_counters,
+    overview_stat_counts,
 )
 
 
@@ -206,6 +208,22 @@ def test_build_session_overview_one_shot(tmp_path: Path) -> None:
     conv = [e for e in page["events"] if e.get("kind") in ("user", "agent", "tool")]
     assert conv
     assert all(e.get("turnIndex") == 0 for e in conv)
+    stats = ov["stats"]
+    types = {row["id"]: row["count"] for row in stats["eventTypes"]}
+    tools = {row["id"]: row["count"] for row in stats["tools"]}
+    assert types["user_message_chunk"] == 1
+    assert types["agent_message_chunk"] == 1
+    assert types["tool_call"] == 1
+    assert tools["read_file"] == 1
+    counted = overview_stat_counters(ov)
+    assert counted is not None
+    type_counts, tool_counts = counted
+    assert type_counts["tool_call"] == 1
+    assert tool_counts["read_file"] == 1
+    empty = overview_stat_counts([])
+    assert empty["eventTypes"] == []
+    assert empty["tools"] == []
+    assert overview_stat_counters({"stats": {"eventTypes": [], "tools": []}}) is None
 
 
 def test_overview_includes_background_jobs_and_schedules(tmp_path: Path) -> None:

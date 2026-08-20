@@ -292,7 +292,36 @@ pub struct OverviewStatRow {
     pub value: String,
 }
 
-/// Event-type and tool counts with the same labels as Timeline.
+/// Event-type and tool counts from ``session/overview`` ``stats``.
+pub fn overview_stat_rows_from_counts(
+    event_types: &[crate::wire::StatCount],
+    tools: &[crate::wire::StatCount],
+) -> Vec<OverviewStatRow> {
+    let mut out = Vec::new();
+    for row in event_types {
+        if row.id.is_empty() {
+            continue;
+        }
+        out.push(OverviewStatRow {
+            section: "Event types",
+            label: human_event_type_label(&row.id, "", "", false),
+            value: row.count.to_string(),
+        });
+    }
+    for row in tools {
+        if row.id.is_empty() {
+            continue;
+        }
+        out.push(OverviewStatRow {
+            section: "Tools",
+            label: format_tool_display(&row.id),
+            value: row.count.to_string(),
+        });
+    }
+    out
+}
+
+/// Event-type and tool counts from a Timeline page (tests / empty overview).
 pub fn overview_stat_rows(events: &[crate::wire::TimelineEvent]) -> Vec<OverviewStatRow> {
     let mut types: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut tools: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
@@ -309,23 +338,21 @@ pub fn overview_stat_rows(events: &[crate::wire::TimelineEvent]) -> Vec<Overview
             *tools.entry(ev.tool_name.clone()).or_insert(0) += 1;
         }
     }
-    let mut out = Vec::new();
-    for (raw, n) in types {
-        let label = human_event_type_label(&raw, "", "", false);
-        out.push(OverviewStatRow {
-            section: "Event types",
-            label,
-            value: n.to_string(),
-        });
-    }
-    for (raw, n) in tools {
-        out.push(OverviewStatRow {
-            section: "Tools",
-            label: format_tool_display(&raw),
-            value: n.to_string(),
-        });
-    }
-    out
+    let types: Vec<crate::wire::StatCount> = types
+        .into_iter()
+        .map(|(id, n)| crate::wire::StatCount {
+            id,
+            count: n as i64,
+        })
+        .collect();
+    let tools: Vec<crate::wire::StatCount> = tools
+        .into_iter()
+        .map(|(id, n)| crate::wire::StatCount {
+            id,
+            count: n as i64,
+        })
+        .collect();
+    overview_stat_rows_from_counts(&types, &tools)
 }
 
 /// Sort Stats rows. Column 0 is Kind, 1 is Name, 2 is Count (numeric).
@@ -2680,6 +2707,25 @@ mod tests {
             ),
             "Investigate the bug"
         );
+    }
+
+    #[test]
+    fn overview_stat_rows_from_session_counts() {
+        let types = [crate::wire::StatCount {
+            id: "tool_call".into(),
+            count: 9785,
+        }];
+        let tools = [crate::wire::StatCount {
+            id: "read_file".into(),
+            count: 100,
+        }];
+        let rows = overview_stat_rows_from_counts(&types, &tools);
+        assert_eq!(rows[0].section, "Event types");
+        assert_eq!(rows[0].label, "tool call");
+        assert_eq!(rows[0].value, "9785");
+        assert_eq!(rows[1].section, "Tools");
+        assert_eq!(rows[1].label, "read file");
+        assert_eq!(rows[1].value, "100");
     }
 
     #[test]

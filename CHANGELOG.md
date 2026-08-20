@@ -10,6 +10,11 @@ is tagged.
 - HUD notes form uses a pick list for one-of schema fields (severity)
   and filter chips for many-select. Tab / Shift+Tab walk the text
   fields while composing; Ctrl+Tab or Ctrl+1–6 still change panes.
+- `session/overview` includes event-type and tool counts. HUD and TUI
+  Stats read those fields for the whole session.
+- TUI Session glance puts status, model, Host or Eval, and duration on
+  one badge row. Last-turn says `complete`.
+
 - HUD loading uses the same spinner overlay for the catalog, an opening
   session, Timeline, and Stats.
 - Serve watches membership directories and four session files with

@@ -11,13 +11,13 @@ from rich.text import Text
 from .. import event_types as et
 from ..models import SessionMeta, TraceEvent
 from ..session.subagents import is_subagent_session_dir
+from ..session.turns import TurnSegment
 from ..session.usage_stats import SessionUsageStats
 from ..utils import fmt_duration
 from .i18n import join_ui, t
 from .panel_render import (
     kv_line,
     list_row,
-    meta_strip,
     panel_group,
     section_header,
     status_chip,
@@ -89,19 +89,26 @@ def render_session_summary(
     ):
         outcome = t("status-ending")
         kind = "ending"
+    else:
+        outcome = _outcome_face(outcome)
     blocks: list = []
     head = Text()
     head.append(title + "\n", style="bold")
-    head.append("\n  ")
     if meta.session_dir and is_subagent_session_dir(meta.session_dir):
         head.append_text(status_chip(t("ui-subagent"), kind="unknown"))
         head.append("  ")
     head.append_text(status_chip(outcome, kind=kind))
+    if model and model != "—":
+        head.append("  ")
+        head.append_text(status_chip(model, kind="unknown"))
+    origin_chip = _origin_chip(meta.origin)
+    if origin_chip:
+        head.append("  ")
+        head.append_text(status_chip(origin_chip, kind="unknown"))
+    if dur and dur != "—":
+        head.append("  ")
+        head.append_text(status_chip(dur, kind="unknown"))
     head.append("\n")
-    strip_parts = [model, dur]
-    if (meta.origin or "").strip():
-        strip_parts.append(meta.origin)
-    head.append_text(meta_strip(strip_parts))
     blocks.append(head)
     prose = (meta.summary_text or "").strip()
     if prose and prose != title:
@@ -109,7 +116,7 @@ def render_session_summary(
         body.append(prose)
         body.append("\n")
         blocks.append(body)
-    turns = []
+    turns: list[TurnSegment] = []
     try:
         from ..session.turns import segment_timeline_turns
 
@@ -129,22 +136,39 @@ def render_session_summary(
     return panel_group(*blocks)
 
 
+def _outcome_face(outcome: str) -> str:
+    oc = (outcome or "").strip().lower().replace(" ", "_")
+    if oc in ("success", "ok", "completed", "complete"):
+        return "complete"
+    return outcome
+
+
+def _origin_chip(origin: str) -> str:
+    key = (origin or "").strip().lower()
+    if key == "host":
+        return t("ui-origin-host")
+    if key in ("work", "eval"):
+        return t("ui-origin-work")
+    return ""
+
+
+def _turn_label_face(last: TurnSegment) -> str:
+    if not last.outcome:
+        return last.label
+    face = _outcome_face(last.outcome)
+    suffix = f"({last.outcome})"
+    if last.label.endswith(suffix):
+        return f"{last.label[: -len(suffix)]}({face})"
+    return last.label
+
+
 def _glance_rows(
-    meta: SessionMeta, turns: list, *, tools_n: int, tool_errs: int
+    meta: SessionMeta, turns: list[TurnSegment], *, tools_n: int, tool_errs: int
 ) -> list[tuple[str, str]]:
     """HUD Overview Session fields, in the same order."""
     rows: list[tuple[str, str]] = [(t("ui-session-2"), meta.session_id or "—")]
     if meta.has_context_usage:
         rows.append((t("ui-context-usage"), meta.context_usage_str or "—"))
-        if meta.context_tokens_used is not None and meta.context_window_tokens is not None:
-            rows.append(
-                (
-                    t("ui-context-tokens"),
-                    f"{meta.context_tokens_used:,} / {meta.context_window_tokens:,}",
-                )
-            )
-        elif meta.context_tokens_used is not None:
-            rows.append((t("ui-context-tokens"), f"{meta.context_tokens_used:,}"))
         if meta.compaction_count:
             rows.append((t("ui-compactions"), str(meta.compaction_count)))
     if tools_n > 0 or tool_errs > 0 or meta.error_count:
@@ -157,10 +181,10 @@ def _glance_rows(
     turns_n = max(int(meta.turn_count or 0), len(turns))
     if turns_n > 1 and turns:
         last = turns[-1]
-        last_label = last.label
+        last_label = _turn_label_face(last)
         if turns_n > len(turns):
-            extra = " (open)" if last.open else (f" ({last.outcome})" if last.outcome else "")
-            last_label = f"turn {turns_n - 1}{extra}"
+            extra = "open" if last.open else (_outcome_face(last.outcome) if last.outcome else "")
+            last_label = f"turn {turns_n - 1}" + (f" ({extra})" if extra else "")
         rows.append((t("ui-last-turn"), last_label))
     if meta.num_messages > 0:
         rows.append((t("ui-messages"), str(meta.num_messages)))
@@ -184,7 +208,9 @@ def _glance_rows(
     return rows
 
 
-def _glance_columns(meta: SessionMeta, turns: list, *, tools_n: int, tool_errs: int) -> Table:
+def _glance_columns(
+    meta: SessionMeta, turns: list[TurnSegment], *, tools_n: int, tool_errs: int
+) -> Table:
     """Label / value gutter — longest label sets the column, values wrap."""
     fields = _glance_rows(meta, turns, tools_n=tools_n, tool_errs=tool_errs)
     grid = Table.grid(expand=True, padding=(0, 2, 0, 0))

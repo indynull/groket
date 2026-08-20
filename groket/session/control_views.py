@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import Counter
 from concurrent.futures import Future
 from pathlib import Path
 from typing import ClassVar
@@ -83,6 +84,61 @@ DEFAULT_TIMELINE_LIMIT = 300
 MAX_TIMELINE_LIMIT = 2000
 DEFAULT_CONTENT_CHARS = 4000
 MAX_CONTENT_CHARS = 50_000
+
+
+def overview_stat_counts(events: list[TraceEvent]) -> JsonObject:
+    """Event-type and tool counts from an already-parsed timeline.
+
+    One pass. Used by ``session/overview`` so clients do not page Timeline
+    just to fill Stats.
+    """
+    types: Counter[str] = Counter()
+    tools: Counter[str] = Counter()
+    for ev in events:
+        key = (ev.event_type or "").strip()
+        if key:
+            types[key] += 1
+        if ev.event_type == "tool_call" and (ev.tool_name or "").strip():
+            tools[ev.tool_name] += 1
+    return {
+        "eventTypes": [{"id": name, "count": n} for name, n in types.most_common()],
+        "tools": [{"id": name, "count": n} for name, n in tools.most_common()],
+    }
+
+
+def _stat_rows_to_counter(rows: object) -> Counter[str]:
+    out: Counter[str] = Counter()
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("id") or "").strip()
+        if not name:
+            continue
+        raw_n = row.get("count")
+        if not isinstance(raw_n, int | float):
+            continue
+        n = int(raw_n)
+        if n > 0:
+            out[name] = n
+    return out
+
+
+def overview_stat_counters(
+    payload: JsonObject | None,
+) -> tuple[Counter[str], Counter[str]] | None:
+    """Parse ``session/overview`` ``stats`` when both lists are present."""
+    if payload is None:
+        return None
+    raw = payload.get("stats")
+    if not isinstance(raw, dict):
+        return None
+    types = _stat_rows_to_counter(raw.get("eventTypes"))
+    tools = _stat_rows_to_counter(raw.get("tools"))
+    if not types and not tools:
+        return None
+    return types, tools
 
 
 def session_meta_mapping(
@@ -634,6 +690,7 @@ class SessionOverview:
         summary = (meta.summary_text or "").strip()
         if len(summary) > 1200:
             summary = summary[:1197] + "…"
+        stats = overview_stat_counts(events)
         return {
             "sessionId": (meta.session_id or sd.name).strip(),
             "meta": session_meta_mapping(meta, path=sd, origin=origin),
@@ -671,6 +728,7 @@ class SessionOverview:
                 "schema": cls.notes_schema(),
             },
             "findings": findings_block,
+            "stats": stats,
         }
 
     @classmethod

@@ -2079,7 +2079,12 @@ impl Hud {
     fn rebuild_stats_table(&mut self) {
         let sort_col = self.stats_table.sort_col;
         let sort_asc = self.stats_table.sort_asc;
-        let mut rows = crate::format::overview_stat_rows(&self.timeline);
+        let mut rows = match self.overview.as_ref() {
+            Some(o) if !o.stats.event_types.is_empty() || !o.stats.tools.is_empty() => {
+                crate::format::overview_stat_rows_from_counts(&o.stats.event_types, &o.stats.tools)
+            }
+            _ => crate::format::overview_stat_rows(&self.timeline),
+        };
         if let Some(col) = sort_col {
             crate::format::sort_stat_rows(&mut rows, col, sort_asc);
         }

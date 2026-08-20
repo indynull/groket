@@ -183,7 +183,7 @@
           ]
         },
         "session/overview": {
-          "description": "Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies).",
+          "description": "Meta + turns + notes + event/tool counts (`stats`). Turns include `subagentRuns`. Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies).",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -217,6 +217,10 @@
                 "workflows": {
                   "description": "Grok workflow run rows.",
                   "type": "array"
+                },
+                "stats": {
+                  "description": "Full-session event type and tool counts (`eventTypes`, `tools`).",
+                  "type": "object"
                 }
               }
             }

@@ -150,13 +150,18 @@ METHODS: tuple[MethodSpec, ...] = (
     ),
     MethodSpec(
         name="session/overview",
-        role="Meta + turns + notes (no embedded event list). Turns include `subagentRuns`. "
+        role="Meta + turns + notes + event/tool counts (`stats`). Turns include `subagentRuns`. "
         "Also `backgroundJobs`, `schedules`, and `workflows` (no log or script bodies).",
         params=(_SESSION,),
         result=(
             FieldSpec("backgroundJobs", "Background shell and monitor rows.", json_type="array"),
             FieldSpec("schedules", "Durable scheduler rows.", json_type="array"),
             FieldSpec("workflows", "Grok workflow run rows.", json_type="array"),
+            FieldSpec(
+                "stats",
+                "Full-session event type and tool counts (`eventTypes`, `tools`).",
+                json_type="object",
+            ),
         ),
         extra_md=(
             "`backgroundJobs`, `schedules`, and `workflows` are additive. Each job has `id`,\n"
@@ -168,6 +173,8 @@ METHODS: tuple[MethodSpec, ...] = (
             "Workflows have `id`, `name`, `status`, `phase`, `objective`,\n"
             "`agentsUsed`, `agentBudget`, `elapsedMs`, `pauseMessage`, `eventIndex`,\n"
             "and `children` (id, label, success, sessionId, path).\n"
+            "`stats.eventTypes` and `stats.tools` are `{id, count}` rows from the parsed\n"
+            "session so clients do not page Timeline to fill Stats.\n"
             "Overview does not embed log tails or Rhai script bodies."
         ),
     ),
