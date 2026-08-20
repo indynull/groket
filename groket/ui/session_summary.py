@@ -129,32 +129,31 @@ def render_session_summary(
     return panel_group(*blocks)
 
 
-def _glance_columns(
+def _glance_rows(
     meta: SessionMeta, turns: list, *, tools_n: int, tool_errs: int
-) -> Table:
-    """Same glance fields as HUD Overview Session (one column)."""
-    body = Text()
-    body.append_text(kv_line(t("ui-session-2"), meta.session_id or "—"))
+) -> list[tuple[str, str]]:
+    """HUD Overview Session fields, in the same order."""
+    rows: list[tuple[str, str]] = [(t("ui-session-2"), meta.session_id or "—")]
     if meta.has_context_usage:
-        body.append_text(kv_line(t("ui-context-usage"), meta.context_usage_str or "—"))
+        rows.append((t("ui-context-usage"), meta.context_usage_str or "—"))
         if meta.context_tokens_used is not None and meta.context_window_tokens is not None:
-            body.append_text(
-                kv_line(
+            rows.append(
+                (
                     t("ui-context-tokens"),
                     f"{meta.context_tokens_used:,} / {meta.context_window_tokens:,}",
                 )
             )
         elif meta.context_tokens_used is not None:
-            body.append_text(kv_line(t("ui-context-tokens"), f"{meta.context_tokens_used:,}"))
+            rows.append((t("ui-context-tokens"), f"{meta.context_tokens_used:,}"))
         if meta.compaction_count:
-            body.append_text(kv_line(t("ui-compactions"), str(meta.compaction_count)))
+            rows.append((t("ui-compactions"), str(meta.compaction_count)))
     if tools_n > 0 or tool_errs > 0 or meta.error_count:
         if tool_errs or meta.error_count:
             errs = max(tool_errs, int(meta.error_count or 0))
             tools_s = f"{tools_n} · {errs} errors"
         else:
             tools_s = str(tools_n)
-        body.append_text(kv_line(t("ui-tools"), tools_s))
+        rows.append((t("ui-tools"), tools_s))
     turns_n = max(int(meta.turn_count or 0), len(turns))
     if turns_n > 1 and turns:
         last = turns[-1]
@@ -162,29 +161,37 @@ def _glance_columns(
         if turns_n > len(turns):
             extra = " (open)" if last.open else (f" ({last.outcome})" if last.outcome else "")
             last_label = f"turn {turns_n - 1}{extra}"
-        body.append_text(kv_line(t("ui-last-turn"), last_label))
+        rows.append((t("ui-last-turn"), last_label))
     if meta.num_messages > 0:
-        body.append_text(kv_line(t("ui-messages"), str(meta.num_messages)))
+        rows.append((t("ui-messages"), str(meta.num_messages)))
     if meta.loop_count > 0:
-        body.append_text(kv_line(t("ui-loops"), str(meta.loop_count)))
+        rows.append((t("ui-loops"), str(meta.loop_count)))
     if meta.run_id:
-        body.append_text(kv_line(t("ui-run-1"), meta.run_id))
+        rows.append((t("ui-run-1"), meta.run_id))
     if meta.task_id:
-        body.append_text(kv_line(t("ui-task"), meta.task_id))
+        rows.append((t("ui-task"), meta.task_id))
     if meta.git_repo:
-        body.append_text(kv_line(t("ui-repo"), meta.git_repo))
+        rows.append((t("ui-repo"), meta.git_repo))
     if meta.git_branch:
-        body.append_text(kv_line(t("ui-branch-1"), meta.git_branch))
+        rows.append((t("ui-branch-1"), meta.git_branch))
     if meta.created_at:
         created = meta.created_at
         if "T" in created and len(created) > 19:
             created = created[:19].replace("T", " ")
-        body.append_text(kv_line(t("ui-created"), created))
+        rows.append((t("ui-created"), created))
     if meta.session_dir:
-        body.append_text(kv_line(t("ui-path"), str(meta.session_dir)))
-    grid = Table.grid(expand=True)
-    grid.add_column(ratio=1)
-    grid.add_row(body)
+        rows.append((t("ui-path"), str(meta.session_dir)))
+    return rows
+
+
+def _glance_columns(meta: SessionMeta, turns: list, *, tools_n: int, tool_errs: int) -> Table:
+    """Label / value gutter — longest label sets the column, values wrap."""
+    fields = _glance_rows(meta, turns, tools_n=tools_n, tool_errs=tool_errs)
+    grid = Table.grid(expand=True, padding=(0, 2, 0, 0))
+    grid.add_column(style="dim", no_wrap=True)
+    grid.add_column(ratio=1, overflow="fold")
+    for label, value in fields:
+        grid.add_row(label, value)
     return grid
 
 
