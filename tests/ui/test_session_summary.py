@@ -223,6 +223,30 @@ class TestBuildSessionSummary:
         assert "run-123" in summary
         assert "main" in summary
 
+    def test_glance_values_share_one_gutter(self, session_dir):
+        meta = SessionMeta(
+            session_id="align-sess",
+            session_dir=session_dir,
+            title="Align",
+            turn_outcome="success",
+            tool_call_count=4,
+            context_window_usage_pct=12,
+            context_tokens_used=1200,
+            context_window_tokens=10000,
+            run_id="run-a",
+            git_branch="hudv2",
+        )
+        starts: list[int] = []
+        for val in ("align-sess", "4", "run-a", "hudv2"):
+            for line in rich_plain(render_session_summary(meta, [])).splitlines():
+                if val in line:
+                    starts.append(line.index(val))
+                    break
+            else:
+                raise AssertionError(f"missing glance value {val}")
+        assert len(starts) == 4
+        assert len(set(starts)) == 1, starts
+
     def test_long_path_truncated(self, session_dir):
         meta = SessionMeta(
             session_id="lp",
