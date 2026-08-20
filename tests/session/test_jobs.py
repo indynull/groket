@@ -433,3 +433,19 @@ def test_read_log_tail_reads_only_a_suffix(tmp_path: Path) -> None:
     assert read_n > 0
     assert read_n <= cap * 4
     assert read_n < len(raw)
+
+
+def test_log_file_prefers_session_terminal_basename(tmp_path: Path) -> None:
+    from groket.session.jobs import BackgroundJob
+
+    term = tmp_path / "terminal"
+    term.mkdir()
+    host = term / "call-bg.log"
+    host.write_text("line 0\nDONE\n", encoding="utf-8")
+    found = BackgroundJob.log_file(tmp_path, "/root/.grok/sessions/x/terminal/call-bg.log")
+    assert found == host
+    text = BackgroundJob.inspect_log(tmp_path, "/root/.grok/sessions/x/terminal/call-bg.log")
+    assert "line 0" in text
+    assert "DONE" in text
+    assert BackgroundJob.log_file(tmp_path, "") is None
+    assert BackgroundJob.log_file(tmp_path, "/no/such/call-missing.log") is None

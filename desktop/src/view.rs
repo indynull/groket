@@ -12,9 +12,9 @@ use crate::format::{
     body_paint_for, capped_display, display_tool_output, event_brand_role, event_is_monitor,
     fmt_duration, format_note_time, format_tool_display, human_event_type_label, image_result_path,
     is_chat_message, is_tool_identity, job_command, job_description, job_event_id, job_event_label,
-    job_exit_code, job_inspect_blocks, job_list_preview, job_log_tail, job_output_path, job_status,
-    list_event_detail, list_status_label, looks_like_markdown, note_fields_view, origin_label,
-    overview_fields, overview_job_fields, path_hint_from_raw, sanitize_console_text,
+    job_exit_code, job_inspect_blocks, job_inspect_log, job_list_preview, job_output_path,
+    job_status, list_event_detail, list_status_label, looks_like_markdown, note_fields_view,
+    origin_label, overview_fields, overview_job_fields, path_hint_from_raw, sanitize_console_text,
     schedule_inspect_blocks, schedule_last_fire, session_duration_chip, status_tone,
     subagent_inspect_blocks, subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output,
     timeline_body_text, timeline_count_caption, timeline_query_hit, tool_brand_role,
@@ -2485,21 +2485,6 @@ fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a
         ));
         return col.into();
     };
-    let mut chips = row![].spacing(8).align_y(Alignment::Center);
-    chips = chips.push(status_chip(
-        list_status_label(&run.status, &run.status).to_string(),
-        status_tone(&run.status),
-        tok,
-    ));
-    if !run.phase.is_empty() {
-        chips = chips.push(status_chip(run.phase.clone(), "", tok));
-    }
-    if let Some(ms) = run.elapsed_ms {
-        if ms > 0 {
-            chips = chips.push(status_chip(fmt_duration(ms as f64 / 1000.0), "", tok));
-        }
-    }
-    col = col.push(chips);
     if !run.objective.is_empty() {
         col = col.push(icedtea::widget::meta(
             "Asked",
@@ -2514,10 +2499,26 @@ fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a
             icedtea::typo::FontFace::Ui,
         ));
     }
+    let mut happen_bits = vec![list_status_label(&run.status, &run.status)];
+    if !run.phase.is_empty() {
+        happen_bits.push(run.phase.clone());
+    }
+    if let Some(ms) = run.elapsed_ms {
+        if ms > 0 {
+            happen_bits.push(fmt_duration(ms as f64 / 1000.0));
+        }
+    }
     col = col.push(icedtea::widget::meta(
         "Happened",
         tok,
         A11y::new("Happened", Role::Header),
+    ));
+    col = col.push(select_bound(
+        hud,
+        format!("event.{}.wf.happened", ev.index),
+        &happen_bits.join("  ·  "),
+        tok,
+        icedtea::typo::FontFace::Ui,
     ));
     if run.agents_used.is_some() || run.agent_budget.is_some() {
         let used = run
@@ -2528,10 +2529,12 @@ fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a
             .agent_budget
             .map(|n| n.to_string())
             .unwrap_or_else(|| "—".into());
-        col = col.push(icedtea::widget::meta(
-            format!("{used}/{budget} agents"),
+        col = col.push(select_bound(
+            hud,
+            format!("event.{}.wf.agents", ev.index),
+            &format!("{used}/{budget} agents"),
             tok,
-            A11y::new("agents", Role::Status),
+            icedtea::typo::FontFace::Ui,
         ));
     }
     if !run.pause_message.is_empty() {
@@ -2666,7 +2669,7 @@ fn job_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Mes
             path = job_output_path(&m.raw_input);
         }
     }
-    let tail = job_log_tail(&path);
+    let tail = job_inspect_log(&hud.session_path(), &path);
     let status_raw = if ev.event_type == "task_completed" {
         &ev.raw_input
     } else {
@@ -2678,7 +2681,15 @@ fn job_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Mes
     } else {
         cmd.clone()
     };
-    let mut happen_bits = vec![list_status_label(status, status).to_string()];
+    let kind = if event_is_monitor(&ev.raw_input) {
+        "monitor"
+    } else {
+        "background"
+    };
+    let mut happen_bits = vec![
+        kind.to_string(),
+        list_status_label(status, status).to_string(),
+    ];
     if let Some(code) = job_exit_code(&ev.event_type, &ev.raw_input, mate.map(|m| &m.raw_input)) {
         happen_bits.push(format!("exit {code}"));
     }
@@ -2737,6 +2748,15 @@ fn job_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Mes
                 icedtea::typo::FontFace::Ui,
             ));
         }
+    }
+    let cwd = ev
+        .raw_input
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if !cwd.is_empty() {
+        col = col.push(text(cwd.to_string()).size(tok.meta()).color(tok.muted));
     }
     if !tail.trim().is_empty() {
         col = col.push(icedtea::widget::meta(

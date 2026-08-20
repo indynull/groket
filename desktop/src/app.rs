@@ -2082,7 +2082,8 @@ impl Hud {
                     self.bind_field(id, &desc);
                 }
             }
-            let tail = crate::format::sanitize_console_text(&crate::format::job_log_tail(
+            let tail = crate::format::sanitize_console_text(&crate::format::job_inspect_log(
+                &self.session_path(),
                 &crate::format::job_output_path(&raw),
             ));
             if !tail.trim().is_empty() {
@@ -2431,7 +2432,7 @@ impl Hud {
         }
     }
 
-    fn session_path(&self) -> String {
+    pub(crate) fn session_path(&self) -> String {
         self.sessions
             .get(self.active)
             .map(|r| r.path.clone())

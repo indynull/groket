@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.message import Message
@@ -52,6 +54,7 @@ class DetailView(VerticalScroll):
         self._job_mate: TraceEvent | None = None
         self._schedule: ScheduleTask | None = None
         self._workflow: WorkflowRun | None = None
+        self.session_dir: Path | None = None
 
     def compose(self) -> ComposeResult:
         yield SelectableStatic("", id="detail-body")
@@ -130,6 +133,7 @@ class DetailView(VerticalScroll):
             job_mate=self._job_mate,
             schedule=self._schedule,
             workflow=self._workflow,
+            session_dir=self.session_dir,
         )
         set_static_renderable(body, renderable)
         self._sync_workflow_children()

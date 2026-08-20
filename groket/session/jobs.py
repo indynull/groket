@@ -31,6 +31,7 @@ from .workflows import (
 )
 
 _MONITOR_LINE = {"DONE": "done", "FAILED": "failed", "CANCELLED": "cancelled"}
+JOB_INSPECT_LOG_CHARS = 50_000
 
 type _JobFileStamp = tuple[tuple[str, int, int], ...]
 type _MonitorStamp = tuple[tuple[str, str], ...]
@@ -91,6 +92,44 @@ class BackgroundJob:
             return "running"
         text = chunk.decode("utf-8", errors="replace")
         return monitor_line_status(text) or "running"
+
+    @staticmethod
+    def log_file(session_dir: Path | None, output_path: str) -> Path | None:
+        """Host file for a job log: ``session/terminal/<name>`` when that file exists."""
+        text = (output_path or "").strip()
+        if not text:
+            return None
+        recorded = Path(text)
+        name = recorded.name
+        if session_dir is not None and name:
+            local = Path(session_dir) / "terminal" / name
+            try:
+                if local.is_file():
+                    return local
+            except OSError:
+                pass
+        if not recorded.is_absolute() and session_dir is not None:
+            recorded = Path(session_dir) / recorded
+        try:
+            if recorded.is_file():
+                return recorded
+        except OSError:
+            return None
+        return None
+
+    @classmethod
+    def inspect_log(
+        cls,
+        session_dir: Path | None,
+        output_path: str,
+        *,
+        max_chars: int = JOB_INSPECT_LOG_CHARS,
+    ) -> str:
+        """Tail of the host job log for Timeline inspect (empty when missing)."""
+        path = cls.log_file(session_dir, output_path)
+        if path is None:
+            return ""
+        return read_log_tail(path, max_chars=max_chars)
 
     @staticmethod
     def status_from_log(output_path: str) -> str | None:
@@ -774,7 +813,12 @@ def jobs_from_overview(overview: JsonObject) -> SessionJobs:
 
 def read_log_tail(path: Path, *, max_chars: int = 8_000) -> str:
     """Last *max_chars* of a terminal or monitor log (empty when missing)."""
-    if max_chars <= 0 or not path.is_file():
+    if max_chars <= 0:
+        return ""
+    try:
+        if not path.is_file():
+            return ""
+    except OSError:
         return ""
     # Extra bytes so a multi-byte UTF-8 sequence at the cut is not lost.
     byte_cap = max_chars + 4
