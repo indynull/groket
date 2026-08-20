@@ -12,7 +12,7 @@ use icedtea::typo::FontFace;
 use icedtea::widget;
 
 use crate::app::Message;
-use crate::model::Tab;
+use crate::model::{OverviewSection, Tab};
 
 /// icedtea [`layout::FORM_LABEL`] gutter for Overview (and any form stacks).
 pub const LABEL_GUTTER: f32 = icedtea::layout::FORM_LABEL;
@@ -70,6 +70,32 @@ pub fn pane_tabs<'a>(
         false,
         tea,
         A11y::new("panes", Role::Tab),
+    )
+}
+
+/// Session / Tasks strip inside Overview (same labels as TUI Summary).
+pub fn overview_section_tabs<'a>(active: OverviewSection, tea: Tokens) -> Element<'a, Message> {
+    let titles: Vec<String> = OverviewSection::ALL
+        .iter()
+        .map(|s| s.label().to_string())
+        .collect();
+    let active_i = OverviewSection::ALL
+        .iter()
+        .position(|s| *s == active)
+        .unwrap_or(0);
+    let mut bar = Tabs::new(titles);
+    bar.select(active_i);
+    bar.closable = false;
+    widget::tab_bar(
+        &bar,
+        |i| {
+            Message::SetOverviewSection(OverviewSection::ALL[i.min(OverviewSection::ALL.len() - 1)])
+        },
+        |_| Message::Noop,
+        0.0,
+        false,
+        tea,
+        A11y::new("overview section", Role::Tab),
     )
 }
 

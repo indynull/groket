@@ -7,12 +7,12 @@ is tagged.
 
 ### Feature
 
-- Session Overview lists background shells, monitors, and schedules.
-  Timeline filter Background. Summary rows jump to that bookend.
-  Enter on a job bookend shows the host ``terminal/`` log (up to
-  50,000 characters).
-- Session Overview lists workflow runs. Timeline filter Workflows. A
-  workflow child opens that session.
+- Session Overview and Summary share Session, Tasks, Workflows,
+  Subagents, and Stats tabs (click the strip). Session is the glance.
+  Tasks is shells, monitors, and schedules. Timeline filter Background
+  / Workflows. Summary and HUD rows jump to that bookend. Enter on a
+  job bookend shows the host ``terminal/`` log (up to 50,000
+  characters). A workflow child or subagent opens that session.
 - Failed workflows and background jobs become Findings with
   paste-ready What/Where/Why/Should extras.
 - Timeline Filter and Turn stack. Flags and findings paint on the row.

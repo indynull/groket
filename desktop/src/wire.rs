@@ -250,6 +250,10 @@ pub struct SubagentRunRow {
     #[serde(default)]
     pub turn_index: Option<i64>,
     #[serde(default)]
+    pub spawn_event_index: Option<i64>,
+    #[serde(default)]
+    pub finish_event_index: Option<i64>,
+    #[serde(default)]
     pub parent_prompt_id: String,
     #[serde(default)]
     pub duration_ms: Option<i64>,

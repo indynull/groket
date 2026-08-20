@@ -25,7 +25,7 @@ from groket.ui.data_table import cursor_row_key
 from groket.ui.screens.browser import BrowserScreen
 from groket.ui.selectable_static import SelectableStatic
 from groket.ui.widgets.timeline import TimelineTable
-from textual.widgets import DataTable, Input, LoadingIndicator, Static, Switch, TabbedContent
+from textual.widgets import Input, LoadingIndicator, Static, Switch, TabbedContent
 
 from .pilot_helpers import static_plain, wait_until
 
@@ -250,12 +250,12 @@ async def test_browser_tabs_and_stats_turns(tmp_path: Path) -> None:
         screen = await _open_browser(app, pilot, sess)
 
         await _activate_tab(pilot, screen, "tab-summary")
-        turns_table = screen.query_one("#stats-turns-table")
+        ev_table = screen.query_one("#stats-events-table")
         screen._update_stats()
         await wait_until(
             pilot,
-            lambda: turns_table.row_count >= 1,
-            description="summary turns table has rows",
+            lambda: ev_table.row_count >= 1,
+            description="summary stats table has rows",
         )
 
         await _activate_tab(pilot, screen, "tab-timeline")
@@ -277,14 +277,8 @@ async def test_summary_turn_row_opens_timeline_at_start(tmp_path: Path) -> None:
     async with app.run_test(size=(140, 48)) as pilot:
         screen = await _open_browser(app, pilot, sess)
         await _activate_tab(pilot, screen, "tab-summary")
-        screen._update_stats()
-        await wait_until(
-            pilot,
-            lambda: bool(screen._summary_turn_first),
-            description="turn first-event map filled",
-        )
-        turn_i, ev_i = sorted(screen._summary_turn_first.items())[0]
-        screen._jump_timeline_to_event(ev_i, turn_index=turn_i)
+        ev_i = screen.timeline[0].index
+        screen._jump_timeline_to_event(ev_i)
         tabs = screen.query_one("#browser-tabs", TabbedContent)
         await wait_until(
             pilot,
@@ -308,7 +302,7 @@ async def test_summary_pairs_stack_when_narrow(tmp_path: Path) -> None:
     async with app.run_test(size=(140, 48)) as pilot:
         screen = await _open_browser(app, pilot, sess)
         await _activate_tab(pilot, screen, "tab-summary")
-        scroll = screen.query_one("#summary-scroll")
+        scroll = screen.query_one("#summary-session-scroll")
         screen._SUMMARY_STACK_WIDTH = 200
         screen._sync_summary_stack()
         assert scroll.has_class("summary-stack")
@@ -1290,12 +1284,10 @@ async def test_browser_first_paint_defers_summary_and_report(tmp_path: Path) -> 
         screen = await _open_browser(app, pilot, sess)
         summary = screen.query_one("#summary-content", SelectableStatic)
         report = screen.query_one("#report-overview-content", SelectableStatic)
-        turns = screen.query_one("#stats-turns-table", DataTable)
         from groket.ui.i18n import t
 
         assert not (summary.get_plain_text() or "").strip()
         assert t("ui-session-report") not in (report.get_plain_text() or "")
-        assert turns.row_count == 0
         tl = screen.query_one("#timeline-list", TimelineTable)
         assert tl.row_count > 0
         bar = screen.query_one("#filter-bar")
@@ -1330,7 +1322,6 @@ async def test_browser_first_paint_defers_summary_and_report(tmp_path: Path) -> 
             description="Summary body after first visit",
         )
         assert "Pilot" in summary.get_plain_text()
-        assert turns.row_count > 0
 
         await _activate_tab(pilot, screen, "tab-reports")
         await wait_until(
@@ -1352,12 +1343,10 @@ async def test_browser_tab_bar_fills_summary_and_report(tmp_path: Path) -> None:
         screen = await _open_browser(app, pilot, sess)
         summary = screen.query_one("#summary-content", SelectableStatic)
         report = screen.query_one("#report-overview-content", SelectableStatic)
-        turns = screen.query_one("#stats-turns-table", DataTable)
         from groket.ui.i18n import t
 
         assert not (summary.get_plain_text() or "").strip()
         assert t("ui-session-report") not in (report.get_plain_text() or "")
-        assert turns.row_count == 0
 
         tabs = screen.query_one("#browser-tabs", TabbedContent)
         tabs.active = "tab-summary"
@@ -1367,7 +1356,6 @@ async def test_browser_tab_bar_fills_summary_and_report(tmp_path: Path) -> None:
             description="Summary body after tab-bar activate",
         )
         assert "Pilot" in summary.get_plain_text()
-        assert turns.row_count > 0
 
         tabs.active = "tab-reports"
         await wait_until(

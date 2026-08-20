@@ -9,14 +9,12 @@ from rich.table import Table
 from rich.text import Text
 
 from .. import event_types as et
-from ..models import SessionMeta, TraceEvent, json_as_str
-from ..runs.live_share import get_share_display
+from ..models import SessionMeta, TraceEvent
 from ..session.subagents import is_subagent_session_dir
 from ..session.usage_stats import SessionUsageStats
 from ..utils import fmt_duration
 from .i18n import join_ui, t
 from .panel_render import (
-    dim_rule,
     kv_line,
     list_row,
     meta_strip,
@@ -66,13 +64,7 @@ def render_session_summary(
     _ = assistant_text
     tool_calls = [e for e in timeline if e.event_type == "tool_call"]
     tools_n = max(int(meta.tool_call_count or 0), len(tool_calls))
-    events_n = max(int(meta.num_events or 0), len(timeline))
     tool_errs = sum(1 for e in tool_calls if e.is_error)
-    sess_errs = sum(
-        1
-        for e in timeline
-        if e.event_type in et.ERROR_TYPES or (e.event_type in et.TURN_BOUNDARY_TYPES and e.is_error)
-    )
     title = (meta.title or meta.session_id or "session").strip()
     outcome = (meta.turn_outcome or "").strip() or "unknown"
     dur = fmt_duration(meta.duration_seconds) if meta.duration_seconds else "—"
@@ -106,6 +98,17 @@ def render_session_summary(
         head.append("  ")
     head.append_text(status_chip(outcome, kind=kind))
     head.append("\n")
+    strip_parts = [model, dur]
+    if (meta.origin or "").strip():
+        strip_parts.append(meta.origin)
+    head.append_text(meta_strip(strip_parts))
+    blocks.append(head)
+    prose = (meta.summary_text or "").strip()
+    if prose and prose != title:
+        body = Text()
+        body.append(prose)
+        body.append("\n")
+        blocks.append(body)
     turns = []
     try:
         from ..session.turns import segment_timeline_turns
@@ -114,23 +117,7 @@ def render_session_summary(
     except Exception:
         logger.debug(t("ui-turn-segmentation-failed"), exc_info=True)
         turns = []
-    turns_n = max(int(meta.turn_count or 0), len(turns))
-    strip_parts = [
-        model,
-        dur,
-        t("count-events", n=events_n),
-        t("count-tools", n=tools_n),
-    ]
-    if meta.has_context_usage:
-        strip_parts.append(meta.context_usage_compact or meta.context_usage_str)
-    if turns_n > 1:
-        strip_parts.append(t("count-turns", n=turns_n))
-    if tool_errs or sess_errs:
-        strip_parts.append(f"{tool_errs} tool errors · {sess_errs} session errors")
-    head.append_text(meta_strip(strip_parts))
-    blocks.append(head)
-    blocks.append(dim_rule())
-    blocks.append(_glance_columns(meta, turns))
+    blocks.append(_glance_columns(meta, turns, tools_n=tools_n, tool_errs=tool_errs))
     if meta.turn_failed or kind == "bad":
         note = Text()
         note.append_text(section_header(t("ui-note-1")))
@@ -142,61 +129,62 @@ def render_session_summary(
     return panel_group(*blocks)
 
 
-def _glance_columns(meta: SessionMeta, turns: list) -> Table:
-    """Two-column glance fields (path / context left, turns / ids right)."""
-    left = Text()
-    right = Text()
-    left.append_text(kv_line(t("ui-session-2"), meta.session_id or "—"))
+def _glance_columns(
+    meta: SessionMeta, turns: list, *, tools_n: int, tool_errs: int
+) -> Table:
+    """Same glance fields as HUD Overview Session (one column)."""
+    body = Text()
+    body.append_text(kv_line(t("ui-session-2"), meta.session_id or "—"))
     if meta.has_context_usage:
-        left.append_text(kv_line(t("ui-context-usage"), meta.context_usage_str or "—"))
+        body.append_text(kv_line(t("ui-context-usage"), meta.context_usage_str or "—"))
         if meta.context_tokens_used is not None and meta.context_window_tokens is not None:
-            left.append_text(
+            body.append_text(
                 kv_line(
                     t("ui-context-tokens"),
                     f"{meta.context_tokens_used:,} / {meta.context_window_tokens:,}",
                 )
             )
         elif meta.context_tokens_used is not None:
-            left.append_text(kv_line(t("ui-context-tokens"), f"{meta.context_tokens_used:,}"))
+            body.append_text(kv_line(t("ui-context-tokens"), f"{meta.context_tokens_used:,}"))
         if meta.compaction_count:
-            left.append_text(kv_line(t("ui-compactions"), str(meta.compaction_count)))
-    if meta.session_dir:
-        path_s = str(meta.session_dir)
-        if len(path_s) > 48:
-            path_s = "…" + path_s[-45:]
-        left.append_text(kv_line(t("ui-path"), path_s))
+            body.append_text(kv_line(t("ui-compactions"), str(meta.compaction_count)))
+    if tools_n > 0 or tool_errs > 0 or meta.error_count:
+        if tool_errs or meta.error_count:
+            errs = max(tool_errs, int(meta.error_count or 0))
+            tools_s = f"{tools_n} · {errs} errors"
+        else:
+            tools_s = str(tools_n)
+        body.append_text(kv_line(t("ui-tools"), tools_s))
     turns_n = max(int(meta.turn_count or 0), len(turns))
-    if turns_n > 1:
-        right.append_text(kv_line(t("ui-turns-1"), str(turns_n)))
-        if turns:
-            last = turns[-1]
-            last_label = last.label
-            if turns_n > len(turns):
-                extra = " (open)" if last.open else (f" ({last.outcome})" if last.outcome else "")
-                last_label = f"turn {turns_n - 1}{extra}"
-            right.append_text(kv_line(t("ui-last-turn"), last_label))
+    if turns_n > 1 and turns:
+        last = turns[-1]
+        last_label = last.label
+        if turns_n > len(turns):
+            extra = " (open)" if last.open else (f" ({last.outcome})" if last.outcome else "")
+            last_label = f"turn {turns_n - 1}{extra}"
+        body.append_text(kv_line(t("ui-last-turn"), last_label))
+    if meta.num_messages > 0:
+        body.append_text(kv_line(t("ui-messages"), str(meta.num_messages)))
+    if meta.loop_count > 0:
+        body.append_text(kv_line(t("ui-loops"), str(meta.loop_count)))
+    if meta.run_id:
+        body.append_text(kv_line(t("ui-run-1"), meta.run_id))
+    if meta.task_id:
+        body.append_text(kv_line(t("ui-task"), meta.task_id))
+    if meta.git_repo:
+        body.append_text(kv_line(t("ui-repo"), meta.git_repo))
+    if meta.git_branch:
+        body.append_text(kv_line(t("ui-branch-1"), meta.git_branch))
     if meta.created_at:
         created = meta.created_at
         if "T" in created and len(created) > 19:
             created = created[:19].replace("T", " ")
-        right.append_text(kv_line(t("ui-created"), created))
-    if meta.git_branch:
-        right.append_text(kv_line(t("ui-branch-1"), meta.git_branch))
-    if meta.run_id:
-        right.append_text(kv_line(t("ui-run-1"), meta.run_id))
-    if meta.task_id:
-        right.append_text(kv_line(t("ui-task"), meta.task_id))
-    try:
-        info = get_share_display(meta.session_dir)
-        url = json_as_str(info.get("share_url")).strip()
-        if url:
-            right.append_text(kv_line(t("ui-share"), url))
-    except Exception:
-        logger.debug(t("ui-share-meta-failed"), exc_info=True)
-    grid = Table.grid(expand=True, padding=(0, 2, 0, 0))
+        body.append_text(kv_line(t("ui-created"), created))
+    if meta.session_dir:
+        body.append_text(kv_line(t("ui-path"), str(meta.session_dir)))
+    grid = Table.grid(expand=True)
     grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
-    grid.add_row(left, right)
+    grid.add_row(body)
     return grid
 
 

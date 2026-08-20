@@ -1545,7 +1545,15 @@ ContentSwitcher {
 /* Extractable bodies stay focusable for Tab + y; no raise chrome on click. */
 
 /* Scroll hosts: page background; cards provide the frames */
-#summary-scroll,
+#summary-tabs {
+    height: 1fr;
+}
+
+#summary-session-scroll,
+#summary-tasks-scroll,
+#summary-workflows-scroll,
+#summary-subagents-scroll,
+#summary-stats-scroll,
 #reports-scroll,
 #diff-scroll,
 #stats-scroll {
@@ -1697,11 +1705,15 @@ ContentSwitcher {
 }
 
 /* Narrow window: stack the pair instead of squeezing two tables. */
-#summary-scroll.summary-stack .summary-pair {
+#summary-session-scroll.summary-stack .summary-pair,
+#summary-tasks-scroll.summary-stack .summary-pair,
+#summary-stats-scroll.summary-stack .summary-pair {
     layout: vertical;
 }
 
-#summary-scroll.summary-stack .summary-pair > .panel-card {
+#summary-session-scroll.summary-stack .summary-pair > .panel-card,
+#summary-tasks-scroll.summary-stack .summary-pair > .panel-card,
+#summary-stats-scroll.summary-stack .summary-pair > .panel-card {
     width: 100%;
     margin: 0 0 1 0;
 }
@@ -1737,6 +1749,8 @@ ContentSwitcher {
 /* Focused browser pane tab — accent from user theme (lazygit-style active edge) */
 #browser-tabs UnderlineTab.-active,
 #browser-tabs Tab.-active,
+#summary-tabs UnderlineTab.-active,
+#summary-tabs Tab.-active,
 #runner-tabs UnderlineTab.-active,
 #runner-tabs Tab.-active,
 #pe-tabs UnderlineTab.-active,
@@ -1747,6 +1761,7 @@ ContentSwitcher {
 }
 
 #browser-tabs ContentSwitcher,
+#summary-tabs ContentSwitcher,
 #runner-tabs ContentSwitcher {
     height: 1fr;
     border-top: solid $primary-background;

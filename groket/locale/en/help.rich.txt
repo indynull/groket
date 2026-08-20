@@ -36,7 +36,7 @@
   h / l / Left / Right    Previous / next turn on the Timeline
   j / k                   Previous / next event on the Timeline (also Up / Down)
   v               Timeline filter (Subagents lists spawn/finish; Background lists task and schedule bookends; Workflows lists workflow tool bookends)
-  Summary         Background table for shells/monitors/schedules; Workflows table for Grok workflow runs
+  Summary         Session glance; Tasks, Workflows, Subagents, and Stats tabs (click the strip)
   Tail            Follow new events to the end while a turn is open (terminal and HUD). Off keeps the highlight still.
   Enter           Full-width event (Esc back to the list); or open a child from a spawn/finish row
   i               Jump to Findings
