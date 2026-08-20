@@ -20,11 +20,12 @@ from .. import event_types as et
 from ..analysis.base import Finding
 from ..models import Flag, JsonObject, JsonValue, ToolInputBag, TraceEvent
 from ..session.jobs import (
+    JOB_INSPECT_LOG_CHARS,
+    BackgroundJob,
     ScheduleTask,
     event_job_kind,
     job_duration_seconds,
     job_status_for_event,
-    read_log_tail,
 )
 from ..session.subagents import (
     SubagentInspect,
@@ -942,16 +943,26 @@ def _append_block(parts: list, block: Text | Markdown | Syntax) -> None:
     parts.append(Text("\n"))
 
 
+def _task_bag_path(ev: TraceEvent | None) -> str:
+    if ev is None:
+        return ""
+    if isinstance(ev.raw_input, ToolInputBag):
+        path = ev.raw_input.as_str("output_file")
+        if path:
+            return path
+    return task_fields_from_content(ev.content or "").get("output_file", "")
+
+
 def _task_detail_parts(
     ev: TraceEvent,
     *,
     mate: TraceEvent | None = None,
     schedule: ScheduleTask | None = None,
+    session_dir: Path | None = None,
 ) -> list:
     """Status, command (bash Syntax), log tail (code chrome) — not a dump."""
     command = ""
     cwd = ""
-    output_path = ""
     desc = ""
     prompt = ""
     human = ""
@@ -960,14 +971,13 @@ def _task_detail_parts(
     if isinstance(ev.raw_input, ToolInputBag):
         command = ev.raw_input.as_str("command") or ev.raw_input.as_str("display_command")
         cwd = ev.raw_input.as_str("cwd")
-        output_path = ev.raw_input.as_str("output_file")
         desc = ev.raw_input.as_str("description") or ev.raw_input.as_str("monitor_description")
         prompt = ev.raw_input.as_str("prompt")
         human = ev.raw_input.as_str("human_schedule")
     dump = task_fields_from_content(ev.content or "")
     command = command or dump.get("command", "")
     cwd = cwd or dump.get("cwd", "")
-    output_path = output_path or dump.get("output_file", "")
+    output_path = _task_bag_path(ev) or _task_bag_path(mate)
     parts: list = [Text("\n")]
     asked = prompt.strip() or desc.strip() or command.strip()
     if asked:
@@ -982,6 +992,9 @@ def _task_detail_parts(
             _append_block(parts, _syntax(command, "bash"))
     status = job_status_for_event(ev, mate=mate)
     happen_bits: list[str] = []
+    kind = event_job_kind(ev)
+    if kind:
+        happen_bits.append(kind)
     if ev.event_type in {"task_backgrounded", "task_completed"}:
         happen_bits.append(_subagent_status_word(status))
     if human.strip():
@@ -992,6 +1005,8 @@ def _task_detail_parts(
         code = finish.raw_input.raw().get("exit_code")
         if isinstance(code, int):
             exit_s = f"exit {code}"
+    if exit_s:
+        happen_bits.append(exit_s)
     if last_fire.strip():
         happen_bits.append(last_fire.strip())
     if last_child.strip():
@@ -999,17 +1014,17 @@ def _task_detail_parts(
     if happen_bits:
         parts.append(_section(t("ui-inspect-happened")))
         parts.append(_line("  ·  ".join(happen_bits)))
-    if exit_s:
-        parts.append(_line(exit_s, style="dim"))
     if cwd.strip():
         parts.append(_line(cwd, style="dim"))
     failed = (status or "").strip().lower() in {"failed", "error", "cancelled", "interrupted"}
-    if output_path:
-        tail = read_log_tail(Path(output_path), max_chars=2_000)
-        lines = tail.splitlines()
-        if len(lines) > 24:
-            tail = "\n".join(lines[-24:])
-        tail = sanitize_console_text(tail)
+    tail = sanitize_console_text(
+        BackgroundJob.inspect_log(
+            session_dir,
+            output_path,
+            max_chars=JOB_INSPECT_LOG_CHARS,
+        )
+    )
+    if output_path or tail.strip():
         if failed and tail.strip():
             parts.append(Text("\n"))
             parts.append(_section(t("ui-inspect-failed")))
@@ -1020,7 +1035,8 @@ def _task_detail_parts(
         if tail.strip():
             _append_block(parts, _syntax(tail, "text"))
         else:
-            parts.append(_line(output_path, style="dim"))
+            host = BackgroundJob.log_file(session_dir, output_path)
+            parts.append(_line(str(host or output_path), style="dim"))
     elif failed:
         parts.append(_section(t("ui-inspect-failed")))
         parts.append(_line(_subagent_status_word(status), style=f"bold {FAILED}"))
@@ -1165,6 +1181,7 @@ def render_event_detail(
     job_mate: TraceEvent | None = None,
     schedule: ScheduleTask | None = None,
     workflow: WorkflowRun | None = None,
+    session_dir: Path | None = None,
 ) -> RenderableType:
     """Full detail pane for any TraceEvent (trace_viewer render_event_detail + banners).
 
@@ -1267,7 +1284,14 @@ def render_event_detail(
     elif ev.event_type == "plan":
         chunks += [Text(""), Rule(t("ui-plan"), style="bright_black"), _prose_or_code(body)]
     elif ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
-        chunks.extend(_task_detail_parts(ev, mate=job_mate, schedule=schedule))
+        chunks.extend(
+            _task_detail_parts(
+                ev,
+                mate=job_mate,
+                schedule=schedule,
+                session_dir=session_dir,
+            )
+        )
     elif ev.event_type in et.SUBAGENT_TYPES:
         chunks.extend(_subagent_detail_parts(ev, run=subagent_run))
     elif ev.event_type == "subagent" and body.strip():

@@ -9,6 +9,8 @@ is tagged.
 
 - Session Overview lists background shells, monitors, and schedules.
   Timeline filter Background. Summary rows jump to that bookend.
+  Enter on a job bookend shows the host ``terminal/`` log (up to
+  50,000 characters).
 - Session Overview lists workflow runs. Timeline filter Workflows. A
   workflow child opens that session.
 - Failed workflows and background jobs become Findings with

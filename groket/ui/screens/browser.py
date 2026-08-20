@@ -3390,6 +3390,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             timeline_table = self.query_one("#timeline-list", TimelineTable)
         except Exception:
             return None
+        detail.session_dir = Path(self.session_dir)
         finding = self._findings_by_call.get(ev.tool_call_id)
         duration = timeline_table.durations.get(ev.index)
         flag = self._flags.get(ev.index)
@@ -4472,6 +4473,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         try:
             detail = self.query_one("#detail-panel", DetailView)
             timeline_table = self.query_one("#timeline-list", TimelineTable)
+            detail.session_dir = Path(self.session_dir)
             finding = self._findings_by_call.get(ev.tool_call_id)
             duration = timeline_table.durations.get(ev.index)
             detail.show_event(

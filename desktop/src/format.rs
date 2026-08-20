@@ -1,5 +1,7 @@
 //! Display helpers for notes, status, and errors.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::Value;
 
 use crate::model::KindFilter;
@@ -980,10 +982,16 @@ pub fn event_is_monitor(raw_input: &Value) -> bool {
     {
         return true;
     }
-    raw_input
+    if raw_input
         .get("output_file")
         .and_then(|v| v.as_str())
         .is_some_and(|p| p.contains("monitor-call"))
+    {
+        return true;
+    }
+    let desc = json_str_field(raw_input, "description");
+    let low = desc.to_ascii_lowercase();
+    low.starts_with("live ") && low.contains("watch")
 }
 
 pub fn job_event_label(event_type: &str, is_monitor: bool) -> Option<&'static str> {
@@ -1258,21 +1266,56 @@ pub fn job_output_path(raw: &Value) -> String {
     json_str_field(raw, "outputPath")
 }
 
-/// Last lines of a monitor/shell log for Timeline inspect. Caps size.
-pub fn job_log_tail(path: &str) -> String {
-    const MAX_CHARS: usize = 2_000;
-    const MAX_LINES: usize = 24;
-    if path.trim().is_empty() {
-        return String::new();
+/// Host file for a job log: ``session/terminal/<name>`` when that file exists.
+pub fn job_log_file(session_dir: &str, output_path: &str) -> Option<PathBuf> {
+    let text = output_path.trim();
+    if text.is_empty() {
+        return None;
     }
+    let recorded = Path::new(text);
+    if let Some(name) = recorded.file_name() {
+        if !session_dir.trim().is_empty() && !name.is_empty() {
+            let local = Path::new(session_dir).join("terminal").join(name);
+            if local.is_file() {
+                return Some(local);
+            }
+        }
+    }
+    let resolved = if recorded.is_absolute() || session_dir.trim().is_empty() {
+        recorded.to_path_buf()
+    } else {
+        Path::new(session_dir).join(recorded)
+    };
+    if resolved.is_file() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
+fn job_log_read(path: &Path, max_chars: usize) -> String {
     let Ok(data) = std::fs::read(path) else {
         return String::new();
     };
-    let start = data.len().saturating_sub(MAX_CHARS);
-    let text = String::from_utf8_lossy(&data[start..]);
-    let lines: Vec<&str> = text.lines().collect();
-    let take = lines.len().saturating_sub(MAX_LINES);
-    lines[take..].join("\n")
+    let start = data.len().saturating_sub(max_chars);
+    String::from_utf8_lossy(&data[start..]).into_owned()
+}
+
+/// Last bytes of a monitor/shell log (status / small preview).
+pub fn job_log_tail(path: &str) -> String {
+    const MAX_CHARS: usize = 2_000;
+    if path.trim().is_empty() {
+        return String::new();
+    }
+    job_log_read(Path::new(path), MAX_CHARS)
+}
+
+/// Open-event job log: session ``terminal/`` first, open-event character ceiling.
+pub fn job_inspect_log(session_dir: &str, output_path: &str) -> String {
+    let Some(path) = job_log_file(session_dir, output_path) else {
+        return String::new();
+    };
+    job_log_read(&path, EXTRACT_CHARS)
 }
 
 /// Summary remainder for a spawn/finish bookend (not the dump line).
@@ -2599,11 +2642,11 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("groket-hud-job-inspect.log");
         let mut body = String::new();
-        for i in 0..40 {
-            body.push_str(&format!("line {i}\n"));
+        for i in 0..400 {
+            body.push_str(&format!("line {i} xxxxxxxxxxxxxxxxxxxxxxxxx\n"));
         }
         body.push_str("DONE\n");
-        std::fs::write(&path, body).expect("log");
+        std::fs::write(&path, &body).expect("log");
         let raw = serde_json::json!({
             "description": "Watch board",
             "command": "bash watch.sh",
@@ -2614,9 +2657,21 @@ mod tests {
         let tail = job_log_tail(path.to_str().expect("utf8"));
         assert_eq!(job_status(&raw, "", &tail), "done");
         assert!(tail.contains("DONE"));
-        assert!(tail.contains("line 39"));
+        assert!(tail.contains("line 399"));
         assert!(!tail.contains("line 0"));
+        let sess = dir.join("groket-hud-job-sess");
+        let term = sess.join("terminal");
+        std::fs::create_dir_all(&term).expect("terminal");
+        let host = term.join("call-inspect.log");
+        std::fs::write(&host, body).expect("host log");
+        let inspect = job_inspect_log(
+            sess.to_str().expect("utf8"),
+            "/root/.grok/sessions/x/terminal/call-inspect.log",
+        );
+        assert!(inspect.contains("line 0"));
+        assert!(inspect.contains("DONE"));
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&sess);
     }
 
     #[test]
@@ -2847,6 +2902,10 @@ mod tests {
         assert!(!event_is_monitor(&serde_json::json!({
             "kind": "bash",
             "output_file": "/tmp/call-shell.log"
+        })));
+        assert!(event_is_monitor(&serde_json::json!({
+            "description": "live watch of the board",
+            "output_file": "/tmp/call-watch.log"
         })));
     }
 

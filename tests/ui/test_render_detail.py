@@ -473,6 +473,27 @@ class TestRenderEventDetail:
         assert "just lint" in plain
         assert "task_backgrounded  tool_call_id" not in plain
 
+    def test_background_inspect_reads_session_terminal_log(self, tmp_path):
+        term = tmp_path / "terminal"
+        term.mkdir()
+        (term / "call-long.log").write_text(
+            "line 0 keep\n" + ("mid\n" * 40) + "DONE\n",
+            encoding="utf-8",
+        )
+        ev = make_trace_event(
+            index=0,
+            event_type="task_backgrounded",
+            raw_input={
+                "task_id": "job-long",
+                "command": "watch",
+                "output_file": "/root/.grok/sessions/x/terminal/call-long.log",
+            },
+        )
+        plain = rich_plain(render_event_detail(ev, session_dir=tmp_path))
+        assert "line 0 keep" in plain
+        assert "DONE" in plain
+        assert "watch" in plain
+
     def test_background_start_shows_finish_exit_code(self):
         start = make_trace_event(
             index=1,
@@ -507,7 +528,7 @@ class TestRenderEventDetail:
         assert "exitsleep" not in job_plain.replace(" ", "").lower()
         assert "sleep 5" in job_plain
         lines = [ln.strip() for ln in job_plain.splitlines() if ln.strip()]
-        assert any(ln == "exit 0" for ln in lines)
+        assert any("exit 0" in ln for ln in lines)
         assert any("sleep 5" in ln for ln in lines)
 
         spawn = make_trace_event(
