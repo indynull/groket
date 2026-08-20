@@ -948,18 +948,6 @@ fn overview_tab(hud: &Hud) -> Element<'_, Message> {
     for field in overview_job_fields(&o.background_jobs, &o.schedules, &o.workflows) {
         col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
     }
-    for jump in crate::format::overview_run_jumps(&o.background_jobs, &o.workflows) {
-        let ix = jump.event_index;
-        let label = jump.label;
-        col = col.push(
-            mouse_area(icedtea::widget::meta(
-                label.clone(),
-                hud.tokens(),
-                A11y::new(label, Role::Button),
-            ))
-            .on_press(Message::JumpTimeline(ix)),
-        );
-    }
     col.into()
 }
 
@@ -3387,6 +3375,8 @@ mod tests {
             .expect("overview body");
         assert!(overview.contains("session_state_from_meta("));
         assert!(overview.contains("overview.summary"));
+        assert!(overview.contains("overview_job_fields"));
+        assert!(!overview.contains("overview_run_jumps"));
         assert!(!overview.contains("\"{} · {} · {}\""));
         let picker = prod
             .split("fn session_picker_at")

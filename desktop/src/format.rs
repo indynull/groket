@@ -365,54 +365,6 @@ pub fn overview_job_fields(
     out
 }
 
-/// Named Overview rows that jump Timeline to that bookend.
-pub struct OverviewJump {
-    pub key: String,
-    pub label: String,
-    pub event_index: i64,
-}
-
-/// Workflows then jobs that have a Timeline bookend index.
-pub fn overview_run_jumps(
-    jobs: &[crate::wire::BackgroundJobRow],
-    workflows: &[crate::wire::WorkflowRow],
-) -> Vec<OverviewJump> {
-    let mut out = Vec::new();
-    for run in workflows {
-        let Some(ix) = run.event_index else {
-            continue;
-        };
-        let name = if run.name.is_empty() {
-            run.id.clone()
-        } else {
-            run.name.clone()
-        };
-        out.push(OverviewJump {
-            key: format!("wf-{}", run.id),
-            label: name,
-            event_index: ix,
-        });
-    }
-    for job in jobs {
-        let Some(ix) = job.event_index else {
-            continue;
-        };
-        let name = if !job.description.is_empty() {
-            job.description.clone()
-        } else if !job.command.is_empty() {
-            job.command.clone()
-        } else {
-            job.id.clone()
-        };
-        out.push(OverviewJump {
-            key: format!("job-{}", job.id),
-            label: name,
-            event_index: ix,
-        });
-    }
-    out
-}
-
 /// One labeled inspect section: heading immediately above a non-empty body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectBlock {
@@ -2717,31 +2669,6 @@ mod tests {
         assert_eq!(rows[0].value, "1 complete · 1 failed");
         assert!(!rows[0].value.contains("vissue_root"));
         assert!(!rows[0].value.contains("sprint"));
-    }
-
-    #[test]
-    fn overview_run_jumps_named_bookends() {
-        use crate::wire::{BackgroundJobRow, WorkflowRow};
-
-        let jumps = overview_run_jumps(
-            &[BackgroundJobRow {
-                id: "job-1".into(),
-                description: "Watch board".into(),
-                event_index: Some(4),
-                ..BackgroundJobRow::default()
-            }],
-            &[WorkflowRow {
-                id: "wf_sprint8".into(),
-                name: "sprint-8".into(),
-                event_index: Some(12),
-                ..WorkflowRow::default()
-            }],
-        );
-        assert_eq!(jumps.len(), 2);
-        assert_eq!(jumps[0].label, "sprint-8");
-        assert_eq!(jumps[0].event_index, 12);
-        assert_eq!(jumps[1].label, "Watch board");
-        assert_eq!(jumps[1].event_index, 4);
     }
 
     #[test]

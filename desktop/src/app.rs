@@ -8154,9 +8154,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_named_workflow_jump_lands_timeline() {
-        use crate::format::overview_run_jumps;
-        use crate::wire::{Overview, WorkflowRow};
+    fn timeline_jump_opens_the_event() {
         let mut hud = hud_with_session();
         load_page(
             &mut hud,
@@ -8167,21 +8165,7 @@ mod tests {
             20,
             0,
         );
-        hud.overview = Some(Overview {
-            workflows: vec![WorkflowRow {
-                id: "wf_sprint8".into(),
-                name: "sprint-8".into(),
-                event_index: Some(12),
-                ..WorkflowRow::default()
-            }],
-            ..Overview::default()
-        });
-        let jumps = overview_run_jumps(
-            &hud.overview.as_ref().unwrap().background_jobs,
-            &hud.overview.as_ref().unwrap().workflows,
-        );
-        assert_eq!(jumps[0].event_index, 12);
-        let _ = hud.update(Message::JumpTimeline(jumps[0].event_index));
+        let _ = hud.update(Message::JumpTimeline(12));
         assert_eq!(hud.tab(), Tab::Timeline);
         assert_eq!(hud.timeline_focus(), Some(12));
         assert!(hud.is_timeline_open(12));
