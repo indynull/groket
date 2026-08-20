@@ -1462,6 +1462,7 @@ impl Hud {
                             self.timeline_next = self.timeline_next.min(self.timeline_total);
                         }
                         self.rebuild_tl_filter();
+                        self.bind_overview_fields();
                         self.mark_up();
                         // Turn-boundary pager: open first/last of the newly loaded filter.
                         let edge_open = self
@@ -2248,12 +2249,20 @@ impl Hud {
     }
 
     fn bind_overview_fields(&mut self) {
-        let Some(o) = &self.overview else {
-            return;
-        };
-        for field in crate::format::overview_fields(&o.meta, &o.turns) {
-            if field.copyable && !field.value.is_empty() {
+        let fields = self
+            .overview
+            .as_ref()
+            .map(|o| crate::format::overview_fields(&o.meta, &o.turns))
+            .unwrap_or_default();
+        for field in fields {
+            if !field.value.is_empty() {
                 self.bind_extract_text(ExtractKey::Overview(field.key), &field.value);
+            }
+        }
+        let stats = crate::format::overview_stat_rows(&self.timeline);
+        for row in stats {
+            if !row.value.is_empty() {
+                self.bind_field(row.id, &row.value);
             }
         }
     }

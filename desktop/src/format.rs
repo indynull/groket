@@ -180,14 +180,6 @@ pub fn overview_fields(
             copyable: true,
         });
     }
-    if let Some(ctx) = overview_context_value(meta) {
-        out.push(OverviewField {
-            key: "context",
-            label: "context",
-            value: ctx,
-            copyable: false,
-        });
-    }
     if meta.tool_call_count > 0 || meta.error_count > 0 || meta.tool_failure_count > 0 {
         let value = if meta.error_count > 0 || meta.tool_failure_count > 0 {
             let errs = meta.error_count.max(meta.tool_failure_count);
@@ -199,7 +191,7 @@ pub fn overview_fields(
             key: "tools",
             label: "tools",
             value,
-            copyable: false,
+            copyable: true,
         });
     }
     if turns.turns.len() > 1 {
@@ -221,7 +213,7 @@ pub fn overview_fields(
                 key: "last_turn",
                 label: "last turn",
                 value,
-                copyable: false,
+                copyable: true,
             });
         }
     }
@@ -230,7 +222,7 @@ pub fn overview_fields(
             key: "messages",
             label: "messages",
             value: meta.num_messages.to_string(),
-            copyable: false,
+            copyable: true,
         });
     }
     if meta.loop_count > 0 {
@@ -238,7 +230,7 @@ pub fn overview_fields(
             key: "loops",
             label: "loops",
             value: meta.loop_count.to_string(),
-            copyable: false,
+            copyable: true,
         });
     }
     if !meta.run_id.is_empty() {
@@ -262,7 +254,7 @@ pub fn overview_fields(
             key: "repo",
             label: "repo",
             value: meta.git_repo.clone(),
-            copyable: false,
+            copyable: true,
         });
     }
     if !meta.git_branch.is_empty() {
@@ -270,7 +262,7 @@ pub fn overview_fields(
             key: "branch",
             label: "branch",
             value: meta.git_branch.clone(),
-            copyable: false,
+            copyable: true,
         });
     }
     let created = short_created(&meta.created_at);
@@ -279,7 +271,7 @@ pub fn overview_fields(
             key: "created",
             label: "created",
             value: created,
-            copyable: false,
+            copyable: true,
         });
     }
     if !meta.path.is_empty() {
@@ -288,6 +280,52 @@ pub fn overview_fields(
             label: "path",
             value: meta.path.clone(),
             copyable: true,
+        });
+    }
+    out
+}
+
+/// One Stats-tab count row (human label, selectable value).
+pub struct OverviewStatRow {
+    pub id: String,
+    pub section: &'static str,
+    pub label: String,
+    pub value: String,
+}
+
+/// Event-type and tool counts with the same labels as Timeline.
+pub fn overview_stat_rows(events: &[crate::wire::TimelineEvent]) -> Vec<OverviewStatRow> {
+    let mut types: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut tools: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for ev in events {
+        let key = if ev.event_type.is_empty() {
+            ev.kind.clone()
+        } else {
+            ev.event_type.clone()
+        };
+        if !key.is_empty() {
+            *types.entry(key).or_insert(0) += 1;
+        }
+        if ev.event_type == "tool_call" && !ev.tool_name.is_empty() {
+            *tools.entry(ev.tool_name.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for (raw, n) in types {
+        let label = human_event_type_label(&raw, "", "", false);
+        out.push(OverviewStatRow {
+            id: format!("overview.stat.{raw}"),
+            section: "Event types",
+            label,
+            value: n.to_string(),
+        });
+    }
+    for (raw, n) in tools {
+        out.push(OverviewStatRow {
+            id: format!("overview.tool.{raw}"),
+            section: "Tools",
+            label: format_tool_display(&raw),
+            value: n.to_string(),
         });
     }
     out
@@ -624,37 +662,6 @@ fn overview_job_count_value(total: usize, running: usize, done: usize, failed: u
         parts.push(total.to_string());
     }
     parts.join(" · ")
-}
-
-fn overview_context_value(meta: &crate::wire::SessionMeta) -> Option<String> {
-    let compact = meta.context_compact().trim();
-    let usage = meta.context_usage.trim();
-    let mut parts: Vec<String> = Vec::new();
-    if !compact.is_empty() {
-        parts.push(compact.to_string());
-    } else if !usage.is_empty() {
-        parts.push(usage.to_string());
-    }
-    match (meta.context_tokens_used, meta.context_window_tokens) {
-        (Some(used), Some(win)) if win > 0 => {
-            parts.push(format!("{used} / {win} tokens"));
-        }
-        (Some(used), _) => {
-            parts.push(format!("{used} tokens"));
-        }
-        (_, Some(win)) if win > 0 => {
-            parts.push(format!("{win} window"));
-        }
-        _ => {}
-    }
-    if meta.compaction_count > 0 {
-        parts.push(format!("{} compactions", meta.compaction_count));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" · "))
-    }
 }
 
 pub fn format_note_time(iso: &str) -> String {
@@ -2553,7 +2560,6 @@ mod tests {
             keys,
             [
                 "session",
-                "context",
                 "tools",
                 "last_turn",
                 "messages",
@@ -2565,8 +2571,10 @@ mod tests {
             ]
         );
         assert!(!keys.contains(&"events"));
+        assert!(!keys.contains(&"context"));
         assert!(!keys.contains(&"findings"));
         assert!(!keys.contains(&"notes"));
+        assert!(rows.iter().all(|r| r.copyable));
         assert_eq!(
             rows.iter()
                 .find(|r| r.key == "last_turn")
@@ -2649,6 +2657,35 @@ mod tests {
             ),
             "Investigate the bug"
         );
+    }
+
+    #[test]
+    fn overview_stat_rows_use_timeline_labels() {
+        use crate::wire::TimelineEvent;
+
+        let rows = overview_stat_rows(&[
+            TimelineEvent {
+                event_type: "tool_call".into(),
+                tool_name: "read_file".into(),
+                ..TimelineEvent::default()
+            },
+            TimelineEvent {
+                event_type: "tool_call".into(),
+                tool_name: "read_file".into(),
+                ..TimelineEvent::default()
+            },
+            TimelineEvent {
+                event_type: "task_backgrounded".into(),
+                ..TimelineEvent::default()
+            },
+        ]);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert!(labels.contains(&"tool call"));
+        assert!(labels.contains(&"read file"));
+        assert!(labels
+            .iter()
+            .any(|l| *l == "background start" || *l == "monitor"));
+        assert!(!labels.iter().any(|l| l.contains('_')));
     }
 
     #[test]

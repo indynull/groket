@@ -14,7 +14,7 @@ use crate::format::{
     is_chat_message, is_tool_identity, job_command, job_description, job_event_id, job_event_label,
     job_exit_code, job_inspect_blocks, job_inspect_log, job_list_preview, job_output_path,
     job_status, list_event_detail, list_status_label, looks_like_markdown, note_fields_view,
-    origin_label, overview_fields, overview_job_fields, overview_subagent_rows, overview_task_rows,
+    origin_label, overview_fields, overview_subagent_rows, overview_task_rows,
     overview_workflow_rows, path_hint_from_raw, sanitize_console_text, schedule_inspect_blocks,
     schedule_last_fire, session_duration_chip, status_tone, subagent_inspect_blocks,
     subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output, timeline_body_text,
@@ -663,6 +663,16 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
     }
     stack = stack.push(tabs);
     // List filters stay off while reading a full-pane event.
+    if hud.tab() == Tab::Overview && hud.overview().is_some() {
+        stack = stack.push(
+            container(kit::overview_section_tabs(hud.overview_section(), tea)).padding(Padding {
+                top: 0.0,
+                right: tea.density.inset(),
+                bottom: tea.density.gap(),
+                left: tea.density.inset(),
+            }),
+        );
+    }
     if hud.tab() == Tab::Timeline && hud.overview().is_some() && hud.timeline_open().is_none() {
         stack = stack.push(timeline_filter(hud));
     }
@@ -865,20 +875,13 @@ fn timeline_filter(hud: &Hud) -> Element<'_, Message> {
 }
 
 fn overview_tab(hud: &Hud) -> Element<'_, Message> {
-    let tea = hud.body_tokens();
-    let body = match hud.overview_section() {
+    match hud.overview_section() {
         OverviewSection::Session => overview_session(hud),
         OverviewSection::Tasks => overview_tasks(hud),
         OverviewSection::Workflows => overview_workflows(hud),
         OverviewSection::Subagents => overview_subagents(hud),
         OverviewSection::Stats => overview_stats(hud),
-    };
-    column![
-        kit::overview_section_tabs(hud.overview_section(), tea),
-        body
-    ]
-    .spacing(8)
-    .into()
+    }
 }
 
 fn overview_session(hud: &Hud) -> Element<'_, Message> {
@@ -899,17 +902,10 @@ fn overview_session(hud: &Hud) -> Element<'_, Message> {
     if summary.is_empty() {
         summary = "No summary text for this session.".into();
     }
-    let tok = tea;
     let ctx_frac = context_fraction(meta.context_window_usage_pct, meta.context_compact());
     let status_row = session_state_from_meta(meta, tea);
-    let mut col = column![
-        text(title.clone())
-            .size(tea.title())
-            .font(typo::UI_BOLD)
-            .color(tok.text),
-        status_row,
-    ]
-    .spacing(8);
+    // Title lives on the browse bar. Status is badges only.
+    let mut col = column![status_row].spacing(8);
     // Progress only where context matters (session detail), and only when known.
     if ctx_frac > 0.0 {
         col = col.push(kit::context_progress(ctx_frac, tea));
@@ -962,42 +958,13 @@ fn overview_session(hud: &Hud) -> Element<'_, Message> {
 }
 
 fn overview_tasks(hud: &Hud) -> Element<'_, Message> {
-    let tea = hud.body_tokens();
     let o = hud.overview().unwrap();
-    let rows = overview_task_rows(&o.background_jobs, &o.schedules);
-    let mut col = column![].spacing(8);
-    for field in overview_job_fields(&o.background_jobs, &o.schedules, &[]) {
-        col = col.push(kv(hud, field.key, field.label, field.value, field.copyable));
-    }
-    if rows.is_empty() {
-        col = col.push(kit::status_empty(
-            "No tasks",
-            "No background jobs or schedules.",
-            tea,
-        ));
-        return col.into();
-    }
-    let focus = hud.tasks_focus();
-    for (i, row) in rows.iter().enumerate() {
-        let selected = focus == Some(i);
-        let line = format!("{}  ·  {}  ·  {}", row.kind, row.status, row.label);
-        let face = icedtea::widget::meta(
-            line.clone(),
-            hud.tokens(),
-            A11y::new(line.clone(), Role::Button),
-        );
-        let card = container(face)
-            .padding(tea.density.inset())
-            .width(Length::Fill)
-            .style(move |_| icedtea::style::card(tea, selected));
-        let el: Element<'_, Message> = if let Some(ix) = row.event_index {
-            mouse_area(card).on_press(Message::JumpTimeline(ix)).into()
-        } else {
-            card.into()
-        };
-        col = col.push(el);
-    }
-    col.into()
+    overview_run_list(
+        hud,
+        &overview_task_rows(&o.background_jobs, &o.schedules),
+        "No tasks",
+        "No background jobs or schedules.",
+    )
 }
 
 fn overview_workflows(hud: &Hud) -> Element<'_, Message> {
@@ -1034,12 +1001,19 @@ fn overview_run_list<'a>(
     let mut col = column![].spacing(8);
     for (i, row) in rows.iter().enumerate() {
         let selected = focus == Some(i);
-        let line = format!("{}  ·  {}  ·  {}", row.kind, row.status, row.label);
-        let face = icedtea::widget::meta(
-            line.clone(),
-            hud.tokens(),
-            A11y::new(line.clone(), Role::Button),
-        );
+        let status = list_status_label(&row.status, "");
+        let kind = format_tool_display(&row.kind);
+        let chips = row![
+            status_chip(status.clone(), status_tone(&status), tea),
+            status_chip(kind, "", tea),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        let name = text(row.label.clone())
+            .size(tea.body())
+            .font(typo::UI)
+            .color(tea.text);
+        let face = column![chips, name].spacing(4).width(Length::Fill);
         let card = container(face)
             .padding(tea.density.inset())
             .width(Length::Fill)
@@ -1056,40 +1030,26 @@ fn overview_run_list<'a>(
 
 fn overview_stats(hud: &Hud) -> Element<'_, Message> {
     let tea = hud.body_tokens();
-    let events = hud.timeline_events();
-    if events.is_empty() {
+    let rows = crate::format::overview_stat_rows(hud.timeline_events());
+    if rows.is_empty() {
         return kit::status_empty(
             "No stats yet",
             "Open Timeline to fill event and tool counts.",
             tea,
         );
     }
-    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    let mut tools: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for ev in events {
-        *types.entry(ev.event_type.as_str()).or_insert(0) += 1;
-        if ev.event_type == "tool_call" && !ev.tool_name.is_empty() {
-            *tools.entry(ev.tool_name.as_str()).or_insert(0) += 1;
+    let mut col = column![].spacing(4);
+    let mut section = "";
+    for row in &rows {
+        if row.section != section {
+            section = row.section;
+            col = col.push(icedtea::widget::meta(
+                section,
+                tea,
+                A11y::new(section, Role::Status),
+            ));
         }
-    }
-    let mut col = column![].spacing(8);
-    col = col.push(icedtea::widget::meta(
-        "Event types",
-        tea,
-        A11y::new("Event types", Role::Status),
-    ));
-    for (name, n) in types {
-        col = col.push(kit::labeled_plain(name, n.to_string(), tea));
-    }
-    if !tools.is_empty() {
-        col = col.push(icedtea::widget::meta(
-            "Tools",
-            tea,
-            A11y::new("Tools", Role::Status),
-        ));
-        for (name, n) in tools {
-            col = col.push(kit::labeled_plain(name, n.to_string(), tea));
-        }
+        col = col.push(glance_row(hud, &row.id, &row.label));
     }
     col.into()
 }
@@ -1102,24 +1062,27 @@ fn kv<'a>(
     v: String,
     copy: bool,
 ) -> Element<'a, Message> {
+    let _ = (v, copy);
+    glance_row(hud, &ExtractKey::Overview(key).id(), label)
+}
+
+fn glance_row<'a>(hud: &'a Hud, id: &str, label: &str) -> Element<'a, Message> {
     let tea = hud.tokens();
-    if copy {
-        if let Some(buf) = hud.field(&ExtractKey::Overview(key).id()) {
-            let id = ExtractKey::Overview(key).id();
-            return kit::labeled_value(
-                label,
-                buf,
-                move |action| Message::Select {
-                    id: id.clone(),
-                    action,
-                },
-                icedtea::typo::FontFace::Mono,
-                tea,
-                A11y::new(key, Role::Group),
-            );
-        }
+    if let Some(buf) = hud.field(id) {
+        let id = id.to_string();
+        return kit::labeled_value(
+            label,
+            buf,
+            move |action| Message::Select {
+                id: id.clone(),
+                action,
+            },
+            icedtea::typo::FontFace::Ui,
+            tea,
+            A11y::new(label, Role::Group),
+        );
     }
-    kit::labeled_plain(label, v, tea)
+    kit::labeled_plain(label, "", tea)
 }
 
 fn footer(hud: &Hud, tea: icedtea::theme::Tokens) -> Element<'_, Message> {
@@ -3428,7 +3391,6 @@ mod tests {
         assert!(!prod.contains("kit::search_field"));
         assert!(prod.contains("pattern::status_bar"));
         assert!(!prod.contains("kit::status_footer"));
-        assert!(prod.contains("overview_job_fields"));
         assert!(!prod.contains("Message::ShowJobLog"));
         assert!(!prod.contains("job.inspect"));
         assert!(prod.contains("kit::help_modal"));
@@ -3443,12 +3405,12 @@ mod tests {
             .split("fn kv")
             .next()
             .expect("overview body");
-        assert!(overview.contains("overview_section_tabs"));
+        assert!(prod.contains("overview_section_tabs"));
+        assert!(!overview.contains("overview_section_tabs"));
         assert!(overview.contains("session_state_from_meta("));
         assert!(overview.contains("overview.summary"));
         assert!(overview.contains("select_bound"));
         assert!(!overview.contains("markdown_bound"));
-        assert!(overview.contains("overview_job_fields"));
         assert!(overview.contains("overview_task_rows"));
         assert!(overview.contains("overview_workflow_rows"));
         assert!(overview.contains("overview_subagent_rows"));
