@@ -1,6 +1,6 @@
 """Non-recursive catalog watch: membership dirs and four plane files.
 
-``workspace/`` is never subscribed. The owner and TUI share this path set.
+``workspace/`` is never subscribed. ``groket serve`` and the TUI share this path set.
 """
 
 from __future__ import annotations
