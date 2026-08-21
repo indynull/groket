@@ -56,16 +56,6 @@ second library that duplicates an existing choice.
 
 ## 2. Agent / commit hygiene
 
-### Upstream watch (mandatory)
-
-Keep a live watch on **icedtea** (HUD crate) and **incoming pull requests**
-on this GitHub repo. Rule file: [`.grok/rules/upstream-watch.md`](.grok/rules/upstream-watch.md).
-Checker: [`scripts/watch-upstream.sh`](scripts/watch-upstream.sh).
-
-When you open a session here: ensure a durable schedule (or session monitor)
-runs that script on an interval, and **act** on CHANGE lines (bump icedtea,
-drop workarounds, review PRs). Do not wait for the operator to ask.
-
 **Commit each finished unit of work in the same turn.** A unit is one coherent
 change the user could revert alone. Verify, then commit before starting the next.
 

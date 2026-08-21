@@ -34,6 +34,4 @@ scan/target/
 .superpowers/
 # Local scratch (HUD walk screenshots, ad-hoc probes — never commit)
 /tmp/
-# Upstream watch last-seen (machine-local; script also writes ~/.groket/)
-.grok/upstream-watch-state.json
 .DS_Store
