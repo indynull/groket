@@ -262,7 +262,7 @@ def test_run_hud_summon_show_starts_when_not_running(tmp_path: Path) -> None:
         patch.object(hud_app, "ensure_control_daemon") as mock_daemon,
         patch.object(hud_app, "control_socket_accepts", return_value=True),
         patch.object(hud_app, "wait_until_control_accepts", return_value=True),
-        patch.object(hud_app.asyncio, "run", return_value=None),
+        patch.object(hud_app.asyncio, "run", side_effect=lambda coro: coro.close()),
         patch.object(hud_app, "launch_hud", return_value=0) as mock_launch,
         patch.dict(os.environ, {}, clear=False),
     ):
