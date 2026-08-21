@@ -105,7 +105,7 @@ pub fn decode_tray_rgba() -> Result<(Vec<u8>, u32, u32), TrayError> {
 /// RGBA bytes to network-order ARGB32 (StatusNotifier pixmap).
 pub fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
     let mut out = rgba.to_vec();
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px.rotate_right(1);
     }
     out

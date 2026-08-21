@@ -118,7 +118,7 @@ fn reverse_chrome_handle() -> image::Handle {
 fn knocked_out_reverse() -> image::Handle {
     let decoded = icon::from_file_data(MARK_REVERSE_PNG, None).expect("groket-mark-reverse.png");
     let (mut rgba, size) = decoded.into_raw();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         if px[0] < 48 && px[1] < 48 && px[2] < 48 {
             px[3] = 0;
         }
@@ -136,19 +136,25 @@ mod tests {
         let (rgba, size) = win.into_raw();
         assert_eq!((size.width, size.height), (128, 128));
         let cream = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 200 && p[0] > 200 && p[1] > 180)
             .count();
         assert!(cream * 2 > rgba.len() / 4, "cream plate should dominate");
         // Ink rim (dark opaque near full alpha) — light desktop edge.
         let ink = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 200 && p[0] < 60 && p[1] < 60 && p[2] < 60)
             .count();
         assert!(ink > 80, "ink rim should frame the cream plate");
         // Status caps present (red / green / yellow).
         let red = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] > 180 && p[1] < 80 && p[2] < 80 && p[3] > 200)
             .count();
         assert!(red > 10, "failed (red) cap should be visible");
@@ -177,7 +183,12 @@ mod tests {
                 ..
             } => {
                 assert_eq!((width, height), (1200, 507));
-                let clear = pixels.chunks_exact(4).filter(|p| p[3] == 0).count();
+                let clear = pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] == 0)
+                    .count();
                 assert!(
                     clear * 2 > pixels.len() / 4,
                     "reverse chrome knocks out ink field"
