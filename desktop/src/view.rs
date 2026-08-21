@@ -1104,6 +1104,7 @@ fn overview_stats(hud: &Hud) -> Element<'_, Message> {
         Message::StatsSort,
         Message::StatsScroll,
         Message::StatsHScroll,
+        Some(hud.stats_scroll_id()),
         |_| Message::Noop,
         tea,
         A11y::new("Stats", Role::Table),

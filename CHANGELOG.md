@@ -14,9 +14,11 @@ is tagged.
   the widget). Turns, Timeline, Overview lists, and the session picker
   pick that up. Keyboard jumps use `scroll_to` on the named clip.
 - HUD uses icedtea 0.12.1: search, badges, tabs, selectable bodies,
+- HUD uses icedtea 0.13.0: search, badges, tabs, selectable bodies,
   Diff hunks, an F12 Look drawer, and `virtual_clip` pixel scroll on
-  Turns, Timeline, Overview lists, and the session picker. Keyboard
-  jumps use `scroll_to` on the named clip.
+  Turns, Timeline, Overview lists, Stats, and the session picker.
+  Keyboard jumps use `scroll_to` on the named clip. A pixel wheel
+  redraws in the clip; layout runs when the mounted range changes.
 - HUD Turns and Timeline closed rows use the same title-plus-badge
   tile as Recent. Open event detail has the note command chips.
 - HUD growing lists scroll on icedtea `virtual_column` / `data_table`:
@@ -68,9 +70,6 @@ is tagged.
 
 ### Bug fix
 
-- HUD ignores a list scroll that did not move (icedtea 0.12.1 republishes
-  while parked at 0 or max). Timeline does not refetch the previous
-  page on every extra top-of-list wheel.
 - Keyboard list jumps (`j` / `k`) pin the focused row from its height
   sum, not the last published window scroll, so a sub-row wheel does
   not snap the clip back to 0.
