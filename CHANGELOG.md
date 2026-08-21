@@ -17,6 +17,8 @@ is tagged.
   Diff hunks, an F12 Look drawer, and `virtual_clip` pixel scroll on
   Turns, Timeline, Overview lists, and the session picker. Keyboard
   jumps use `scroll_to` on the named clip.
+- HUD Turns and Timeline closed rows use the same title-plus-badge
+  tile as Recent. Open event detail has the note command chips.
 
 - `session/overview` includes event-type and tool counts. HUD and TUI
   Stats read those fields for the whole session.

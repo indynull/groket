@@ -26,14 +26,13 @@ pub const TIMELINE_OPEN_CHARS: u32 = 50_000;
 /// Vertical gap after each virtual list card (must be inside row height —
 /// ``virtual_column`` clips each row to ``heights[i]``).
 pub const LIST_GAP: f32 = 8.0;
-/// Closed timeline card + gap. Type sits on the title row with ``#index``.
-/// pad×2 + title/chip row + face + inner gap + list gap (density 8 grid).
-/// Open event detail uses the full pane (not a taller virtual row).
-pub const TIMELINE_ROW_H: f32 = 100.0;
+/// Closed timeline tile + gap. Title line plus one badge row (same
+/// face as Recent). Open event detail uses the full pane.
+pub const TIMELINE_ROW_H: f32 = 80.0;
 /// Extra mounted timeline cards beyond the viewport.
 pub const TIMELINE_OVERSCAN: usize = 1;
-/// Fixed Turns card + gap: title+chips, stats, 2-line prompt.
-pub const CLOSED_TURN_CARD_H: f32 = 144.0;
+/// Closed Turns tile + gap. Title line plus one badge row.
+pub const CLOSED_TURN_CARD_H: f32 = 80.0;
 /// Extra mounted turn cards beyond the viewport.
 pub const TURNS_OVERSCAN: usize = 1;
 /// Overview Tasks / Workflows / Subagents card + gap (chips + name).

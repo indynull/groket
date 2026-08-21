@@ -1135,19 +1135,7 @@ fn footer(hud: &Hud, tea: icedtea::theme::Tokens) -> Element<'_, Message> {
     )
 }
 
-/// Filled-black mark; icedtea recolors it from tokens.
-const DIFF_MARK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="black" d="M2 3h5v2H2zm7 0h5v2H9zM2 7h12v2H2zm0 4h5v2H2zm7 0h5v2H9z"/></svg>"#;
-
 fn chip_btn(label: String, msg: Message, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    chip_btn_icons(label, msg, tea, icedtea::icon::Icons::NONE)
-}
-
-fn chip_btn_icons(
-    label: String,
-    msg: Message,
-    tea: icedtea::theme::Tokens,
-    icons: icedtea::icon::Icons,
-) -> Element<'static, Message> {
     icedtea::widget::chip(
         label.clone(),
         Some(msg),
@@ -1155,7 +1143,7 @@ fn chip_btn_icons(
         tea,
         Variant::Chip,
         icedtea::widget::ChipKind::Assist,
-        icons,
+        icedtea::icon::Icons::NONE,
         A11y::button(label),
     )
 }
@@ -1177,28 +1165,11 @@ fn card_chips(
     row![
         card_marks_row(hud, mark),
         Space::new().width(Length::Fill),
-        card_cmds_row(hud, note, jump, None),
+        card_cmds_row(hud, note, jump),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
     .width(Length::Fill)
-    .into()
-}
-
-/// Compact chips for closed-card title rows (no flex fill — sits beside title).
-fn card_chips_inline(
-    hud: &Hud,
-    mark: Option<CardMark>,
-    note: Option<Message>,
-    jump: Option<Message>,
-    diff: Option<Message>,
-) -> Element<'static, Message> {
-    row![
-        card_marks_row(hud, mark),
-        card_cmds_row(hud, note, jump, diff),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center)
     .into()
 }
 
@@ -1230,7 +1201,6 @@ fn card_marks_row(hud: &Hud, mark: Option<CardMark>) -> Element<'static, Message
                 tea,
             ));
         }
-        // Tool-error counts live on the turn stats badge row.
     }
     marks.into()
 }
@@ -1239,27 +1209,12 @@ fn card_cmds_row(
     hud: &Hud,
     note: Option<Message>,
     jump: Option<Message>,
-    diff: Option<Message>,
 ) -> Element<'static, Message> {
     let tea = hud.tokens();
     let tok = hud.tokens();
     let mut cmds = row![].spacing(4);
     if let Some(msg) = note {
         cmds = cmds.push(chip_btn("Add note".into(), msg, tea));
-    }
-    if let Some(msg) = diff {
-        cmds = cmds.push(icedtea::widget::tooltip_wrap(
-            chip_btn_icons(
-                "Diff".into(),
-                msg,
-                tea,
-                icedtea::icon::Icons::leading(icedtea::icon::Glyph::Bytes(DIFF_MARK)),
-            ),
-            "Go to Diff",
-            icedtea::widget::TooltipAnchor::Follow,
-            tea,
-            A11y::button("Go to Diff"),
-        ));
     }
     if let Some(msg) = jump {
         cmds = cmds.push(jump_control(msg, tok.muted, tea));
@@ -1295,28 +1250,20 @@ fn expand_card<'a>(
     )
 }
 
-/// Closed Timeline row: flat card. Click opens full-pane detail (not expand).
-///
-/// Chips share the title row so the virtual height only needs title + face
-/// (a third chips row was clipped by ``TIMELINE_ROW_H`` under ``clip(true)``).
-fn closed_list_card<'a>(
-    title: Element<'a, Message>,
-    face: Element<'a, Message>,
-    chips: Element<'a, Message>,
+/// Closed list tile: title plus one badge row (same face as Recent).
+fn closed_list_card(
+    title: String,
+    badges: Element<'static, Message>,
     on_open: Message,
     selected: bool,
     tea: icedtea::theme::Tokens,
-) -> Element<'a, Message> {
-    let header = row![
-        title,
-        Space::new().width(Length::Fill),
-        chips,
-        text("›").size(tea.meta()).color(tea.muted),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .width(Length::Fill);
-    let body = column![header, face].spacing(4).width(Length::Fill);
+) -> Element<'static, Message> {
+    let title = text(title)
+        .size(tea.body())
+        .font(if selected { typo::UI_BOLD } else { typo::UI })
+        .color(tea.text)
+        .width(Length::Fill);
+    let body = column![title, badges].spacing(4).width(Length::Fill);
     mouse_area(
         container(body)
             .padding(tea.density.inset())
@@ -1328,113 +1275,12 @@ fn closed_list_card<'a>(
 }
 
 fn turn_title(t: &TurnRow) -> String {
-    t.face_caption()
-}
-
-/// Outcome plus duration / counts as the same small badges as session chrome.
-fn turn_stats_row(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    let status = if t.open {
-        "open".to_string()
+    let plain = plain_card_text(&t.summary);
+    if plain.is_empty() {
+        t.face_caption()
     } else {
-        list_status_label(&t.outcome, &t.outcome)
-    };
-    let tone = if t.open {
-        "running"
-    } else {
-        status_tone(&status)
-    };
-    let mut chips = row![status_chip(status, tone, tea)]
-        .spacing(8)
-        .align_y(Alignment::Center);
-    if let Some(taken) = t.duration_seconds.filter(|s| *s > 0.0).map(fmt_duration) {
-        chips = chips.push(status_chip(taken, "", tea));
+        capped_display(&plain, 180)
     }
-    if t.event_count > 0 {
-        chips = chips.push(status_chip(format!("{} events", t.event_count), "", tea));
-    }
-    if t.tool_call_count > 0 {
-        chips = chips.push(status_chip(format!("{} tools", t.tool_call_count), "", tea));
-    }
-    if t.tool_error_count > 0 {
-        chips = chips.push(status_chip(
-            format!("{} tool errors", t.tool_error_count),
-            "error",
-            tea,
-        ));
-    }
-    if let Some(n) = t.prompt_index {
-        chips = chips.push(status_chip(format!("prompt {n}"), "", tea));
-    }
-    chips.into()
-}
-
-fn turn_run_chips(t: &TurnRow, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    if t.subagent_runs.is_empty() {
-        return Space::new().height(0).into();
-    }
-    let mut col = column![].spacing(4);
-    for run in &t.subagent_runs {
-        let kind = if run.subagent_type.is_empty() {
-            "subagent".to_string()
-        } else {
-            run.subagent_type.clone()
-        };
-        let desc = if run.description.is_empty() {
-            run.child_session_id.clone()
-        } else {
-            run.description.clone()
-        };
-        let mut chips = row![
-            status_chip(kind, "", tea),
-            status_chip(
-                list_status_label(&run.status, &run.status),
-                status_tone(&run.status),
-                tea,
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-        if !desc.is_empty() {
-            chips = chips.push(icedtea::widget::meta(
-                desc.clone(),
-                tea,
-                A11y::new(desc, Role::Status),
-            ));
-        }
-        let row: Element<'static, Message> = chips.into();
-        if run.openable {
-            col = col.push(mouse_area(row).on_press(Message::OpenChild {
-                path: run.child_path.clone(),
-                sid: run.child_session_id.clone(),
-            }));
-        } else {
-            col = col.push(row);
-        }
-    }
-    col.into()
-}
-
-fn turn_note(t: &TurnRow) -> Message {
-    Message::StartNote {
-        turn: t.face_id().map(|n| n.to_string()).unwrap_or_default(),
-        event: String::new(),
-    }
-}
-
-/// Open Timeline with this turn’s events only (list, not a single-event detail).
-fn turn_diff(t: &TurnRow) -> Message {
-    Message::OpenTurnDiff {
-        prompt_index: t.prompt_index,
-    }
-}
-
-fn turn_jump(t: &TurnRow) -> Message {
-    use crate::model::EventsTurnPick;
-    let label = t.face_caption();
-    Message::EventsTurnPicked(EventsTurnPick {
-        turn_index: Some(t.turn_index),
-        label,
-    })
 }
 
 fn event_note(ev: &TimelineEvent) -> Message {
@@ -1484,6 +1330,12 @@ fn event_list_heading(
     if let Some((human, role)) = event_type_paint(ev) {
         head = head.push(label_badge(human, role, tea));
     }
+    if is_tool_identity(&ev.kind, &ev.event_type, &ev.tool_name) {
+        let name = format_tool_display(&ev.tool_name);
+        if !name.is_empty() {
+            head = head.push(label_badge(name, event_tool_role(ev), tea));
+        }
+    }
     if let Some(turn) = ev.turn_index {
         head = head.push(status_chip(format!("turn {turn}"), "", tea));
     }
@@ -1494,7 +1346,7 @@ fn event_list_heading(
     head.into()
 }
 
-fn event_face(ev: &TimelineEvent, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
+fn event_list_title(ev: &TimelineEvent) -> String {
     let tool_row = is_tool_identity(&ev.kind, &ev.event_type, &ev.tool_name);
     let raw_preview = if ev.preview.is_empty() {
         ev.content.as_str()
@@ -1522,22 +1374,12 @@ fn event_face(ev: &TimelineEvent, tea: icedtea::theme::Tokens) -> Element<'stati
     } else {
         raw_preview.to_string()
     };
-    // One scannable line (TUI type + summary columns), not a markdown stack.
     let preview = capped_display(&plain_card_text(&preview), 160);
-    if !tool_row {
-        if preview.is_empty() {
-            return text("—").size(tea.body()).color(tea.muted).into();
-        }
-        return text(preview).size(tea.body()).color(tea.text).into();
-    }
-    let name = label_badge(format_tool_display(&ev.tool_name), event_tool_role(ev), tea);
     if preview.is_empty() {
-        return name;
+        String::from("—")
+    } else {
+        preview
     }
-    row![name, text(preview).size(tea.body()).color(tea.text)]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
 }
 
 fn event_body<'a>(
@@ -1701,11 +1543,6 @@ fn note_commands(id: &str, delete_armed: &str) -> Vec<icedtea::action::Action<Me
     ]
 }
 
-fn closed_turn_face(summary: &str, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    // ~2 lines at typical detail width; keeps closed-card height honest.
-    plain_face(summary, "No user prompt in this turn", 180, tea)
-}
-
 /// Closed-card preview only. Markdown parse/layout per visible row was the
 /// Turns/Timeline scroll tax; open bodies use selectable text when needed.
 fn prompt_face(summary: &str, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
@@ -1746,52 +1583,53 @@ fn plain_face(
         .into()
 }
 
-/// Fixed Turns card: prompt + light meta + jump/note (no expander / assistant body).
-///
-/// Title row carries chips so the 2-line prompt is not pushed under the
-/// virtual clip (``CLOSED_TURN_CARD_H``).
+/// Closed Turns tile: prompt title plus status badges (same face as Recent).
 fn turn_list_card(
-    hud: &Hud,
     t: &TurnRow,
-    mark: Option<CardMark>,
     selected: bool,
     tea: icedtea::theme::Tokens,
 ) -> Element<'static, Message> {
-    let jump = turn_jump(t);
-    let title = text(turn_title(t))
-        .size(tea.body())
-        .font(typo::UI_BOLD)
-        .color(tea.text);
-    let header = row![
+    let title = turn_title(t);
+    let status = if t.open {
+        "open".to_string()
+    } else {
+        list_status_label(&t.outcome, &t.outcome)
+    };
+    let tone = if t.open {
+        "running"
+    } else {
+        status_tone(&status)
+    };
+    let mut chips = row![status_chip(status, tone, tea)]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    let caption = t.face_caption();
+    if title != caption {
+        chips = chips.push(status_chip(caption, "", tea));
+    }
+    if let Some(taken) = t.duration_seconds.filter(|s| *s > 0.0).map(fmt_duration) {
+        chips = chips.push(status_chip(taken, "", tea));
+    }
+    if t.event_count > 0 {
+        chips = chips.push(status_chip(format!("{} events", t.event_count), "", tea));
+    }
+    if t.tool_call_count > 0 {
+        chips = chips.push(status_chip(format!("{} tools", t.tool_call_count), "", tea));
+    }
+    if t.tool_error_count > 0 {
+        chips = chips.push(status_chip(
+            format!("{} tool errors", t.tool_error_count),
+            "error",
+            tea,
+        ));
+    }
+    closed_list_card(
         title,
-        Space::new().width(Length::Fill),
-        card_chips_inline(
-            hud,
-            mark,
-            Some(turn_note(t)),
-            Some(jump.clone()),
-            hud.turn_has_diff(t.prompt_index).then(|| turn_diff(t)),
-        ),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .width(Length::Fill);
-    let body = column![
-        header,
-        turn_stats_row(t, tea),
-        turn_run_chips(t, tea),
-        closed_turn_face(&t.summary, tea),
-    ]
-    .spacing(4)
-    .width(Length::Fill);
-    mouse_area(
-        container(body)
-            .padding(tea.density.inset())
-            .width(Length::Fill)
-            .style(move |_| icedtea::style::card(tea, selected)),
+        chips.into(),
+        Message::FocusTurn(t.turn_index),
+        selected,
+        tea,
     )
-    .on_press(Message::FocusTurn(t.turn_index))
-    .into()
 }
 
 fn turns_filter(hud: &Hud) -> Element<'_, Message> {
@@ -1817,7 +1655,6 @@ fn turns_filter(hud: &Hud) -> Element<'_, Message> {
 fn turns_tab(hud: &Hud) -> Element<'_, Message> {
     let o = hud.overview().unwrap();
     let turns: &[TurnRow] = &o.turns.turns;
-    let (turn_marks, _) = hud.card_marks();
     let tea = hud.body_tokens();
     if turns.is_empty() {
         return kit::status_empty("No turns", "Nothing segmented yet.", tea);
@@ -1842,10 +1679,9 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
                 let Some(t) = turns.get(src) else {
                     return Space::new().height(0).into();
                 };
-                let mark = turn_marks.get(&t.turn_index).cloned();
                 let selected = hud.turns_focus() == Some(t.turn_index);
                 column![
-                    turn_list_card(hud, t, mark, selected, tea),
+                    turn_list_card(t, selected, tea),
                     Space::new().height(crate::live::LIST_GAP),
                 ]
                 .into()
@@ -1881,7 +1717,6 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
         }
         return kit::status_empty("No events", "Nothing matches this filter.", hud.tokens());
     }
-    let (_, ev_marks) = hud.card_marks();
     let tea = hud.tokens();
     let source = hud.timeline_events();
     let list = icedtea::widget::virtual_column(
@@ -1900,12 +1735,10 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
                 return Space::new().height(0).into();
             };
             let ix = ev.index;
-            let mark = ev_marks.get(&ix).cloned();
             let selected = hud.timeline_focus() == Some(ix);
             let card = closed_list_card(
+                event_list_title(ev),
                 event_list_heading(ev, tea),
-                event_face(ev, tea),
-                card_chips_inline(hud, mark, Some(event_note(ev)), None, None),
                 Message::SelectTimeline(ix),
                 selected,
                 tea,
@@ -3224,7 +3057,6 @@ mod tests {
         let _ = prompt_face("# heading\n\n**bold**", tea());
         let _ = prompt_face("plain sentence", tea());
         let _ = prompt_face("", tea());
-        let _ = closed_turn_face("user said hello", tea());
         let src = include_str!("view.rs");
         let prod = src.split("#[cfg(test)]").next().expect("prod");
         let face = prod
@@ -3298,7 +3130,7 @@ mod tests {
             ..TimelineEvent::default()
         };
         assert_eq!(event_tool_role(&tool), BrandRole::Cream);
-        let _ = event_face(&tool, tea());
+        assert_eq!(event_list_title(&tool), "src/app.rs");
         let prod = include_str!("view.rs")
             .split("#[cfg(test)]")
             .next()
@@ -3354,9 +3186,9 @@ mod tests {
         let src = include_str!("view.rs");
         let prod = src.split("#[cfg(test)]").next().expect("prod source");
         let chip = prod
-            .split("fn chip_btn_icons")
+            .split("fn chip_btn(")
             .nth(1)
-            .expect("chip_btn_icons")
+            .expect("chip_btn")
             .split("fn command_end")
             .next()
             .expect("chip_btn body");
@@ -3472,7 +3304,9 @@ mod tests {
         use icedtea::widget::{label, virtual_column};
 
         let tok = tea();
-        let row_h = crate::live::CLOSED_TURN_CARD_H;
+        // Tall fixture rows so a 4px wheel cannot change the visible
+        // range. Product tiles are shorter; this test is the clip.
+        let row_h = 144.0;
         let viewport = 400.0;
         let heights: Vec<f32> = (0..40).map(|_| row_h).collect();
         let window = VisibleWindow::new(viewport);
@@ -3670,7 +3504,12 @@ mod tests {
         assert!(!prod.contains("context_progress") || prod.contains("kit::context_progress"));
         assert!(prod.contains("pattern::context_menu"));
         assert!(prod.contains("stack![chrome]"));
-        assert!(prod.contains("fn turn_note"));
+        assert!(!prod.contains("fn turn_note"));
+        assert!(!prod.contains("fn turn_diff"));
+        assert!(!prod.contains("fn turn_jump"));
+        assert!(!prod.contains("fn turn_stats_row"));
+        assert!(!prod.contains("fn turn_run_chips"));
+        assert!(!prod.contains("fn card_chips_inline"));
         assert!(!prod.contains("command_palette_view"));
         assert!(prod.contains("fn event_body"));
         assert!(!prod.contains("time_picker"));
@@ -3678,7 +3517,7 @@ mod tests {
         assert!(!prod.contains("fn disclosure"));
         assert!(prod.contains("fn select_bound"));
         assert!(prod.contains("fn turn_list_card"));
-        assert!(prod.contains("fn closed_turn_face"));
+        assert!(!prod.contains("fn closed_turn_face"));
         assert!(prod.contains("Search events…"));
         assert!(prod.contains("Search turns"));
         assert!(!prod.contains("Session events"));
@@ -3718,11 +3557,12 @@ mod tests {
             .split("fn event_list_heading")
             .nth(1)
             .expect("heading")
-            .split("fn event_face")
+            .split("fn event_list_title")
             .next()
             .expect("heading body");
         assert!(heading.contains("label_badge"));
         assert!(heading.contains("status_chip(format!(\"turn {turn}\")"));
+        assert!(heading.contains("format_tool_display"));
         let payload = prod
             .split("fn event_payload")
             .nth(1)
@@ -3772,25 +3612,25 @@ mod tests {
         assert!(!job_card.contains("get(\"last_fired_at\")"));
         assert!(payload.contains("\"Input\""));
         assert!(!payload.contains("text(format_tool_display"));
-        let stats = prod
-            .split("fn turn_stats_row")
+        let turns_card = prod
+            .split("fn turn_list_card")
             .nth(1)
-            .expect("turn_stats_row")
-            .split("fn turn_run_chips")
+            .expect("turn_list_card")
+            .split("fn turns_filter")
             .next()
-            .expect("stats body");
-        assert!(stats.contains("status_chip("));
-        assert!(!stats.contains("tools ·"));
+            .expect("turns card");
+        assert!(turns_card.contains("status_chip("));
+        assert!(turns_card.contains("closed_list_card("));
+        assert!(!turns_card.contains("tools ·"));
         let face = prod
-            .split("fn event_face")
+            .split("fn event_list_title")
             .nth(1)
-            .expect("face")
+            .expect("title")
             .split("fn event_body")
             .next()
-            .expect("face body");
-        assert!(face.contains("label_badge"));
-        assert!(face.contains(".size(tea.body())"));
-        assert!(!face.contains(".size(tea.meta())"));
+            .expect("title body");
+        assert!(face.contains("list_event_detail"));
+        assert!(!face.contains("label_badge"));
         assert!(!face.contains("id_font"));
         assert!(prod.contains("footer_table_for(hud.key_scope(), hud.key_overlay())"));
         assert!(!prod.contains("chip_btn(\"Back\""));
