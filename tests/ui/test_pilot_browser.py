@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from groket.analysis.base import AnalysisResult, Finding
+from groket.analysis.service import AnalysisService
 from groket.models import Severity
 from groket.runs.run_manager import RunManager
 from groket.session.turn_gate import (
@@ -924,18 +926,29 @@ async def test_browser_stale_analysis_is_a_note_not_a_banner(tmp_path: Path) -> 
         with pytest.raises(NoMatches):
             screen.query_one("#analysis-stale-banner")
 
-        screen._analysis_stale_hints = []
-        screen._note_stale_analysis(["engine cache older than plugin"])
-        await _activate_tab(pilot, screen, "tab-reports")
-        screen._update_reports_tab()
-        await pilot.pause()
+        with patch.object(
+            AnalysisService,
+            "stale_analyzer_hints",
+            return_value=["engine cache older than plugin"],
+        ):
+            screen._apply_stale_analysis_hints(repaint=False)
+            await _activate_tab(pilot, screen, "tab-reports")
+            screen._update_reports_tab()
 
-        report = screen.query_one("#report-overview-content", SelectableStatic)
-        plain = report.get_plain_text() or ""
-        assert "Stale analysis" in plain
-        assert "engine cache older than plugin" in plain
-        assert "[bold yellow]" not in plain
-        assert "[/]" not in plain
+            def has_note() -> bool:
+                report = screen.query_one("#report-overview-content", SelectableStatic)
+                plain = report.get_plain_text() or ""
+                return "Stale analysis" in plain and "engine cache older than plugin" in plain
+
+            await wait_until(
+                pilot,
+                has_note,
+                description="stale analysis note on Report",
+            )
+            report = screen.query_one("#report-overview-content", SelectableStatic)
+            plain = report.get_plain_text() or ""
+            assert "[bold yellow]" not in plain
+            assert "[/]" not in plain
 
 
 # ── Summary stats tables ─────────────────────────────────────────────────
