@@ -1434,15 +1434,6 @@ fn turn_diff(t: &TurnRow) -> Message {
     }
 }
 
-fn turn_jump(t: &TurnRow) -> Message {
-    use crate::model::EventsTurnPick;
-    let label = t.face_caption();
-    Message::EventsTurnPicked(EventsTurnPick {
-        turn_index: Some(t.turn_index),
-        label,
-    })
-}
-
 fn event_note(ev: &TimelineEvent) -> Message {
     Message::StartNote {
         turn: ev.turn_index.map(|n| n.to_string()).unwrap_or_default(),
@@ -1849,7 +1840,6 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
                 },
                 A11y::new("Turns", Role::List),
             )
-            .into()
         })
         .into()
     };
@@ -1917,7 +1907,6 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
             },
             A11y::new("Timeline", Role::List),
         )
-        .into()
     })
     .into();
     let more = crate::live::timeline_more_caption(
