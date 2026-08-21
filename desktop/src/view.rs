@@ -1707,11 +1707,6 @@ fn note_commands(id: &str, delete_armed: &str) -> Vec<icedtea::action::Action<Me
     ]
 }
 
-fn closed_turn_face(summary: &str, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
-    // ~2 lines at typical detail width; keeps closed-card height honest.
-    plain_face(summary, "No user prompt in this turn", 180, tea)
-}
-
 /// Closed-card preview only. Markdown parse/layout per visible row was the
 /// Turns/Timeline scroll tax; open bodies use selectable text when needed.
 fn prompt_face(summary: &str, tea: icedtea::theme::Tokens) -> Element<'static, Message> {
@@ -1834,27 +1829,27 @@ fn turns_tab(hud: &Hud) -> Element<'_, Message> {
             // List pane height, not window-minus-140.
             window.viewport = size.height.max(1.0);
             icedtea::widget::virtual_column(
-            heights,
-            window,
-            TURNS_OVERSCAN,
-            None,
-            Message::TurnScroll,
-            Some(hud.turn_scroll_id()),
-            tea,
-            move |i| {
-                let Some(&src) = idxs.get(i) else {
-                    return Space::new().height(0).into();
-                };
-                let Some(t) = turns.get(src) else {
-                    return Space::new().height(0).into();
-                };
-                let mark = turn_marks.get(&t.turn_index).cloned();
-                let selected = hud.turns_focus() == Some(t.turn_index);
-                turn_list_card(hud, t, mark, selected, tea)
-            },
-            A11y::new("Turns", Role::List),
-        )
-        .into()
+                heights,
+                window,
+                TURNS_OVERSCAN,
+                None,
+                Message::TurnScroll,
+                Some(hud.turn_scroll_id()),
+                tea,
+                move |i| {
+                    let Some(&src) = idxs.get(i) else {
+                        return Space::new().height(0).into();
+                    };
+                    let Some(t) = turns.get(src) else {
+                        return Space::new().height(0).into();
+                    };
+                    let mark = turn_marks.get(&t.turn_index).cloned();
+                    let selected = hud.turns_focus() == Some(t.turn_index);
+                    turn_list_card(hud, t, mark, selected, tea)
+                },
+                A11y::new("Turns", Role::List),
+            )
+            .into()
         })
         .into()
     };
@@ -1893,36 +1888,36 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
         let mut window = hud.timeline_window();
         window.viewport = size.height.max(1.0);
         icedtea::widget::virtual_column(
-        hud.timeline_heights(),
-        window,
-        TIMELINE_OVERSCAN,
-        None,
-        Message::TimelineScroll,
-        Some(hud.timeline_scroll_id()),
-        tea,
-        move |i| {
-            let Some(&src_i) = idxs.get(i) else {
-                return Space::new().height(0).into();
-            };
-            let Some(ev) = source.get(src_i) else {
-                return Space::new().height(0).into();
-            };
-            let ix = ev.index;
-            let mark = ev_marks.get(&ix).cloned();
-            let selected = hud.timeline_focus() == Some(ix);
-            let card = closed_list_card(
-                event_list_heading(ev, tea),
-                event_face(ev, tea),
-                card_marks_row(hud, mark),
-                Message::SelectTimeline(ix),
-                selected,
-                tea,
-            );
-            column![card, Space::new().height(crate::live::LIST_GAP)].into()
-        },
-        A11y::new("Timeline", Role::List),
-    )
-    .into()
+            hud.timeline_heights(),
+            window,
+            TIMELINE_OVERSCAN,
+            None,
+            Message::TimelineScroll,
+            Some(hud.timeline_scroll_id()),
+            tea,
+            move |i| {
+                let Some(&src_i) = idxs.get(i) else {
+                    return Space::new().height(0).into();
+                };
+                let Some(ev) = source.get(src_i) else {
+                    return Space::new().height(0).into();
+                };
+                let ix = ev.index;
+                let mark = ev_marks.get(&ix).cloned();
+                let selected = hud.timeline_focus() == Some(ix);
+                let card = closed_list_card(
+                    event_list_heading(ev, tea),
+                    event_face(ev, tea),
+                    card_marks_row(hud, mark),
+                    Message::SelectTimeline(ix),
+                    selected,
+                    tea,
+                );
+                column![card, Space::new().height(crate::live::LIST_GAP)].into()
+            },
+            A11y::new("Timeline", Role::List),
+        )
+        .into()
     })
     .into();
     let more = crate::live::timeline_more_caption(
@@ -3162,7 +3157,6 @@ mod tests {
         let _ = prompt_face("# heading\n\n**bold**", tea());
         let _ = prompt_face("plain sentence", tea());
         let _ = prompt_face("", tea());
-        let _ = closed_turn_face("user said hello", tea());
         let src = include_str!("view.rs");
         let prod = src.split("#[cfg(test)]").next().expect("prod");
         let face = prod
@@ -3629,7 +3623,7 @@ mod tests {
         assert!(!prod.contains("fn disclosure"));
         assert!(prod.contains("fn select_bound"));
         assert!(prod.contains("fn turn_list_card"));
-        assert!(prod.contains("fn closed_turn_face"));
+        assert!(prod.contains("fn turn_state_row"));
         assert!(prod.contains("Search events…"));
         assert!(prod.contains("Search turns"));
         assert!(!prod.contains("Session events"));
