@@ -10,46 +10,39 @@ is tagged.
 - HUD notes form uses a pick list for one-of schema fields (severity)
   and filter chips for many-select. Tab / Shift+Tab walk the text
   fields while composing; Ctrl+Tab or Ctrl+1–6 still change panes.
-- HUD uses icedtea 0.12.1 (`virtual_clip` keeps list pixel scroll in
-  the widget). Turns, Timeline, Overview lists, and the session picker
-  pick that up. Keyboard jumps use `scroll_to` on the named clip.
-- HUD uses icedtea 0.12.1: search, badges, tabs, selectable bodies,
 - HUD uses icedtea 0.13.0: search, badges, tabs, selectable bodies,
   Diff hunks, an F12 Look drawer, and `virtual_clip` pixel scroll on
   Turns, Timeline, Overview lists, Stats, and the session picker.
   Keyboard jumps use `scroll_to` on the named clip. A pixel wheel
   redraws in the clip; layout runs when the mounted range changes.
 - HUD Turns and Timeline closed rows use the same title-plus-badge
-  tile as Recent. Open event detail has the note command chips.
+  tile as Recent.
 - HUD growing lists scroll on icedtea `virtual_column` / `data_table`:
   Recent, closed Turns, closed Timeline, Overview Tasks / Workflows /
   Subagents, Overview Stats, Findings, Notes cards, and workflow-event
   agent children. One-document panes stay `themed_scroll`: open
   Timeline event body (Asked / Happened), Diff hunk, Overview Session.
 - Workflow inspect uses the same facts on TUI and HUD: Asked,
-  Happened, Failed, and an Agents list. Child status is `complete` or
-  `failed`. A child without a session directory is dim and does not
-  open.
-
+  Happened, Failed, and an Agents list. Child status is `complete`,
+  `failed`, `cancelled`, or `running`. A child without a session
+  directory is dim and does not open. Overview glance children include
+  the session path when it exists.
 - `session/overview` includes event-type and tool counts. HUD and TUI
   Stats read those fields for the whole session.
 - TUI Session glance puts status, model, Host or Eval, and duration on
   one badge row. Last-turn says `complete`.
-
 - HUD loading uses the same spinner overlay for the catalog, an opening
   session, Timeline, and Stats.
 - Serve watches membership directories and four session files with
   watchfiles. Workspace is not subscribed. An open session tails new
-  ``updates.jsonl`` bytes. The 15-second catalog warm loop and the HUD
-  3-second live list poll are gone.
+  ``updates.jsonl`` bytes. Catalog warms once at start. The HUD list
+  follows socket notifications.
 - Session Overview and Summary share Session, Tasks, Workflows,
   Subagents, and Stats tabs (click the strip). Session is the glance.
   Tasks is shells, monitors, and schedules. Timeline filter Background
   / Workflows. Summary and HUD rows jump to that bookend. Enter on a
   job bookend shows the host ``terminal/`` log (up to 50,000
   characters). A workflow child or subagent opens that session.
-  HUD Tasks, Workflows, and Subagents scroll as a virtual list.
-  Stats is an icedtea table (Kind, Name, Count).
 - Failed workflows and background jobs become Findings with
   paste-ready What/Where/Why/Should extras.
 - Timeline Filter and Turn stack. Flags and findings paint on the row.
@@ -73,7 +66,6 @@ is tagged.
 - Keyboard list jumps (`j` / `k`) pin the focused row from its height
   sum, not the last published window scroll, so a sub-row wheel does
   not snap the clip back to 0.
-
 - Summary and HUD Tasks open a schedule the same way as a job: Enter
   or a second click jumps to the Timeline bookend. A row with no
   bookend is dim and stays put.
@@ -88,10 +80,10 @@ is tagged.
   readable.
 - Control serve applies catalog watch on the serve loop, with disk
   work off that loop, so a live write does not stall RPC.
-- Filesystem watch does not install inotify on ``workspace/``,
-  ``images/``, or ``compaction/`` trees.
-- Filesystem watch ignores read open/close, so a catalog apply
-  does not retrigger itself.
+- Filesystem watch does not subscribe ``workspace/``, ``images/``, or
+  ``compaction/`` trees, and ignores read open/close so a catalog apply
+  does not retrigger itself. The list stays still when only
+  ``events.jsonl`` or ``workspace/`` files grow.
 - A catalog ``search_tool`` query is a search, not proof an MCP
   server was available.
 - Analysis-failed notices use the analysis job. Stale analysis is a
@@ -99,12 +91,7 @@ is tagged.
 - An older ``groket serve`` missing a method asks the operator to
   restart serve.
 - ``groket config validate`` rejects missing or invalid TOML.
-- Catalog watch leaves the list still when only ``events.jsonl`` or
-  ``workspace/`` files grow.
-- Filesystem watch ignores ``workspace/``, ``images/``, and
-  ``compaction/`` trees.
 - A monitor log inspect reads only the tail of a large file.
-- Session overview leaves workflow child paths for open, not glance.
 
 ### Chore
 
@@ -129,9 +116,9 @@ analysis plugins.
 - The same version appears on the terminal `?` heading, the desktop
   palette window and `?` sheet, and `groket-hud --version`.
 - One product version across the Python package, `groket-hud`, and
-  `groket-core`.
-- Every Actions run builds Linux, macOS, and Windows wheels plus a
-  source distribution (artifacts on the run).
+  `groket-scan`.
+- Pushes to `main`, version tags, and workflow dispatch build Linux,
+  macOS, and Windows wheels plus a source distribution.
 - A version tag or manual workflow dispatch uploads those files to
   TestPyPI.
 
@@ -167,7 +154,7 @@ analysis plugins.
 ### Desktop HUD
 
 - `groket hud` is the summonable session palette (Overview, Turns,
-  Timeline, Findings, Notes).
+  Timeline, Diff, Findings, Notes).
 - It runs `groket-hud` from `GROKET_HUD_BIN` or `PATH`; `--rebuild`
   cargo-builds this checkout.
 - Default hotkey is Cmd+Shift+G (macOS) / Ctrl+Shift+G (Windows and
