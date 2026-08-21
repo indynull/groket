@@ -376,10 +376,7 @@ pub fn plan_tick(input: TickInput<'_>) -> TickPlan {
         if note.method == "session/selected" {
             plan.fetch_list = true;
         }
-        if open
-            && note.method == "notes/changed"
-            && !input.notes_locked
-        {
+        if open && note.method == "notes/changed" && !input.notes_locked {
             plan.load_overview = true;
         }
     }
