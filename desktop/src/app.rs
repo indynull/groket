@@ -666,6 +666,15 @@ pub fn app_window_settings() -> window::Settings {
     desktop_prepared().window
 }
 
+fn scroll_window_unchanged(
+    prev: icedtea::collection::VisibleWindow,
+    next: icedtea::collection::VisibleWindow,
+) -> bool {
+    prev.start == next.start
+        && prev.end == next.end
+        && (prev.scroll - next.scroll).abs() <= f32::EPSILON
+}
+
 fn apply_clip_scroll(
     id: Id,
     window: &mut icedtea::collection::VisibleWindow,
@@ -1185,6 +1194,9 @@ impl Hud {
             Message::PopOutWindow => self.pop_out_window(),
             Message::Hotkey => self.on_hotkey(),
             Message::ListScroll(win) => {
+                if scroll_window_unchanged(self.list_window, win) {
+                    return Task::none();
+                }
                 self.list_window = win;
                 if self.query.trim().is_empty()
                     && should_page_recent(win.end, self.sessions().len())
@@ -1194,6 +1206,9 @@ impl Hud {
                 Task::none()
             }
             Message::TimelineScroll(win) => {
+                if scroll_window_unchanged(self.tl_window, win) {
+                    return Task::none();
+                }
                 self.tl_window = win;
                 if let Some(dest) = list_focus_after_scroll(
                     self.timeline_focus_pos(),
@@ -1222,6 +1237,9 @@ impl Hud {
                 Task::none()
             }
             Message::TurnScroll(win) => {
+                if scroll_window_unchanged(self.turn_window, win) {
+                    return Task::none();
+                }
                 let empty = self
                     .overview
                     .as_ref()
@@ -1235,6 +1253,9 @@ impl Hud {
                 Task::none()
             }
             Message::OverviewScroll(win) => {
+                if scroll_window_unchanged(self.overview_window, win) {
+                    return Task::none();
+                }
                 self.overview_window = if self.overview_list_count() == 0 {
                     icedtea::collection::VisibleWindow::new(win.viewport.max(1.0))
                 } else {
@@ -1251,6 +1272,9 @@ impl Hud {
                 self.scroll_overview_into_view()
             }
             Message::StatsScroll(win) => {
+                if scroll_window_unchanged(self.stats_window, win) {
+                    return Task::none();
+                }
                 self.stats_window = if self.stats_table.rows.is_empty() {
                     icedtea::collection::VisibleWindow::new(win.viewport.max(1.0))
                 } else {
@@ -7408,6 +7432,28 @@ mod tests {
         win.scroll += 4.0;
         let _ = hud.update(Message::TimelineScroll(win));
         assert_eq!(hud.timeline_focus(), kept);
+    }
+
+    #[test]
+    fn timeline_scroll_same_window_does_not_page() {
+        let mut hud = hud_with_session();
+        let events: Vec<Value> = (0..8).map(|i| ev_json(i, "e")).collect();
+        load_page(&mut hud, 40, false, true, events, 80, 40);
+        hud.timeline_loading = false;
+        hud.tl_window.scroll = 0.0;
+        hud.tl_window.start = 0;
+        hud.tl_window.end = 8;
+        let win = hud.tl_window;
+        assert!(should_load_previous_timeline(
+            win.scroll,
+            hud.timeline_offset,
+            hud.timeline_loading,
+        ));
+        let _ = hud.update(Message::TimelineScroll(win));
+        assert!(
+            !hud.timeline_loading,
+            "a parked-top republish must not start another page fetch"
+        );
     }
 
     #[test]
