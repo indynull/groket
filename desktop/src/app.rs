@@ -2153,12 +2153,7 @@ impl Hud {
             return Task::none();
         };
         let view_h = self.overview_window.viewport.max(1.0);
-        let y = list_scroll_to_cover(
-            &self.overview_heights,
-            pos,
-            self.overview_window.scroll,
-            view_h,
-        );
+        let y = list_scroll_to_top(&self.overview_heights, pos, view_h);
         apply_clip_scroll(
             self.overview_scroll_id.clone(),
             &mut self.overview_window,
@@ -3354,12 +3349,7 @@ impl Hud {
 
     fn ensure_active_visible(&mut self) -> Task<Message> {
         let view_h = self.list_window.viewport.max(80.0);
-        let y = list_scroll_to_cover(
-            &self.session_heights,
-            self.active,
-            self.list_window.scroll,
-            view_h,
-        );
+        let y = list_scroll_to_top(&self.session_heights, self.active, view_h);
         apply_clip_scroll(self.list_scroll_id.clone(), &mut self.list_window, y)
     }
 
@@ -3884,7 +3874,7 @@ impl Hud {
             return Task::none();
         };
         let view_h = self.tl_window.viewport.max(1.0);
-        let y = list_scroll_to_cover(&self.tl_heights, pos, self.tl_window.scroll, view_h);
+        let y = list_scroll_to_top(&self.tl_heights, pos, view_h);
         apply_clip_scroll(self.tl_scroll_id.clone(), &mut self.tl_window, y)
     }
 
@@ -5776,7 +5766,7 @@ impl Hud {
             return Task::none();
         };
         let view_h = self.turn_window.viewport.max(1.0);
-        let y = list_scroll_to_cover(&self.turn_heights, pos, self.turn_window.scroll, view_h);
+        let y = list_scroll_to_top(&self.turn_heights, pos, view_h);
         apply_clip_scroll(self.turn_scroll_id.clone(), &mut self.turn_window, y)
     }
 
@@ -7453,6 +7443,32 @@ mod tests {
         assert!(
             !hud.timeline_loading,
             "a parked-top republish must not start another page fetch"
+        );
+    }
+
+    #[test]
+    fn keyboard_jump_uses_row_top_not_stale_published_scroll() {
+        let mut hud = Hud {
+            tl_heights: vec![100.0; 8],
+            tl_filter: (0..8).collect(),
+            timeline: (0..8)
+                .map(|i| TimelineEvent {
+                    index: i as i64,
+                    ..TimelineEvent::default()
+                })
+                .collect(),
+            timeline_focus: Some(2),
+            ..Hud::default()
+        };
+        hud.tl_window.viewport = 400.0;
+        hud.tl_window.scroll = 0.0;
+        let want = list_scroll_to_top(&hud.tl_heights, 2, 400.0);
+        assert!(want > 0.0, "focused row top must be past the published 0");
+        let _ = hud.scroll_focus_into_view();
+        assert!(
+            (hud.tl_window.scroll - want).abs() < f32::EPSILON,
+            "clip offset must be the row top {want}, not published scroll 0, got {}",
+            hud.tl_window.scroll
         );
     }
 
