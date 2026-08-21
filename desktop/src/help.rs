@@ -563,6 +563,7 @@ mod tests {
             child_open: false,
             compact_child: false,
             turn_pick: false,
+            turn_locked: false,
             diff_pick: false,
             tab: Tab::Notes,
             leader_armed: false,

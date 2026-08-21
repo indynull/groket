@@ -24,10 +24,10 @@ use crate::format::{
 };
 use crate::kit;
 use crate::live::{
-    context_fraction, decode_many_choices, finding_severity_rank, finding_severity_title,
-    note_field_input_key, ordered_finding_indices, toggle_many_choice, CardMark, AGENT_OVERSCAN,
-    FINDING_OVERSCAN, NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN,
-    TURNS_OVERSCAN, WORKFLOW_INSPECT_H,
+    context_fraction, decode_many_choices, finding_severity_rank, note_field_input_key,
+    ordered_finding_indices, toggle_many_choice, CardMark, AGENT_OVERSCAN, FINDING_OVERSCAN,
+    NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN, TURNS_OVERSCAN,
+    WORKFLOW_INSPECT_H,
 };
 use crate::model::{DiffContext, KindFilter, OverviewSection, SchemaField, Tab};
 use crate::motion::PageLayer;
