@@ -621,7 +621,7 @@ class TestRenderEventDetail:
         assert "failedKickoff" not in plain.replace(" ", "")
         lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
         assert any(ln == "Kickoff" or " ·  Kickoff" in ln or ln.endswith("Kickoff") for ln in lines)
-        assert any(ln.startswith("ok") and "aik" in ln for ln in lines)
+        assert not any(ln.startswith("ok") and "aik" in ln for ln in lines)
         assert "fn gathering" not in plain
         assert "let meta" not in plain
         bare = plain_from_renderable(render_event_detail(ev), full=False)

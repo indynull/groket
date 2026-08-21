@@ -1487,8 +1487,12 @@ fn event_body<'a>(
             A11y::new("Content truncated by control", Role::Status),
         ));
     }
-    col.push(card_chips(hud, mark, Some(event_note(ev)), None))
-        .into()
+    let note = if ev.tool_name == "workflow" {
+        None
+    } else {
+        Some(event_note(ev))
+    };
+    col.push(card_chips(hud, mark, note, None)).into()
 }
 
 pub(crate) fn finding_jump(f: &FindingRow) -> Message {

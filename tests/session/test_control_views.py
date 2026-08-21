@@ -373,12 +373,8 @@ def test_overview_includes_workflows_without_script_or_journal_body(tmp_path: Pa
     assert "fn gathering" not in dumped
 
 
-def test_overview_does_not_resolve_workflow_child_paths(tmp_path: Path) -> None:
-    """Glance leaves child ids; open still finds the sibling directory."""
-    from unittest.mock import patch
-
-    from groket.session.subagents import resolve_child_session_path
-
+def test_overview_includes_workflow_child_session_path(tmp_path: Path) -> None:
+    """Glance children include the sibling session directory when it exists."""
     sd = tmp_path / "sess-wf-child"
     sd.mkdir()
     child = tmp_path / "ag-1"
@@ -409,23 +405,10 @@ def test_overview_does_not_resolve_workflow_child_paths(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    calls = 0
-    real = resolve_child_session_path
-
-    def counting(parent_dir: Path, child_session_id: str, **kwargs: object) -> object:
-        nonlocal calls
-        calls += 1
-        return real(parent_dir, child_session_id, **kwargs)
-
-    with patch("groket.session.subagents.resolve_child_session_path", side_effect=counting):
-        ov = build_session_overview(sd)
-    assert calls == 0
+    ov = build_session_overview(sd)
     kids = ov["workflows"][0]["children"]
     assert kids[0]["id"] == "ag-1"
-    assert "path" not in kids[0]
-    found = resolve_child_session_path(sd, "ag-1")
-    assert found is not None
-    assert found.resolve() == child.resolve()
+    assert kids[0]["path"] == str(child)
 
 
 def test_timeline_kind_workflows_keeps_workflow_tools(tmp_path: Path) -> None:

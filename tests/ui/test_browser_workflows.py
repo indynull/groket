@@ -318,6 +318,49 @@ async def test_workflow_child_without_session_stays_put(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_workflow_child_esc_returns_to_parent_browser(tmp_path: Path) -> None:
+    from .test_pilot_app_coverage import _make_app
+
+    app, _work, traces = _make_app(tmp_path, n_sessions=1)
+    parent = traces / "sess-000"
+    child = traces / "01aaa-aik"
+    child.mkdir()
+    (child / "summary.json").write_text(
+        json.dumps({"info": {"id": "01aaa-aik"}, "generated_title": "aik"}),
+        encoding="utf-8",
+    )
+    (child / "updates.jsonl").write_text("{}\n", encoding="utf-8")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_until(pilot, lambda: len(app._meta_only) >= 1, description="sessions loaded")
+        app.open_session_path(parent)
+        await wait_until(
+            pilot,
+            lambda: sum(1 for s in app.screen_stack if isinstance(s, BrowserScreen)) == 1,
+            description="parent browser",
+        )
+        parent_screen = next(s for s in app.screen_stack if isinstance(s, BrowserScreen))
+        app.open_session_path(child)
+        await wait_until(
+            pilot,
+            lambda: sum(1 for s in app.screen_stack if isinstance(s, BrowserScreen)) == 2,
+            description="child browser pushed",
+        )
+        top = app.screen
+        assert isinstance(top, BrowserScreen)
+        assert top.session_dir == child
+        for _ in range(3):
+            if app.screen is parent_screen:
+                break
+            await pilot.press("escape")
+        await wait_until(
+            pilot,
+            lambda: app.screen is parent_screen,
+            description="Esc pops to parent browser",
+        )
+        assert parent_screen.session_dir == parent
+
+
+@pytest.mark.asyncio
 async def test_workflow_summary_uses_product_status_words(tmp_path: Path) -> None:
     sd = _write_workflow_session(tmp_path, include_result=True)
     _write_run(sd, "wf_sprint8", name="sprint-8", status="failed")
