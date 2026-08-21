@@ -56,6 +56,24 @@ pub fn is_terminal_status(status: &str) -> bool {
 }
 
 /// Same short labels as :meth:`SessionMeta.list_status_label`.
+/// Workflow run Happened word. Failed stays ``failed`` (not session
+/// ``cancelled``).
+pub fn workflow_status_word(status: &str) -> String {
+    match status
+        .trim()
+        .to_ascii_lowercase()
+        .replace(char::is_whitespace, "_")
+        .as_str()
+    {
+        "completed" | "complete" | "success" | "ok" | "done" => "complete".into(),
+        "failed" | "error" | "failure" | "timeout" => "failed".into(),
+        "cancelled" | "canceled" | "interrupted" | "aborted" => "cancelled".into(),
+        "running" | "in_progress" | "pending" => "running".into(),
+        "" => "running".into(),
+        other => other.to_string(),
+    }
+}
+
 pub fn list_status_label(status: &str, outcome: &str) -> String {
     let raw = if !is_blank_status(status) {
         status.trim().to_string()
@@ -2519,6 +2537,18 @@ mod tests {
         assert!(is_terminal_status("cancelled"));
         assert!(!is_terminal_status("running"));
         assert!(!is_terminal_status("incomplete"));
+    }
+
+    #[test]
+    fn workflow_status_word_keeps_failed() {
+        assert_eq!(workflow_status_word("failed"), "failed");
+        assert_eq!(workflow_status_word("completed"), "complete");
+        assert_eq!(workflow_status_word("interrupted"), "cancelled");
+        assert_eq!(workflow_status_word("running"), "running");
+        assert_ne!(
+            workflow_status_word("failed"),
+            list_status_label("failed", "")
+        );
     }
 
     #[test]

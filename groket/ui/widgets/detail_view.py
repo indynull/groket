@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.message import Message
@@ -158,9 +159,19 @@ class DetailView(VerticalScroll):
             table.display = False
             return
         table.display = True
+        parent = self.session_dir
         for i, child in enumerate(kids):
+            openable = child.session_path(parent) is not None
+            label = child.label or child.agent_id
             mark = t("status-complete") if child.success else t("ui-status-failed")
-            table.add_row(child.label or child.agent_id, mark, key=f"wfchild-{i}")
+            if openable:
+                table.add_row(label, mark, key=f"wfchild-{i}")
+            else:
+                table.add_row(
+                    Text(label, style="dim"),
+                    Text(mark, style="dim"),
+                    key=f"wfchild-{i}",
+                )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id != "workflow-children-table":
@@ -175,7 +186,10 @@ class DetailView(VerticalScroll):
         run = self._workflow
         if run is None or not (0 <= idx < len(run.children)):
             return
-        self.post_message(self.ChildActivated(run.children[idx]))
+        child = run.children[idx]
+        if child.session_path(self.session_dir) is None:
+            return
+        self.post_message(self.ChildActivated(child))
 
     def clear_detail(self) -> None:
         self._current_event = None

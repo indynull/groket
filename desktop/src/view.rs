@@ -19,7 +19,8 @@ use crate::format::{
     schedule_last_fire, session_duration_chip, status_tone, subagent_inspect_blocks,
     subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output, timeline_body_text,
     timeline_count_caption, timeline_query_hit, tool_brand_role, tool_fields_from_raw,
-    workflow_for_event, workflow_name_from_raw, BodyPaint, BrandRole, ToolField,
+    workflow_for_event, workflow_name_from_raw, workflow_status_word, BodyPaint, BrandRole,
+    ToolField,
 };
 use crate::kit;
 use crate::live::{
@@ -2529,7 +2530,7 @@ fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a
             icedtea::typo::FontFace::Ui,
         ));
     }
-    let mut happen_bits = vec![list_status_label(&run.status, &run.status)];
+    let mut happen_bits = vec![workflow_status_word(&run.status)];
     if !run.phase.is_empty() {
         happen_bits.push(run.phase.clone());
     }
@@ -2599,41 +2600,46 @@ fn workflow_child_list<'a>(hud: &'a Hud, children: &'a [WorkflowChildRow]) -> El
             let Some(child) = children.get(i) else {
                 return Space::new().height(0).into();
             };
-            let mark = if child.success { "ok" } else { "fail" };
+            let mark = if child.success { "complete" } else { "failed" };
             let title = if child.label.is_empty() {
                 child.id.clone()
             } else {
                 child.label.clone()
             };
+            let openable = !child.path.is_empty();
+            let ink = if openable { tea.text } else { tea.muted };
             let badges = row![status_chip(
                 mark,
-                if child.success {
-                    "complete"
-                } else {
-                    "cancelled"
-                },
+                if child.success { "complete" } else { "error" },
                 tea
             )]
             .spacing(8)
             .align_y(Alignment::Center);
-            let sid = if child.session_id.is_empty() {
-                child.id.clone()
+            let title_el = text(title)
+                .size(tea.body())
+                .font(typo::UI)
+                .color(ink)
+                .width(Length::Fill);
+            let body = column![title_el, badges].spacing(4).width(Length::Fill);
+            let card = container(body)
+                .padding(tea.density.inset())
+                .width(Length::Fill)
+                .style(move |_| icedtea::style::card(tea, false));
+            let row: Element<'static, Message> = if openable {
+                mouse_area(card)
+                    .on_press(Message::OpenChild {
+                        path: child.path.clone(),
+                        sid: if child.session_id.is_empty() {
+                            child.id.clone()
+                        } else {
+                            child.session_id.clone()
+                        },
+                    })
+                    .into()
             } else {
-                child.session_id.clone()
+                card.into()
             };
-            let open = if sid.is_empty() {
-                Message::Noop
-            } else {
-                Message::OpenChild {
-                    path: child.path.clone(),
-                    sid,
-                }
-            };
-            column![
-                closed_list_card(title, badges.into(), open, false, tea),
-                Space::new().height(crate::live::LIST_GAP),
-            ]
-            .into()
+            column![row, Space::new().height(crate::live::LIST_GAP)].into()
         },
         A11y::new("Agents", Role::List),
     )
@@ -3685,7 +3691,11 @@ mod tests {
             .expect("child list");
         assert!(wf_kids.contains("virtual_column"));
         assert!(wf_kids.contains("OpenChild"));
+        assert!(wf_kids.contains("\"complete\""));
+        assert!(wf_kids.contains("\"failed\""));
+        assert!(!wf_kids.contains("\"ok\""));
         assert!(!wf_kids.contains("select_bound"));
+        assert!(wf_kids.contains("openable"));
         let job_card = prod
             .split("fn job_event_inspect")
             .nth(1)
@@ -3857,5 +3867,12 @@ mod tests {
         };
         let kids = [child];
         let _ = workflow_child_list(&hud, &kids);
+        let closed = WorkflowChildRow {
+            id: "ag-2".into(),
+            label: "ghost".into(),
+            success: false,
+            ..WorkflowChildRow::default()
+        };
+        let _ = workflow_child_list(&hud, &[closed]);
     }
 }

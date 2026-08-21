@@ -292,3 +292,26 @@ async def test_workflow_child_row_opens_child_session(tmp_path: Path) -> None:
         await wait_until(pilot, lambda: kids.row_count >= 1, description="child rows")
         kids.post_message(DataTable.RowSelected(kids, cursor_row=0, row_key=RowKey("wfchild-0")))
         await wait_until(pilot, lambda: app.opened == child, description="opened workflow child")
+
+
+@pytest.mark.asyncio
+async def test_workflow_child_without_session_stays_put(tmp_path: Path) -> None:
+    sd = _write_workflow_session(tmp_path, include_result=True)
+    _write_run(
+        sd,
+        "wf_sprint8",
+        name="sprint-8",
+        agents=[{"agent_id": "01aaa-missing", "label": "ghost", "state": "done"}],
+    )
+    app = _Host(sd)
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = app.query_one(BrowserScreen)
+        await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        screen._stop_live_refresh()
+        await _click_first_workflow(pilot, screen)
+        kids = screen.query_one("#workflow-children-table", DataTable)
+        await wait_until(pilot, lambda: kids.row_count >= 1, description="child rows")
+        assert "complete" in str(kids.get_row_at(0))
+        kids.post_message(DataTable.RowSelected(kids, cursor_row=0, row_key=RowKey("wfchild-0")))
+        await wait_until(pilot, lambda: True, description="row selected")
+        assert app.opened is None

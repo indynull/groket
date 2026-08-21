@@ -22,6 +22,20 @@ _MAX_CHILDREN = 24
 _NAME_IN_SCRIPT = re.compile(r"name:\s*\"([^\"]+)\"")
 
 
+def workflow_status_word(status: str) -> str:
+    """Product face for a workflow run status."""
+    key = (status or "").strip().lower().replace(" ", "_")
+    if key in {"completed", "complete", "success", "ok", "done"}:
+        return "complete"
+    if key in {"failed", "error", "failure", "timeout"}:
+        return "failed"
+    if key in {"cancelled", "canceled", "interrupted", "aborted"}:
+        return "cancelled"
+    if key in {"running", "in_progress", "pending"}:
+        return "running"
+    return (status or "").strip() or "running"
+
+
 @dataclass(frozen=True)
 class WorkflowChild:
     """One child agent from ``state.agents`` or a journal spawn line."""
@@ -29,6 +43,21 @@ class WorkflowChild:
     agent_id: str
     label: str
     success: bool
+    child_path: Path | None = None
+
+    def status_word(self) -> str:
+        """Inspect face: ``complete`` or ``failed``."""
+        return "complete" if self.success else "failed"
+
+    def session_path(self, parent_dir: Path | None) -> Path | None:
+        """Child session directory when it exists on disk."""
+        if self.child_path is not None:
+            return self.child_path
+        if parent_dir is None:
+            return None
+        from .subagents import resolve_child_session_path
+
+        return resolve_child_session_path(parent_dir, self.agent_id)
 
     @classmethod
     def from_state(cls, raw: JsonValue) -> list[WorkflowChild]:
@@ -66,11 +95,13 @@ class WorkflowChild:
             agent_id = json_as_str(row.get("id")).strip()
             if not agent_id:
                 continue
+            raw_path = json_as_str(row.get("path")).strip()
             out.append(
                 cls(
                     agent_id=agent_id,
                     label=json_as_str(row.get("label")).strip() or agent_id,
                     success=row.get("success") is True,
+                    child_path=Path(raw_path) if raw_path else None,
                 )
             )
         return out
@@ -135,6 +166,10 @@ class WorkflowRun:
     elapsed_ms: int | None
     pause_message: str
     children: list[WorkflowChild]
+
+    def status_word(self) -> str:
+        """Inspect Happened word: complete / failed / cancelled / running."""
+        return workflow_status_word(self.status)
 
     @staticmethod
     def optional_int(value: JsonValue) -> int | None:

@@ -24,6 +24,10 @@ is tagged.
   Subagents, Overview Stats, Findings, Notes cards, and workflow-event
   agent children. One-document panes stay `themed_scroll`: open
   Timeline event body (Asked / Happened), Diff hunk, Overview Session.
+- Workflow inspect uses the same facts on TUI and HUD: Asked,
+  Happened, Failed, and an Agents list. Child status is `complete` or
+  `failed`. A child without a session directory is dim and does not
+  open.
 
 - `session/overview` includes event-type and tool counts. HUD and TUI
   Stats read those fields for the whole session.
