@@ -24,13 +24,14 @@ use crate::format::{
 use crate::kit;
 use crate::live::{
     context_fraction, decode_many_choices, finding_severity_rank, finding_severity_title,
-    note_field_input_key, toggle_many_choice, CardMark, NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN,
-    STATS_ROW_H, TIMELINE_OVERSCAN, TURNS_OVERSCAN,
+    note_field_input_key, ordered_finding_indices, toggle_many_choice, CardMark, AGENT_OVERSCAN,
+    FINDING_OVERSCAN, NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN,
+    TURNS_OVERSCAN, WORKFLOW_INSPECT_H,
 };
 use crate::model::{DiffContext, KindFilter, OverviewSection, SchemaField, Tab};
 use crate::motion::PageLayer;
 use crate::typo;
-use crate::wire::{FindingRow, NoteRow, TimelineEvent, TurnRow};
+use crate::wire::{FindingRow, NoteRow, TimelineEvent, TurnRow, WorkflowChildRow};
 
 fn rule(tea: icedtea::theme::Tokens) -> Element<'static, Message> {
     icedtea::widget::rule_h(tea, A11y::new("rule", Role::Separator))
@@ -720,6 +721,26 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
     {
         stack = stack.push(page_body(
             container(overview_tab(hud))
+                .padding([tea.density.gap(), tea.density.inset()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            hud,
+            tea,
+        ));
+    } else if hud.tab() == Tab::Findings && hud.overview().is_some() {
+        stack = stack.push(page_body(
+            container(findings_tab(hud))
+                .padding([tea.density.gap(), tea.density.inset()])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            hud,
+            tea,
+        ));
+    } else if hud.tab() == Tab::Notes && hud.overview().is_some() {
+        stack = stack.push(page_body(
+            container(notes_tab(hud))
                 .padding([tea.density.gap(), tea.density.inset()])
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -1767,7 +1788,7 @@ fn timeline_tab(hud: &Hud) -> Element<'_, Message> {
 /// Full-area event body (click a list row; Esc returns to the list at this event).
 ///
 /// Chrome (title + adjacent cards) stays **above** the scroll pane.
-fn event_detail_pane(hud: &Hud, ix: i64) -> Element<'_, Message> {
+pub(crate) fn event_detail_pane(hud: &Hud, ix: i64) -> Element<'_, Message> {
     let tea = hud.body_tokens();
     let Some(ev) = hud.timeline_events().iter().find(|e| e.index == ix) else {
         return column![event_detail_chrome(hud, ix, None, tea), busy_pane(),]
@@ -1777,6 +1798,37 @@ fn event_detail_pane(hud: &Hud, ix: i64) -> Element<'_, Message> {
     };
     let (_, ev_marks) = hud.card_marks();
     let mark = ev_marks.get(&ix).cloned();
+    let children = hud.open_workflow_children();
+    if ev.tool_name == "workflow" && !children.is_empty() {
+        let inspect = icedtea::widget::themed_scroll(
+            container(event_body(hud, ev, mark))
+                .width(Length::Fill)
+                .padding(Padding {
+                    top: 0.0,
+                    right: icedtea::chrome::SCROLL_RAIL_WIDTH,
+                    bottom: 8.0,
+                    left: 0.0,
+                })
+                .into(),
+            tea,
+            A11y::new(format!("Event {ix}"), Role::Group),
+            false,
+            None,
+            None::<fn(f32) -> Message>,
+        );
+        return column![
+            event_detail_chrome(hud, ix, Some(ev), tea),
+            container(inspect)
+                .width(Length::Fill)
+                .height(Length::Fixed(WORKFLOW_INSPECT_H)),
+            container(workflow_child_list(hud, children))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .spacing(10)
+        .height(Length::Fill)
+        .into();
+    }
     let scroll = icedtea::widget::themed_scroll(
         container(event_body(hud, ev, mark))
             .width(Length::Fill)
@@ -2049,26 +2101,23 @@ fn findings_tab(hud: &Hud) -> Element<'_, Message> {
         let (title, hint) = findings_empty_copy();
         return kit::status_empty(title, hint, tea);
     }
-    let mut buckets: [Vec<&FindingRow>; 4] = [vec![], vec![], vec![], vec![]];
-    for f in findings {
-        let r = finding_severity_rank(&f.severity) as usize;
-        buckets[r.min(3)].push(f);
-    }
-    let mut col = column![status_chip(format!("{} findings", findings.len()), "", tea,)].spacing(8);
-    for (rank, group) in buckets.iter().enumerate() {
-        if group.is_empty() {
-            continue;
-        }
-        let title = finding_severity_title(rank as u8);
-        col = col.push(
-            row![
-                status_chip(title, severity_tone(title), tea),
-                status_chip(format!("{}", group.len()), "", tea),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        );
-        for f in group {
+    let order = ordered_finding_indices(findings);
+    let header = status_chip(format!("{} findings", findings.len()), "", tea);
+    let list = icedtea::widget::virtual_column(
+        hud.finding_heights(),
+        hud.finding_window(),
+        FINDING_OVERSCAN,
+        None,
+        Message::FindingScroll,
+        Some(hud.finding_scroll_id()),
+        tea,
+        move |i| {
+            let Some(&src) = order.get(i) else {
+                return Space::new().height(0).into();
+            };
+            let Some(f) = findings.get(src) else {
+                return Space::new().height(0).into();
+            };
             let id = finding_key(f);
             let open = hud.finding_expanded(&id);
             let progress = hud.finding_expand_progress(&id);
@@ -2087,23 +2136,28 @@ fn findings_tab(hud: &Hud) -> Element<'_, Message> {
                 .spacing(6)
                 .into()
             };
-            col = col.push(expand_card(
-                title,
-                child,
-                open,
-                progress,
-                {
-                    let id = id.clone();
-                    move |next| Message::FindingExpand {
-                        id: id.clone(),
-                        open: next,
-                    }
-                },
-                tea,
-            ));
-        }
-    }
-    col.into()
+            column![
+                expand_card(
+                    title,
+                    child,
+                    open,
+                    progress,
+                    {
+                        let id = id.clone();
+                        move |next| Message::FindingExpand {
+                            id: id.clone(),
+                            open: next,
+                        }
+                    },
+                    tea,
+                ),
+                Space::new().height(crate::live::LIST_GAP),
+            ]
+            .into()
+        },
+        A11y::new("Findings", Role::List),
+    );
+    column![header, list].spacing(8).height(Length::Fill).into()
 }
 
 fn finding_key(f: &FindingRow) -> String {
@@ -2328,7 +2382,7 @@ fn notes_tab(hud: &Hud) -> Element<'_, Message> {
             hud.tokens(),
         ));
     }
-    let mut col = column![form, note_chrome].spacing(12);
+    let mut col = column![form, note_chrome].spacing(12).height(Length::Fill);
     if notes.is_empty() {
         col = col.push(icedtea::widget::meta(
             "No notes yet.",
@@ -2336,36 +2390,54 @@ fn notes_tab(hud: &Hud) -> Element<'_, Message> {
             A11y::new("No notes yet.", Role::Status),
         ));
     } else {
-        for n in notes {
-            let id = n.id.clone();
-            let (title, body, extras) = note_fields_view(&n.fields);
-            let heading = if title.is_empty() {
-                "Empty note".into()
-            } else {
-                title
-            };
-            let open = hud.note_expanded(&id);
-            let progress = hud.note_expand_progress(&id);
-            let child = if open || progress > 0.0 {
-                note_body(hud, n, &body, extras)
-            } else {
-                prompt_face(&body, hud.tokens())
-            };
-            col = col.push(expand_card(
-                heading,
-                child,
-                open,
-                progress,
-                {
-                    let id = id.clone();
-                    move |next| Message::NoteExpand {
-                        id: id.clone(),
-                        open: next,
-                    }
-                },
-                hud.tokens(),
-            ));
-        }
+        let list = icedtea::widget::virtual_column(
+            hud.note_heights(),
+            hud.note_window(),
+            FINDING_OVERSCAN,
+            None,
+            Message::NoteScroll,
+            Some(hud.note_scroll_id()),
+            tea,
+            move |i| {
+                let Some(n) = notes.get(i) else {
+                    return Space::new().height(0).into();
+                };
+                let id = n.id.clone();
+                let (title, body, extras) = note_fields_view(&n.fields);
+                let heading = if title.is_empty() {
+                    "Empty note".into()
+                } else {
+                    title
+                };
+                let open = hud.note_expanded(&id);
+                let progress = hud.note_expand_progress(&id);
+                let child = if open || progress > 0.0 {
+                    note_body(hud, n, &body, extras)
+                } else {
+                    prompt_face(&body, hud.tokens())
+                };
+                column![
+                    expand_card(
+                        heading,
+                        child,
+                        open,
+                        progress,
+                        {
+                            let id = id.clone();
+                            move |next| Message::NoteExpand {
+                                id: id.clone(),
+                                open: next,
+                            }
+                        },
+                        hud.tokens(),
+                    ),
+                    Space::new().height(crate::live::LIST_GAP),
+                ]
+                .into()
+            },
+            A11y::new("Notes", Role::List),
+        );
+        col = col.push(list);
     }
     col.into()
 }
@@ -2509,43 +2581,62 @@ fn workflow_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a
             icedtea::typo::FontFace::Ui,
         ));
     }
-    if !run.children.is_empty() {
-        col = col.push(icedtea::widget::meta(
-            "Agents",
-            tok,
-            A11y::new("Agents", Role::Header),
-        ));
-        for (i, child) in run.children.iter().enumerate() {
-            let mark = if child.success { "ok" } else { "fail" };
-            let label = if child.label.is_empty() {
-                child.id.as_str()
-            } else {
-                child.label.as_str()
+    col.into()
+}
+
+fn workflow_child_list<'a>(hud: &'a Hud, children: &'a [WorkflowChildRow]) -> Element<'a, Message> {
+    let tea = hud.body_tokens();
+    let heights = hud.wf_child_heights();
+    icedtea::widget::virtual_column(
+        heights,
+        hud.wf_child_window(),
+        AGENT_OVERSCAN,
+        None,
+        Message::WorkflowChildScroll,
+        Some(hud.wf_child_scroll_id()),
+        tea,
+        move |i| {
+            let Some(child) = children.get(i) else {
+                return Space::new().height(0).into();
             };
-            let line = format!("{mark}  {label}");
-            let body = select_bound(
-                hud,
-                format!("event.{}.wf.child.{i}", ev.index),
-                &line,
-                tok,
-                icedtea::typo::FontFace::Ui,
-            );
+            let mark = if child.success { "ok" } else { "fail" };
+            let title = if child.label.is_empty() {
+                child.id.clone()
+            } else {
+                child.label.clone()
+            };
+            let badges = row![status_chip(
+                mark,
+                if child.success {
+                    "complete"
+                } else {
+                    "cancelled"
+                },
+                tea
+            )]
+            .spacing(8)
+            .align_y(Alignment::Center);
             let sid = if child.session_id.is_empty() {
                 child.id.clone()
             } else {
                 child.session_id.clone()
             };
-            if !sid.is_empty() {
-                col = col.push(mouse_area(body).on_press(Message::OpenChild {
+            let open = if sid.is_empty() {
+                Message::Noop
+            } else {
+                Message::OpenChild {
                     path: child.path.clone(),
                     sid,
-                }));
-            } else {
-                col = col.push(body);
-            }
-        }
-    }
-    col.into()
+                }
+            };
+            column![
+                closed_list_card(title, badges.into(), open, false, tea),
+                Space::new().height(crate::live::LIST_GAP),
+            ]
+            .into()
+        },
+        A11y::new("Agents", Role::List),
+    )
 }
 
 fn job_event_inspect<'a>(hud: &'a Hud, ev: &'a TimelineEvent) -> Element<'a, Message> {
@@ -3577,15 +3668,24 @@ mod tests {
             .split("fn workflow_event_inspect")
             .nth(1)
             .expect("workflow_event_inspect")
-            .split("fn job_event_inspect")
+            .split("fn workflow_child_list")
             .next()
             .expect("workflow card");
-        assert!(wf_card.contains("wf.child"));
         assert!(wf_card.contains("Asked"));
         assert!(wf_card.contains("Happened"));
         assert!(wf_card.contains("Failed"));
         assert!(wf_card.contains("select_bound"));
-        assert!(wf_card.contains("OpenChild"));
+        assert!(!wf_card.contains("virtual_column"));
+        let wf_kids = prod
+            .split("fn workflow_child_list")
+            .nth(1)
+            .expect("workflow_child_list")
+            .split("fn job_event_inspect")
+            .next()
+            .expect("child list");
+        assert!(wf_kids.contains("virtual_column"));
+        assert!(wf_kids.contains("OpenChild"));
+        assert!(!wf_kids.contains("select_bound"));
         let job_card = prod
             .split("fn job_event_inspect")
             .nth(1)
@@ -3653,12 +3753,109 @@ mod tests {
             "empty Findings uses the one-line empty state"
         );
         assert!(
-            !body
-                .split("let mut buckets")
-                .next()
-                .unwrap_or(body)
-                .contains("status_page"),
+            !body.contains("status_page"),
             "empty Findings is not a blank status_page"
         );
+        assert!(
+            body.contains("widget::virtual_column"),
+            "Findings cards scroll on virtual_column"
+        );
+    }
+
+    #[test]
+    fn workflow_child_rows_use_virtual_column() {
+        let src = include_str!("view.rs");
+        let prod = src.split("#[cfg(test)]").next().expect("prod");
+        assert!(prod.contains("fn workflow_child_list"));
+        let kids = prod
+            .split("fn workflow_child_list")
+            .nth(1)
+            .expect("list")
+            .split("fn job_event_inspect")
+            .next()
+            .expect("body");
+        assert!(kids.contains("icedtea::widget::virtual_column"));
+        assert!(!kids.contains("themed_scroll"));
+        assert!(!kids.contains("select_bound"));
+        let pane = prod
+            .split("fn event_detail_pane")
+            .nth(1)
+            .expect("detail")
+            .split("fn event_detail_chrome")
+            .next()
+            .expect("pane");
+        assert!(pane.contains("workflow_child_list"));
+        assert!(pane.contains("open_workflow_children"));
+        assert!(
+            pane.contains("event_body("),
+            "workflow-with-children keeps event_body chrome"
+        );
+        assert!(
+            pane.contains("WORKFLOW_INSPECT_H"),
+            "inspect scroll is capped so Agents get Fill"
+        );
+        assert!(pane.contains("Length::Fixed(WORKFLOW_INSPECT_H)"));
+        assert!(pane.contains(".height(Length::Fill)"));
+        let body = prod
+            .split("fn event_body")
+            .nth(1)
+            .expect("event_body")
+            .split("fn finding_jump")
+            .next()
+            .expect("event_body slice");
+        assert!(body.contains("timeline_query_hit"));
+        assert!(body.contains("content_truncated"));
+        assert!(body.contains("card_chips"));
+        assert!(body.contains("event_note"));
+    }
+
+    #[test]
+    fn event_body_paints_search_hit_truncated_bar_and_note_chips() {
+        let hud = Hud::default();
+        let ev = TimelineEvent {
+            index: 4,
+            tool_name: "workflow".into(),
+            preview: "the needle is here".into(),
+            content: "the needle is here".into(),
+            content_truncated: true,
+            ..TimelineEvent::default()
+        };
+        let _ = event_body(&hud, &ev, None);
+        assert!(ev.content_truncated);
+        assert!(crate::format::timeline_query_hit(&ev, "needle").is_some());
+        let src = include_str!("view.rs");
+        let body = src
+            .split("fn event_body")
+            .nth(1)
+            .expect("event_body")
+            .split("fn finding_jump")
+            .next()
+            .expect("body");
+        assert!(body.contains("timeline_query_hit"));
+        assert!(body.contains("content_truncated"));
+        assert!(body.contains("card_chips"));
+        assert!(body.contains("event_note"));
+    }
+
+    #[test]
+    fn notes_tab_virtualizes_cards() {
+        let src = include_str!("view.rs");
+        let body = src.split("fn notes_tab").nth(1).unwrap_or("");
+        assert!(body.contains("widget::virtual_column"));
+        assert!(body.contains("Message::NoteScroll"));
+    }
+
+    #[test]
+    fn workflow_child_list_builds_from_hud() {
+        let hud = Hud::default();
+        let child = WorkflowChildRow {
+            id: "ag-1".into(),
+            label: "research".into(),
+            success: true,
+            session_id: "child-1".into(),
+            path: "/tmp/child".into(),
+        };
+        let kids = [child];
+        let _ = workflow_child_list(&hud, &kids);
     }
 }

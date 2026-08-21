@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{KindFilter, SchemaField, SessionRow};
-use crate::wire::{Overview, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
+use crate::wire::{FindingRow, Overview, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
 
 pub const LIVE_POLL_MS: u64 = 3000;
 pub const IDLE_POLL_MS: u64 = 15_000;
@@ -41,6 +41,16 @@ pub const OVERVIEW_LIST_ROW_H: f32 = 80.0;
 pub const OVERVIEW_LIST_OVERSCAN: usize = 1;
 /// icedtea ``data_table`` body row on Overview Stats.
 pub const STATS_ROW_H: f32 = 32.0;
+/// Workflow-event agent/result child tile + gap.
+pub const AGENT_ROW_H: f32 = 80.0;
+/// Extra mounted workflow-child cards beyond the viewport.
+pub const AGENT_OVERSCAN: usize = 1;
+/// Cap on the open-workflow inspect scroll so the Agents clip gets Fill.
+pub const WORKFLOW_INSPECT_H: f32 = 200.0;
+/// Closed Findings / Notes expander tile + gap.
+pub const FINDING_ROW_H: f32 = 80.0;
+/// Extra mounted Findings / Notes cards beyond the viewport.
+pub const FINDING_OVERSCAN: usize = 1;
 /// Spotlight idle list: latest sessions by ``sort_epoch`` (not the full catalog).
 pub const SPOTLIGHT_RECENT: usize = 8;
 
@@ -164,6 +174,24 @@ pub fn session_card_height(title: &str, meta: &str, has_ctx: bool) -> f32 {
         h += 5.0;
     }
     h + LIST_CARD_GAP
+}
+
+/// Closed Findings tile, plus body lines when the expander is open.
+pub fn finding_card_height(detail: &str, open: bool) -> f32 {
+    expand_card_height(detail, open)
+}
+
+/// Closed Notes tile, plus body lines when the expander is open.
+pub fn note_card_height(body: &str, open: bool) -> f32 {
+    expand_card_height(body, open)
+}
+
+fn expand_card_height(body: &str, open: bool) -> f32 {
+    let mut h = FINDING_ROW_H;
+    if open {
+        h += 8.0 + wrap_line_count(body, 72) as f32 * 18.0 + 28.0;
+    }
+    h
 }
 
 /// Scroll so ``active`` stays in the viewport. Offsets are height sums
@@ -639,6 +667,13 @@ pub fn context_fraction(pct: Option<f64>, compact: &str) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Findings list order: severity rank (same as the old bucket walk).
+pub fn ordered_finding_indices(findings: &[FindingRow]) -> Vec<usize> {
+    let mut idxs: Vec<usize> = (0..findings.len()).collect();
+    idxs.sort_by_key(|&i| finding_severity_rank(&findings[i].severity));
+    idxs
+}
+
 /// Severity bucket for findings (0 = highest).
 pub fn finding_severity_rank(sev: &str) -> u8 {
     match sev.to_ascii_lowercase().as_str() {
@@ -1030,7 +1065,7 @@ pub fn patch_list_row_from_meta(rows: &mut [SessionRow], session_id: &str, meta:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
+    use crate::wire::{FindingRow, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
 
     fn ev(index: i64, kind: &str, content: &str) -> TimelineEvent {
         TimelineEvent {
@@ -1484,6 +1519,34 @@ mod tests {
         assert!(short >= 50.0, "{short}");
         assert!(long > short + 10.0, "short={short} long={long}");
         assert!(short >= LIST_CARD_GAP, "card heights include LIST_CARD_GAP");
+    }
+
+    #[test]
+    fn finding_card_grows_when_open() {
+        let closed = finding_card_height("short", false);
+        let open = finding_card_height("short", true);
+        assert!(closed >= FINDING_ROW_H);
+        assert!(open > closed);
+        let long = finding_card_height(&"line\n".repeat(20), true);
+        assert!(long > open);
+    }
+
+    #[test]
+    fn ordered_findings_sort_by_severity() {
+        let rows = vec![
+            FindingRow {
+                title: "low".into(),
+                severity: "low".into(),
+                ..FindingRow::default()
+            },
+            FindingRow {
+                title: "high".into(),
+                severity: "high".into(),
+                ..FindingRow::default()
+            },
+        ];
+        let order = ordered_finding_indices(&rows);
+        assert_eq!(order, vec![1, 0]);
     }
 
     #[test]

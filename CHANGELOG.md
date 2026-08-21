@@ -19,6 +19,11 @@ is tagged.
   jumps use `scroll_to` on the named clip.
 - HUD Turns and Timeline closed rows use the same title-plus-badge
   tile as Recent. Open event detail has the note command chips.
+- HUD growing lists scroll on icedtea `virtual_column` / `data_table`:
+  Recent, closed Turns, closed Timeline, Overview Tasks / Workflows /
+  Subagents, Overview Stats, Findings, Notes cards, and workflow-event
+  agent children. One-document panes stay `themed_scroll`: open
+  Timeline event body (Asked / Happened), Diff hunk, Overview Session.
 
 - `session/overview` includes event-type and tool counts. HUD and TUI
   Stats read those fields for the whole session.
