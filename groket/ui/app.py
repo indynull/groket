@@ -36,11 +36,9 @@ from textual.widgets import (
     TextArea,
 )
 
-from ..analysis.base import AnalysisResult, Finding
 from ..constants import META_CACHE_FILENAME
 
 if TYPE_CHECKING:
-    from ..analysis.service import AnalysisService
     from ..keys import Keymap
 from ..integrations.control_client import (
     HEAVY_RPC_TIMEOUT,
@@ -75,11 +73,10 @@ from .data_table import (
     style_data_table,
     update_row_cell,
 )
-from .i18n import join_ui, setup_i18n, t
+from .i18n import setup_i18n, t
 from .keys import format_key_chord
 from .quit_actions import QuitActions
 from .screens.browser import BrowserScreen
-from .screens.rules import RulesScreen
 from .screens.run_configs import RunConfigsScreen
 from .screens.runner import RunnerPrefill, RunnerScreen
 from .theme import register_brand_themes, resolve_theme
@@ -173,98 +170,6 @@ class InteractiveSessionsModal(QuitActions, ModalScreen[tuple[str, bool] | None]
         with suppress(Exception):
             final = bool(self.query_one("#interactive-follow-last-turn", Checkbox).value)
         self.dismiss((text, final))
-
-
-class AnalysisSettingsModal(QuitActions, ModalScreen[bool]):
-    """Configure analysis behaviour (all registered plugins run on analyze)."""
-
-    BINDINGS = list(FORM_SAVE)
-
-    def __init__(self, work_dir: Path) -> None:
-        super().__init__()
-        self._work_dir = Path(work_dir)
-
-    def compose(self) -> ComposeResult:
-        from ..analysis import list_analyzers, load_pipeline_config
-        from .i18n import t
-
-        app = self.app
-        config_path = getattr(app, "_config_path", None)
-        cfg = load_pipeline_config(self._work_dir, config_path=config_path)
-        try:
-            getter = getattr(app, "_analysis_svc", None)
-            svc = getter() if callable(getter) else None
-            if svc is None:
-                raise RuntimeError("no analysis service")
-            plugin_list = ", ".join(p.id for p in svc.list_plugins() if p.id != "noop") or "(none)"
-        except Exception:
-            plugin_list = ", ".join(p.id for p in list_analyzers() if p.id != "noop") or "(none)"
-        with Container(id="analysis-settings-modal"):
-            yield Label(U.analysis_pipeline_title(), id="analysis-settings-title")
-            yield Static(
-                t(
-                    "analysis-settings-help",
-                    list=plugin_list,
-                    config=str(config_path or "~/.groket/config.toml"),
-                ),
-                id="analysis-settings-help",
-            )
-            yield Checkbox(
-                U.auto_analyze_on_open(),
-                value=(cfg.auto_analyze_when != "never"),
-                id="as-auto-analyze",
-            )
-            yield Static(t("analysis-when-help"), id="as-when-help")
-            yield Static(
-                t(
-                    "analysis-workers-help",
-                    analysis=cfg.analysis_workers,
-                    refresh=cfg.live_refresh_workers,
-                ),
-                id="as-workers-help",
-            )
-            with Horizontal(id="analysis-settings-actions", classes="modal-footer"):
-                yield Button(U.save(), variant="primary", id="as-save")
-                yield Button(U.cancel(), id="as-cancel")
-
-    def action_cancel(self) -> None:
-        from .bindings import dismiss_after_blur
-
-        dismiss_after_blur(self, False)
-
-    def action_save(self) -> None:
-        self._persist()
-
-    @on(Button.Pressed, "#as-cancel")
-    def _cancel(self) -> None:
-        self.dismiss(False)
-
-    @on(Button.Pressed, "#as-save")
-    def _save(self) -> None:
-        self._persist()
-
-    def _persist(self) -> None:
-        from ..analysis import AnalysisPipelineConfig, load_pipeline_config, save_pipeline_config
-        from ..analysis.service import AnalysisService, set_analysis_service
-
-        auto = self.query_one("#as-auto-analyze", Checkbox).value
-        app = self.app
-        config_path = getattr(app, "_config_path", None)
-        prev = load_pipeline_config(self._work_dir, config_path=config_path)
-        cfg = AnalysisPipelineConfig(
-            plugins=list(prev.plugins),
-            auto_analyze_when=("session_complete" if auto else "never"),
-            analysis_workers=prev.analysis_workers,
-            live_refresh_workers=prev.live_refresh_workers,
-        )
-        save_pipeline_config(cfg=cfg, config_path=config_path)
-        from ..paths import analysis_cache_dir
-
-        svc = AnalysisService(
-            self._work_dir, config=cfg, config_path=config_path, cache_root=analysis_cache_dir()
-        )
-        set_analysis_service(svc)
-        self.dismiss(True)
 
 
 def _session_search_haystack(meta: SessionMeta, label: str) -> str:
@@ -482,13 +387,10 @@ class TraceEvalApp(App):
             Path(initial_session).expanduser().resolve() if initial_session is not None else None
         )
         self._initial_prompt_index = initial_prompt_index
-        self._analysis_jobs_active: int = 0
         self._self_test_summary: str = ""
         self._copy_notify_at = 0.0
         self._copy_notify_msg = ""
         self._meta_only: list[tuple[SessionMeta, str]] = []
-        self._plugin_results: dict[str, dict[str, AnalysisResult]] = {}
-        # Keys are analysis_session_key(session_dir) (resolved path).
         # Bumps when a sessions catalog load starts; stale workers skip applying.
         self._sessions_load_gen: int = 0
         self._sessions_catalog_busy: bool = False
@@ -808,7 +710,6 @@ class TraceEvalApp(App):
             t("ui-duration"),
             t("ui-context"),
             t("ui-events"),
-            t("ui-findings-1"),
         )
         self.sub_title = ""
         try:
@@ -924,10 +825,6 @@ class TraceEvalApp(App):
             sid = json_as_str(params.get("sessionId")).strip()
             self.call_later(self._control_notes_changed_ui, sid)
             return
-        if method == "analysis/changed":
-            sid = json_as_str(params.get("sessionId")).strip()
-            self.call_later(self._control_analysis_changed_ui, sid)
-            return
 
     def _resolve_session_id_for_control(self, session_id: str) -> Path | None:
         """Map a session id from control notify to a local directory."""
@@ -962,41 +859,6 @@ class TraceEvalApp(App):
                 screen._update_reports_tab()
         except Exception:
             logger.debug("notes refresh on notes/changed failed", exc_info=True)
-
-    def _control_analysis_changed_ui(self, session_id: str) -> None:
-        """Reload cache into the open browser when analysis finishes on the owner."""
-        screen = self.screen
-        if not isinstance(screen, BrowserScreen) or not session_id:
-            return
-        try:
-            if screen.session_dir.name != session_id:
-                return
-            cached = self._analysis_svc().load_cached_all(screen.session_dir, allow_stale=True)
-            if not cached:
-                return
-            from ..analysis.inflight import analysis_session_key
-
-            self._plugin_results[analysis_session_key(screen.session_dir)] = cached
-            # Clears pending/loading; Report was left blank under overlays before.
-            screen.apply_analysis_results(cached)
-        except Exception:
-            logger.debug("analysis refresh on analysis/changed failed", exc_info=True)
-
-    def _push_analysis_results_to_open_browser(
-        self, session_dir: Path, results: dict[str, AnalysisResult]
-    ) -> None:
-        """If the open browser is *session_dir*, apply finished plugin results."""
-        screen = self.screen
-        if not isinstance(screen, BrowserScreen):
-            return
-        try:
-            from ..analysis.inflight import analysis_session_key
-
-            if analysis_session_key(screen.session_dir) != analysis_session_key(session_dir):
-                return
-            screen.apply_analysis_results(results)
-        except Exception:
-            logger.debug("push analysis results to open browser failed", exc_info=True)
 
     def is_control_client(self) -> bool:
         """True only after successful control ``initialize`` against a live owner."""
@@ -1303,15 +1165,11 @@ class TraceEvalApp(App):
             updated = True
         return updated
 
-    def _apply_session_meta_rows(
-        self, gen: int, rows: list[tuple[SessionMeta, str]], *, clear_plugins: bool = True
-    ) -> bool:
+    def _apply_session_meta_rows(self, gen: int, rows: list[tuple[SessionMeta, str]]) -> bool:
         """Install *rows* if *gen* is still current. Returns False when superseded."""
         if not self._sessions_load_current(gen):
             return False
         self._meta_only = rows
-        if clear_plugins:
-            self._plugin_results = {}
         return True
 
     def _load_sessions_sync(self, root: Path | None = None) -> int:
@@ -1489,7 +1347,7 @@ class TraceEvalApp(App):
             if not wire:
                 return
             rows = self._merge_control_catalog_rows(wire, [])
-            if not self._apply_session_meta_rows(gen, rows, clear_plugins=False):
+            if not self._apply_session_meta_rows(gen, rows):
                 return
             call_ui(self, self._rebuild_session_filters)
             call_ui(self, self._populate_session_table, force=True)
@@ -1508,7 +1366,6 @@ class TraceEvalApp(App):
         gen: int,
         *,
         quiet: bool = False,
-        clear_plugins: bool = True,
     ) -> None:
         """Populate home list from control ``session/list`` (attach client path).
 
@@ -1516,7 +1373,6 @@ class TraceEvalApp(App):
         rows and the table is not rebuilt.
 
         :param quiet: Skip loaded/error notifications (live refresh / attach).
-        :param clear_plugins: When false, keep analysis results for known paths.
         """
         try:
             since = int(self._catalog_revision or 0)
@@ -1561,11 +1417,9 @@ class TraceEvalApp(App):
             )
             if is_delta:
                 rows = self._merge_control_catalog_rows(wire_rows, removed)
-                replace_plugins = False
             else:
                 rows = self._rows_from_catalog_wire(wire_rows)
-                replace_plugins = clear_plugins
-            if not self._apply_session_meta_rows(gen, rows, clear_plugins=replace_plugins):
+            if not self._apply_session_meta_rows(gen, rows):
                 return
             n = len(rows)
             call_ui(self, self._rebuild_session_filters)
@@ -1584,7 +1438,7 @@ class TraceEvalApp(App):
                     else []
                 )
                 rows = self._rows_from_catalog_wire(wire_rows)
-                if not self._apply_session_meta_rows(gen, rows, clear_plugins=False):
+                if not self._apply_session_meta_rows(gen, rows):
                     return
                 n = len(rows)
                 call_ui(self, self._rebuild_session_filters)
@@ -1699,156 +1553,11 @@ class TraceEvalApp(App):
         finally:
             call_ui(self, self._finish_sessions_load, gen)
 
-    def _analysis_svc(self) -> AnalysisService:
-        """Lazy process-wide service; constructed on first Analyze / settings."""
-        from ..analysis.service import get_analysis_service
-
-        return get_analysis_service(
-            self.work_dir,
-            traces=Path(self.traces_path) if self.traces_path else None,
-            config_path=self._config_path,
-        )
-
-    def _analyze_one(
-        self,
-        meta: SessionMeta,
-        label: str,
-        *,
-        hold_inflight: bool = False,
-        force: bool = False,
-    ) -> None:
-        """Analyze a single session with all plugins. Must be called from a worker thread.
-
-        :param hold_inflight: When True, caller already called
-            :func:`~groket.analysis.inflight.try_begin_session_analysis` and will
-            :func:`~groket.analysis.inflight.end_session_analysis` in its ``finally``.
-        :param force: When True, re-run even when cache is warm (and run deferred
-            plugins). Default False avoids slow deferred work on bulk refresh.
-        """
-        from ..analysis.inflight import (
-            analysis_session_key,
-            end_session_analysis,
-            try_begin_session_analysis,
-        )
-
-        _ = label
-        sd_key = analysis_session_key(meta.session_dir)
-        if not force and sd_key in self._plugin_results:
-            return
-        acquired = hold_inflight
-        if not acquired and not try_begin_session_analysis(meta.session_dir):
-            return
-        try:
-            self._plugin_results[sd_key] = self._analysis_svc().analyze_all(
-                meta.session_dir, force=force
-            )
-        except Exception as exc:
-            logger.warning(t("ui-analysis-failed-for-s-s"), sd_key, exc)
-            self._plugin_results[sd_key] = {}
-        else:
-            # Offline home/batch path: control does not emit analysis/changed.
-            call_ui(
-                self,
-                self._push_analysis_results_to_open_browser,
-                meta.session_dir,
-                self._plugin_results[sd_key],
-            )
-        finally:
-            if not hold_inflight:
-                end_session_analysis(meta.session_dir)
-
     def action_self_test(self) -> None:
         """Open dependency self-test (Docker, Grok auth, work dir, …) on the UI thread."""
         from .widgets.self_test_modal import SelfTestModal
 
         self.push_screen(SelfTestModal(work_dir=self.work_dir))
-
-    @work(thread=True)
-    def _analyze_targets(self, targets: list[tuple[SessionMeta, str]] | None = None) -> None:
-        """Analyze (meta, label) pairs on a worker thread; UI updates via call_ui."""
-        if (
-            not targets
-            or isinstance(targets, (str, Path))
-            or (not isinstance(targets, (list, tuple)))
-        ):
-            return
-        from ..analysis.inflight import (
-            analysis_session_key,
-            end_session_analysis,
-            try_begin_session_analysis,
-        )
-
-        pending: list[tuple[SessionMeta, str]] = []
-        skipped_done = 0
-        skipped_inflight = 0
-        for item in targets:
-            if not isinstance(item, tuple) or len(item) != 2:
-                continue
-            meta, label = item
-            key = analysis_session_key(meta.session_dir)
-            if key in self._plugin_results:
-                skipped_done += 1
-                continue
-            if not try_begin_session_analysis(meta.session_dir):
-                skipped_inflight += 1
-                continue
-            pending.append((meta, str(label)))
-        if not pending:
-            msg = (
-                t("notify-analysis-in-flight", n=skipped_inflight)
-                if skipped_inflight
-                else t("ui-already-analyzed")
-            )
-            call_ui(self, self.notify, msg, severity="information")
-            return
-        n_plugins = 0
-        try:
-            n_plugins = len([p for p in self._analysis_svc().list_plugins() if p.id != "noop"])
-        except Exception:
-            pass
-        call_ui(
-            self,
-            self.notify,
-            t("notify-analyzing", n=len(pending), plugins=n_plugins),
-            severity="information",
-        )
-        if skipped_inflight:
-            call_ui(
-                self,
-                self.notify,
-                t("notify-analysis-in-flight", n=skipped_inflight),
-                severity="information",
-            )
-        # Serial analysis pool (default 1 worker) avoids stampeding plugins.
-        from ..job_pools import get_analysis_pool
-
-        self._analysis_jobs_active = max(0, int(self._analysis_jobs_active)) + len(pending)
-        pending_n = len(pending)
-
-        def _run_all() -> None:
-            try:
-                for idx, (meta, label) in enumerate(pending):
-                    try:
-                        # Explicit Analyze action includes deferred plugins.
-                        self._analyze_one(meta, label, hold_inflight=True, force=True)
-                    finally:
-                        end_session_analysis(meta.session_dir)
-                        self._analysis_jobs_active = max(0, self._analysis_jobs_active - 1)
-                    if (idx + 1) % 5 == 0 or idx == pending_n - 1:
-                        call_ui(self, self._populate_session_table)
-            except Exception:
-                for meta, _label in pending:
-                    end_session_analysis(meta.session_dir)
-                self._analysis_jobs_active = 0
-                raise
-            call_ui(
-                self,
-                self.notify,
-                t("notify-analysis-complete", n=pending_n),
-                severity="information",
-            )
-
-        get_analysis_pool().submit(f"batch {pending_n} session(s)", _run_all)
 
     def _derive_label(self, session_dir: Path, root: Path) -> str:
         """Derive a display label from directory path."""
@@ -1992,29 +1701,25 @@ class TraceEvalApp(App):
         finally:
             self._populate_busy = False
 
-    def _filtered_session_rows(
-        self,
-    ) -> list[tuple[SessionMeta, str, dict[str, AnalysisResult] | None]]:
-        from ..analysis.inflight import analysis_session_key
+    def _filtered_session_rows(self) -> list[tuple[SessionMeta, str]]:
+        from ..session_inflight import session_dir_key
 
         search_q = (self._session_search or "").strip().casefold()
         seen_keys: set[str] = set()
-        rows: list[tuple[SessionMeta, str, dict[str, AnalysisResult] | None]] = []
+        rows: list[tuple[SessionMeta, str]] = []
         for meta, label in self._meta_only:
             if self._filter_model and meta.model_display != self._filter_model:
                 continue
             if search_q and search_q not in _session_search_haystack(meta, label):
                 continue
-            sd_key = analysis_session_key(meta.session_dir)
+            sd_key = session_dir_key(meta.session_dir)
             if sd_key in seen_keys:
                 continue
             seen_keys.add(sd_key)
-            rows.append((meta, label, self._plugin_results.get(sd_key)))
+            rows.append((meta, label))
 
-        def sort_key(
-            item: tuple[SessionMeta, str, dict[str, AnalysisResult] | None],
-        ) -> tuple[float, str, str, str]:
-            meta, _label, _results = item
+        def sort_key(item: tuple[SessionMeta, str]) -> tuple[float, str, str, str]:
+            meta, _label = item
             return (
                 -self._session_sort_ts(meta),
                 meta.model_display,
@@ -2051,26 +1756,9 @@ class TraceEvalApp(App):
             style=status_rich_style("idle", light=light),
         )
 
-    @staticmethod
-    def _session_findings_cell(
-        results: dict[str, AnalysisResult] | None,
-    ) -> tuple[Text, int, int]:
-        if results is None:
-            return Text("--", style="dim"), 0, 0
-        high = sum(r.high_count for r in results.values())
-        med = sum(r.medium_count for r in results.values())
-        count = sum(r.finding_count for r in results.values())
-        cell = Text(str(count))
-        if high:
-            cell.append(f" {high}H", style="bold red")
-        if med:
-            cell.append(f" {med}M", style="yellow")
-        return cell, count, high
-
     def _session_home_cells(
         self,
         meta: SessionMeta,
-        results: dict[str, AnalysisResult] | None,
         *,
         selected: bool,
     ) -> tuple[str | Text, ...]:
@@ -2082,7 +1770,6 @@ class TraceEvalApp(App):
             if origin == ORIGIN_HOST
             else Text(t("ui-origin-work"), style="dim")
         )
-        findings, _count, _high = self._session_findings_cell(results)
         return (
             Text("*", style="bold green") if selected else Text(" "),
             origin_text,
@@ -2092,7 +1779,6 @@ class TraceEvalApp(App):
             meta.duration_str,
             (meta.context_usage_compact or "—")[:24],
             str(meta.num_events),
-            findings,
         )
 
     def _table_row_keys(self, table: DataTable) -> list[str]:
@@ -2138,20 +1824,12 @@ class TraceEvalApp(App):
             restore_key = self._session_row_key_at_cursor(table)
         rows = self._filtered_session_rows()
         painted: list[tuple[str, tuple[str | Text, ...]]] = []
-        total_findings = 0
-        total_high = 0
-        analyzed_count = 0
-        for meta, _label, results in rows:
+        for meta, _label in rows:
             sd_key = str(meta.session_dir)
-            if results is not None:
-                analyzed_count += 1
-                _cell, count, high = self._session_findings_cell(results)
-                total_findings += count
-                total_high += high
             painted.append(
                 (
                     sd_key,
-                    self._session_home_cells(meta, results, selected=sd_key in self._selected),
+                    self._session_home_cells(meta, selected=sd_key in self._selected),
                 )
             )
         existing = self._table_row_keys(table)
@@ -2168,33 +1846,18 @@ class TraceEvalApp(App):
         elif not self._sessions_table_primed:
             focus_primary_list(table)
             self._sessions_table_primed = True
-        pending = len(self._meta_only) - analyzed_count
-        self._update_summary_lazy(
-            len(self._meta_only), analyzed_count, total_findings, total_high, pending
-        )
+        self._update_summary_lazy(len(self._meta_only))
         with suppress(Exception):
             self.refresh_bindings()
 
-    def _update_summary_lazy(
-        self, total: int, analyzed: int, total_findings: int, total_high: int, pending: int
-    ) -> None:
+    def _update_summary_lazy(self, total: int) -> None:
         from .i18n import join_ui
 
         sel_count = len(self._selected)
         extras: list[str] = []
         if sel_count:
             extras.append(t("sessions-selected-count", n=sel_count))
-            scope = t("ui-report-uses-selected")
-            if scope.strip():
-                extras.append(scope.strip())
-        if pending > 0:
-            extras.append(t("sessions-pending-analysis", n=pending))
-        core = t(
-            "sessions-home-summary",
-            total=total,
-            findings=total_findings,
-            high=total_high,
-        )
+        core = t("sessions-home-summary", total=total)
         summary = f"[bold]{join_ui(core, *extras, sep=' · ')}"
         self.query_one("#session-summary", Static).update(summary)
 
@@ -2275,23 +1938,9 @@ class TraceEvalApp(App):
             self.refresh_bindings()
 
     def _refresh_selection_summary_only(self) -> None:
-        """Recompute summary counts from in-memory analysis (no table rebuild)."""
-        total = len(self._meta_only)
-        analyzed_count = 0
-        total_findings = 0
-        total_high = 0
-        from ..analysis.inflight import analysis_session_key
-
-        for meta, _ in self._meta_only:
-            results = self._plugin_results.get(analysis_session_key(meta.session_dir))
-            if results is None:
-                continue
-            analyzed_count += 1
-            total_findings += sum(r.finding_count for r in results.values())
-            total_high += sum(r.high_count for r in results.values())
-        pending = max(0, total - analyzed_count)
+        """Refresh the home summary from the current list (no table rebuild)."""
         try:
-            self._update_summary_lazy(total, analyzed_count, total_findings, total_high, pending)
+            self._update_summary_lazy(len(self._meta_only))
         except Exception:
             pass
 
@@ -2820,9 +2469,6 @@ class TraceEvalApp(App):
                     if mk == g or mk.endswith(g) or g.endswith(mk):
                         self._session_mtimes.pop(mk, None)
 
-            for key in list(self._plugin_results.keys()):
-                if key in gone:
-                    del self._plugin_results[key]
             try:
                 self._populate_session_table(restore_key=restore_key)
             except Exception:
@@ -2860,16 +2506,8 @@ class TraceEvalApp(App):
         """Browse reusable run configs (launch again with new models)."""
         self.push_screen(RunConfigsScreen(self.work_dir, run_manager=self.run_manager))
 
-    def _findings_for_session(self, sd_key: str) -> list[Finding]:
-        """All findings across all plugins for a session."""
-        results = self._plugin_results.get(sd_key, {})
-        out: list[Finding] = []
-        for r in results.values():
-            out.extend(r.findings)
-        return out
-
     def action_refresh_everything(self) -> None:
-        """Full refresh: rescan + run all analysis plugins."""
+        """Full refresh: rescan traces and rebuild the session list."""
         from ..paths import traces_root_for_reload
 
         traces = traces_root_for_reload(self.work_dir, self.traces_path)
@@ -2880,7 +2518,6 @@ class TraceEvalApp(App):
             return
         self._meta_only = []
         self._session_mtimes.clear()
-        self._plugin_results = {}
         self._selected = set()
         try:
             cf = self.work_dir / self._CACHE_FILE
@@ -2899,21 +2536,10 @@ class TraceEvalApp(App):
     def _run_refresh_everything(self, traces_root: Path | None = None) -> None:
         if traces_root is None:
             return
-        summary: dict = {"sessions_loaded": 0, "analysis_ok": 0, "analysis_err": 0, "error": ""}
+        summary: dict = {"sessions_loaded": 0, "error": ""}
         try:
             # Sync load — do not nest @work _load_sessions (would not run inline).
             summary["sessions_loaded"] = self._load_sessions_sync(traces_root)
-            from ..analysis.inflight import analysis_session_key
-
-            targets = list(self._meta_only)
-            for meta, label in targets:
-                self._analyze_one(meta, label)
-                sd_key = analysis_session_key(meta.session_dir)
-                results = self._plugin_results.get(sd_key, {})
-                if results and all(r.ok for r in results.values()):
-                    summary["analysis_ok"] += 1
-                else:
-                    summary["analysis_err"] += 1
             call_ui(self, self._populate_session_table)
         except Exception as exc:
             summary["error"] = str(exc)
@@ -2935,34 +2561,13 @@ class TraceEvalApp(App):
                     timeout=15,
                 )
                 return
-            err_n = int(summary.get("analysis_err") or 0)
             self.notify(
-                t(
-                    "notify-refresh-done",
-                    sessions=summary.get("sessions_loaded", 0),
-                    analyzed=summary.get("analysis_ok", 0),
-                    errors=err_n,
-                ),
-                severity="warning" if err_n else "information",
+                t("notify-refresh-done", sessions=summary.get("sessions_loaded", 0)),
+                severity="information",
                 timeout=16,
             )
 
         call_ui(self, _done)
-
-    def action_analyze(self) -> None:
-        """Run configured session analyzer on selected sessions (or all if none selected)."""
-        if not self._meta_only:
-            self.notify(U.load_sessions_first(), severity="warning")
-            return
-        if self._selected:
-            targets = [
-                (meta, label)
-                for meta, label in self._meta_only
-                if str(meta.session_dir) in self._selected
-            ]
-        else:
-            targets = list(self._meta_only)
-        self._analyze_targets(targets)
 
     def _session_meta_for_export(self) -> SessionMeta | None:
         """Highlighted or first selected session for export actions."""
@@ -3084,16 +2689,9 @@ class TraceEvalApp(App):
         prompt_index: int | None = None,
         notify_control: bool = True,
     ) -> None:
-        """Open a session in the browser immediately.
-
-        Analysis runs inside BrowserScreen._load_data on its own worker
-        so the screen appears without delay.
-        """
-        from ..analysis.inflight import analysis_session_key
-
-        plugin_results = self._plugin_results.get(analysis_session_key(row_key))
+        """Open a session in the browser immediately."""
         session_path = Path(row_key)
-        self._push_browser(session_path, plugin_results, prompt_index=prompt_index)
+        self._push_browser(session_path, prompt_index=prompt_index)
         if notify_control:
             self.control_session_selected(session_path, prompt_index)
 
@@ -3104,13 +2702,12 @@ class TraceEvalApp(App):
     def _push_browser(
         self,
         session_path: Path,
-        plugin_results: dict[str, AnalysisResult] | None,
         *,
         prompt_index: int | None = None,
     ) -> None:
         """Construct and push BrowserScreen on the main thread."""
         self._pause_home_traces_watch(pause=True)
-        self.push_screen(BrowserScreen(session_path, plugin_results, prompt_index=prompt_index))
+        self.push_screen(BrowserScreen(session_path, prompt_index=prompt_index))
 
     def action_open_runner(self) -> None:
         self.push_screen(RunnerScreen(self.work_dir, run_manager=self.run_manager))
@@ -3456,7 +3053,7 @@ class TraceEvalApp(App):
             self._live_sessions_last_scan = now
             gen = self._begin_sessions_load()
             try:
-                self._load_sessions_via_control(gen, quiet=True, clear_plugins=False)
+                self._load_sessions_via_control(gen, quiet=True)
             finally:
                 pass
             return
@@ -3841,32 +3438,10 @@ class TraceEvalApp(App):
         except Exception:
             pass
 
-    def action_open_rules(self) -> None:
-        self.push_screen(RulesScreen())
-
-    def action_analysis_settings(self) -> None:
-        """Open modal to configure session/feedback analyzer plugins."""
-
-        def _done(saved: bool | None) -> None:
-            if saved:
-                try:
-                    svc = self._analysis_svc()
-                    n = len([p for p in svc.list_plugins() if p.id != "noop"])
-                    self.notify(
-                        join_ui(t("ui-analysis"), n, t("ui-plugin-s-1")),
-                        severity="information",
-                        timeout=8,
-                    )
-                except Exception:
-                    self.notify(U.analysis_settings_saved(), severity="information")
-
-        self.push_screen(AnalysisSettingsModal(self.work_dir), _done)
-
     def action_refresh_context(self) -> None:
         """Refresh whatever screen/context is active (F5 / Ctrl+R globally)."""
         from .screens.browser import BrowserScreen
         from .screens.personas import PersonasScreen
-        from .screens.rules import RulesScreen
         from .screens.run_configs import RunConfigsScreen
         from .screens.runner import RunnerScreen
 
@@ -3881,9 +3456,6 @@ class TraceEvalApp(App):
             screen.action_refresh_context()
             return
         if isinstance(screen, RunnerScreen):
-            screen.action_refresh_context()
-            return
-        if isinstance(screen, RulesScreen):
             screen.action_refresh_context()
             return
         self._refresh_sessions_list()

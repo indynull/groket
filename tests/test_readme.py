@@ -77,7 +77,9 @@ def test_method_inventory_lives_only_in_control_doc() -> None:
         assert method in control, method
     assert "session/selected" in control
     assert "notes/changed" in control
-    assert "analysis/changed" in control
+    assert "session/changed" in control
+    assert "analysis/run" not in control
+    assert "analysis/changed" not in control
     assert "Content-Length" in control
     assert "GROKET_CONTROL_SOCKET" in control
     for path in (README, AGENTS):

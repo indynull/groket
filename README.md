@@ -12,14 +12,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **groket** evaluates [Grok Build](https://docs.x.ai/build/overview)
-sessions: timeline, findings, workspace diffs, Docker evals, personas, and
-pluggable detectors / analysis plugins.
+sessions: timeline, workspace diffs, Docker evals, and personas.
 
-Four clients, all talking to [`groket serve`](#control):
+Four clients talk to [`groket serve`](#control).
 
 | Client | What it does |
 |--------|----------------|
-| [Terminal app](#terminal-app) | Browse sessions, launch evals, analysis, export |
+| [Terminal app](#terminal-app) | Browse sessions, launch evals, export |
 | [Desktop HUD](#desktop-hud) | Summonable session palette |
 | [Emacs](#emacs) | Org buffer |
 | [Neovim](#neovim-09) | Markdown buffer |
@@ -52,7 +51,7 @@ Wheels for Linux, macOS, and Windows (Intel and ARM) are on
 
 | Root | Default | Holds |
 |------|---------|--------|
-| Config home | `~/.groket` | `config.toml`, personas, detectors, rules, plugins, optional `keys.toml` |
+| Config home | `~/.groket` | `config.toml`, personas, optional `keys.toml` |
 | Work root | `~/.groket/work` | `runs/traces/`, recipes, Docker contexts, batch results |
 
 ```bash
@@ -75,9 +74,6 @@ show_host_sessions = false
 auto_serve = true
 
 [analysis]
-plugins = []
-auto_analyze_when = "session_complete"
-analysis_workers = 1
 live_refresh_workers = 1
 
 [hud]
@@ -121,13 +117,13 @@ filters Background / Workflows / Subagents list the bookends. Open a
 row or a bookend to inspect the merged run (Asked / Happened / Failed).
 Enter on a workflow child or subagent opens that child session. The
 desktop Overview uses the same tabs.
-Failed runs also appear on Findings. Those tables are not Jobs (`J`),
+Failed runs are listed on Summary. Those tables are not Jobs (`J`),
 which is Docker / serve / container logs.
 
 ## Terminal app
 
-`groket` (or `groket tui`) is the full eval client: session list, browser
-panes, runner, recipes, personas, analysis, and export. Diff lists Grok
+`groket` (or `groket tui`) is the eval client: session list, browser
+panes, runner, recipes, personas, and export. Diff lists Grok
 rewind snapshots (or approximate `search_replace` edits) with Prompt and
 Assistant tabs above a files and hunk split.
 The footer lists the keys that apply now; `?` is the full list.
@@ -149,8 +145,6 @@ The footer lists the keys that apply now; `?` is the full list.
 | r | sessions | New run |
 | C | sessions | Recipes |
 | P | sessions | Personas |
-| d | sessions | Rules |
-| a | sessions | Analyze the selection |
 | s / Space | sessions | Select (also Space) |
 | S | sessions | Select all |
 | R | sessions | Re-run the highlighted recipe as a new session |
@@ -161,21 +155,21 @@ The footer lists the keys that apply now; `?` is the full list.
 | n | sessions | Follow-up while awaiting |
 | e | sessions | Done while awaiting |
 | x | sessions | Delete (press twice) |
-| [ ]  1-5 | browser | Timeline, Summary, Diff, Findings, Report |
-| Diff | browser / HUD | Rewind snapshots (or approximate search_replace edits); Prompt/Assistant tabs above a files and hunk split; / fuzzy-finds path or hunk; h/l steps snapshots; y copies the highlighted file. |
+| [ ]  1-4 | browser | Timeline, Summary, Diff, Report |
+| Diff | browser / HUD | Rewind snapshots (or approximate search_replace edits); Prompt/Assistant tabs above a files and hunk split; / fuzzy-finds path or hunk; h/l steps snapshots; y copies the highlighted file. HUD Turns cards show a Diff chip when that turn has a snapshot. |
 | h / l / Left / Right | browser | Previous / next turn on the Timeline |
 | j / k | browser | Previous / next event on the Timeline (also Up / Down) |
 | v | browser | Timeline filter (Subagents lists spawn/finish; Background lists task and schedule bookends; Workflows lists workflow tool bookends) |
 | Summary | browser / HUD | Session glance; Tasks, Workflows, Subagents, and Stats tabs (click the strip) |
 | Tail | browser / HUD | Follow new events to the end while a turn is open (terminal and HUD). Off keeps the highlight still. |
 | Enter | browser | Full-width event (Esc back to the list); or open a child from a spawn/finish row |
-| i | browser | Jump to Findings |
+
 | f | browser | Flag this event |
 | N | browser | New note |
 | O | browser | Edit or delete note |
 | n | browser | Follow-up while awaiting |
 | e | browser | Done while awaiting |
-| y | browser / HUD | Copy the selection, the finding, or the focused / primary pane body |
+| y | browser / HUD | Copy the selection or the focused / primary pane body |
 | Ctrl+Shift+C | browser | Same as y |
 | Ctrl+C | browser | Copy the selection or focused body; quit hint when neither applies |
 | mouse drag | browser | Select text; release copies the selection (multi-line OK); y still works |
@@ -201,12 +195,12 @@ The footer lists the keys that apply now; `?` is the full list.
 | Esc | pickers | Cancel |
 
 The [Desktop HUD](#desktop-hud) shares `?` / `Esc` / `/` / `y` / `j` `k`
-/ `h` `l` (Timeline turns while All turns is selected) / `n` `e` (awaiting) / `N`.
-HUD panes are Tab and Ctrl+1–6 except on Notes, where Tab walks the note
-fields and Ctrl+Tab or Ctrl+1–6 change panes. On Timeline, `[` is All
-turns (Filter stays). `]` / `h` `l` jump to the next or previous turn
-that still matches Filter, only while All turns is selected.
-`u` or the logo leaves the open session for the session list.
+/ `h` `l` (Timeline turns while All turns is selected) / `n` `e` (awaiting) / `N`. HUD panes are Tab
+and Ctrl+1–5 except on Notes, where Tab walks the note fields and
+Ctrl+Tab or Ctrl+1–5 change panes. `[` is All turns (Filter stays).
+`]` / `h` `l` jump to the next or previous turn that still matches
+Filter, only while All turns is selected. `u` or the logo leaves the
+open session for the session list.
 
 ### Follow-up, fork, and re-run
 
@@ -240,10 +234,10 @@ openable child. Exporting an opened child is that child only.
 ## Desktop HUD
 
 Summonable palette: Recent sessions (scroll or `j` for more), search,
-then Overview / Turns / Timeline / Findings / Notes. `u` or the logo
+then Overview / Turns / Timeline / Diff / Notes. `u` or the logo
 returns to the session list. Follow-up and Done
 when awaiting. It does not launch evals. Desktop notices are for eval
-sessions and analysis; Host Grok chats already notify on their own.
+sessions; Host Grok chats already notify on their own.
 Details: [`desktop/README.md`](desktop/README.md).
 
 ```bash
@@ -333,7 +327,6 @@ groket batch run -t examples/tasks/demo_tasks.yaml -m <model-id>
 ```
 
 Schemas: [tasks](https://indynull.github.io/groket/schemas/tasks.schema.json),
-[rules](https://indynull.github.io/groket/schemas/rules.schema.json),
 [config](https://indynull.github.io/groket/schemas/config.schema.json),
 [control](https://indynull.github.io/groket/schemas/control.schema.json).
 
@@ -344,9 +337,6 @@ Supported packs under [`examples/`](examples/README.md) — copy into
 
 | Goal | Start here |
 |------|------------|
-| Smallest detector + rule | [`examples/detection/minimal/`](examples/detection/minimal/) |
-| Full detector catalog | [`examples/detection/catalog/`](examples/detection/catalog/) |
-| Analysis plugin | [`examples/analysis/plugins/session_event_count.py`](examples/analysis/plugins/session_event_count.py) |
 | Batch tasks | [`examples/tasks/demo_tasks.yaml`](examples/tasks/demo_tasks.yaml) |
 
 ```bash
@@ -363,4 +353,4 @@ just ci              # lint + schema-check + hud-check + examples-check + test
 just bump 0.1.1      # version strings + CHANGELOG.md
 ```
 
-Also: `groket doctor`, `groket gen …`, `groket rules validate`, `groket keys`.
+Also: `groket doctor`, `groket gen …`, `groket keys`.

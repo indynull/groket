@@ -17,26 +17,7 @@ all-sections = All sections
 all-tab = All
 
 
-analysis-pipeline-title = Analysis pipeline
-
-analysis-settings-saved = Analysis settings saved
-
-analyze = Analyze
-
 assistant-messages = Assistant messages
-
-auto-analyze-on-open = Auto-analyze completed sessions
-analysis-when-help = Runs when you open a completed session. Force: Ctrl+P → Analyze this session. Progress: J → Activity.
-analysis-workers-help = Pools: analysis ×{$analysis} · refresh ×{$refresh}
-ui-analysis-idle = [dim]No analysis yet — Ctrl+P → Analyze this session[/]
-ui-analysis-idle-report = [dim]No report yet — runs after analysis[/]
-ui-running-analysis-spinner = [dim italic]{$spin} Running analysis…[/]
-ui-running-analysis-plain = Running analysis…
-analysis-stale-toast = Stale analysis — {$detail}. Ctrl+P → Analyze this session.
-analysis-stale-findings-row = Stale — {$detail} · Ctrl+P → Analyze this session
-analysis-stale-report = Stale analysis — {$detail}. Ctrl+P → Analyze this session.
-
-bind-analyze = Analyze
 
 bind-back = Back
 
@@ -64,9 +45,8 @@ bind-enable-all = Enable all
 
 bind-export-bundle = Export
 
-bind-findings = 4 Findings
-
 bind-flag = Flag
+bind-copy = Copy
 bind-copy-detail = Copy
 
 bind-help = Help
@@ -116,8 +96,6 @@ bind-rerun = Re-run
 
 bind-resume = Fork
 
-bind-rules = Rules
-
 bind-runner = Runner
 
 bind-save = Save
@@ -147,20 +125,6 @@ clear-logs-btn = clear logs
 close = Close
 
 close-btn = close
-
-cmd-analysis-settings = Analysis settings
-
-cmd-analysis-settings-help = Configure analysis plugins (config.toml)
-
-cmd-analyze = Analyze selected sessions
-
-cmd-analyze-help = Home list: selected sessions, or all if none selected
-
-cmd-analyze-session = Analyze this session
-
-cmd-analyze-session-help = Force re-run plugins for the open session only
-
-notify-analyzing-this-session = Analyzing this session…
 
 cmd-back = Back
 
@@ -240,10 +204,6 @@ cmd-enable-all-rules = Enable all rules
 
 cmd-enable-all-rules-help = Turn all rules on
 
-cmd-export-finding = Export finding
-
-cmd-export-finding-help = Export selected finding
-
 cmd-export-bundle = Export session
 
 cmd-export-bundle-help = Export with your default profile, or pick one if none is configured
@@ -264,16 +224,16 @@ cmd-event-reader = Full-width event
 
 cmd-event-reader-help = Hide the Timeline list and read the event; j / k step; Esc returns
 
-cmd-copy-detail = Copy selection, finding, or pane
-cmd-copy-detail-help = Browser: yank selection (drag release also copies); Findings row Issue box; focused body; else tab primary — y / Ctrl+Shift+C; Ctrl+C selection or focused body
+cmd-copy-detail = Copy selection or pane
+cmd-copy-detail-help = Browser: yank selection (drag release also copies); focused body; else tab primary — y / Ctrl+Shift+C; Ctrl+C selection or focused body
 
 cmd-focus-timeline-view = Focus timeline view
 
 cmd-focus-timeline-view-help = v — View dropdown (visible selection)
 
-cmd-full-refresh = Full refresh (sessions + detectors + feedback)
+cmd-full-refresh = Full refresh (sessions)
 
-cmd-full-refresh-help = Rescan traces, re-run detectors, force feedback analyze+draft
+cmd-full-refresh-help = Rescan traces and rebuild the session list
 
 cmd-help = Help
 
@@ -284,8 +244,8 @@ cmd-jobs-logs = Jobs / logs
 cmd-jobs-logs-help = Docker runs, TUI pool activity, serve log tail, and container logs (J)
 
 jobs-activity-tab = Activity
-jobs-activity-help = TUI analysis/refresh pools, plus a tail of the detached serve log when attached.
-jobs-activity-status = {$spin} analysis {$analysis}/{$analysis_workers} · refresh {$refresh}/{$refresh_workers}
+jobs-activity-help = TUI refresh pool, plus a tail of the detached serve log when attached.
+jobs-activity-status = {$spin} refresh {$refresh}/{$refresh_workers}
 jobs-activity-control-path = Serve log: {$path}
 jobs-activity-no-control = No control owner log (offline TUI, or serve not detached).
 jobs-activity-control-header = — serve log —
@@ -325,10 +285,6 @@ cmd-open-configs-help = Browse saved run configs (recipes)
 cmd-open-personas = Open personas
 
 cmd-open-personas-help = Persona builder (env / gh-write / git identity)
-
-cmd-open-rules = Open rules
-
-cmd-open-rules-help = Detector / rule toggles
 
 cmd-open-runner = Open runner
 
@@ -538,15 +494,13 @@ extras = Extras
 
 filter-label = Filter
 
-findings-heading = Findings
-
 flag-event-title = Flag Event
 
 flag-removed = Flag removed from event #{ $index }
 
 flag-saved = Flag saved on event #{ $index }
 
-flags-blurb = Your annotations on timeline events (verdict + note). Not detector findings.
+flags-blurb = Your annotations on timeline events (verdict + note).
 
 flags-heading = Flags
 
@@ -756,23 +710,6 @@ export-profile-export = Export
 
 repository-label = Repository
 
-rule-detail =
-    Category: { $category }
-    Enabled: { $enabled }
-    Detector: { $detector }
-    
-    Description:
-    { $description }
-    
-
-rule-toggled = Rule '{ $rule_id }' { $state }
-
-rules = Rules
-
-rules-list-refreshed = Rules list refreshed
-
-rules-title = Rules
-
 discard-unsaved-title = Discard unsaved changes?
 
 discard-unsaved-body = Leave this form and lose your edits?
@@ -813,7 +750,6 @@ select-at-least-one-model = Select at least one model
 
 select-container-row = Select a container row first
 
-select-finding-first = Select a finding on the Findings tab first
 
 select-persona-first = Select a persona first
 
@@ -841,9 +777,7 @@ skills-title = Skills
 
 tab-diff = 3 Diff
 
-tab-findings = 4 Findings
-
-tab-report = 5 Report
+tab-report = 4 Report
 
 tab-summary = 2 Summary
 
@@ -872,8 +806,6 @@ theme = Theme
 this-launch-only-dim = [dim]this launch only[/dim]
 
 time-breakdown = Time breakdown
-
-tip-no-analysis = No analysis yet — run analysis with `a` on the sessions list
 
 tip-no-flags = No flags yet — select a Timeline event, then press `f`
 
@@ -919,14 +851,7 @@ state-disabled = disabled
 
 ui-added-mcp = Added MCP `
 
-ui-already-analyzed = Already analyzed
-notify-analysis-in-flight = Analysis already running for { $n } session(s)
-
 ui-already-running =  already running)
-
-ui-analysis = Analysis:
-
-ui-analysis-failed-for-s-s = Analysis failed for %s: %s
 
 ui-appended-into-the-container-mcp-config = [dim]Appended into the container MCP config[/dim]
 
@@ -995,10 +920,6 @@ ui-delete-failed = Delete failed
 ui-deleted = Deleted
 
 ui-detach-ui-on-quit-failed = detach_ui on quit failed
-
-ui-detector-analysis-no-sessions-loaded = [bold]Detector analysis:[/bold] [dim]no sessions loaded[/dim]
-
-ui-detectors = Detectors
 
 ui-diff = diff
 
@@ -1113,15 +1034,6 @@ ui-field-select-session-filter-select = field-select session-filter-select
 ui-filter = Filter
 
 ui-timeline-tail = Tail
-
-ui-finding =
-    FINDING
-    
-
-ui-findings-1 = Findings
-
-
-    
 
 ui-finished = Finished
 
@@ -1322,10 +1234,6 @@ ui-no-diff-data =
 ui-no-diff-data-1 = (no diff data)
 
 ui-no-docs-repo-url-from-registry-search-the-server = [dim]No docs/repo URL from registry — search the server name on registry.modelcontextprotocol.io[/dim]
-
-ui-no-findings =
-      (no findings)
-    
 
 ui-no-models = : no models
 
@@ -1770,7 +1678,6 @@ activity-running = Running { $n }
 activity-ending = Ending { $n }
 activity-extracting = Extracting { $n }
 activity-awaiting = Awaiting { $n }
-activity-analysis = Analysis { $n }
 activity-sessions = Sessions { $n }
 
 # Session list turn / status column
@@ -1817,15 +1724,12 @@ notify-no-sessions = No sessions found in { $path }
 notify-control-list-failed = Control catalog failed: { $err }
 notify-control-session-failed = Control session load failed: { $err }
 notify-loaded-sessions = Loaded { $n } sessions
-notify-analyzing = Analyzing { $n } sessions ({ $plugins } plugins)…
-notify-analysis-complete = Analysis complete — { $n } sessions
 notify-model-filter = Model filter: { $label }
 flagged-at-when = Flagged at { $when }
 truncate-marker = …truncated…
 truncate-for-display = …truncated for display…
-sessions-home-summary = { $total } sessions · { $findings } findings · { $high } high
+sessions-home-summary = { $total } sessions
 sessions-selected-count = { $n } selected
-sessions-pending-analysis = { $n } pending analysis
 
 # --- Session / jobs / personas notifies (composed) ---
 notify-saved-run-config = Saved run config { $id } ({ $name }) — open with C (configs); sessions unchanged
@@ -1837,7 +1741,7 @@ notify-deleted-sessions-errors = Deleted { $deleted }/{ $requested } session(s) 
 notify-no-traces-refresh = No traces dir to refresh: { $path }
 notify-full-refresh = Full refresh from { $path } (background)…
 notify-refresh-all-failed = Refresh all failed: { $error }
-notify-refresh-done = Refresh done — sessions { $sessions }, analyzed { $analyzed }, errs { $errors }
+notify-refresh-done = Refresh done — sessions { $sessions }
 notify-nothing-to-refresh = Nothing to refresh under { $path }
 notify-run-failed = Run { $id } failed after { $elapsed }: { $error }
 notify-run-finished = Run { $id } finished in { $elapsed }: { $ok }/{ $total } ok, { $failed } failed
@@ -1851,9 +1755,6 @@ notify-open-session-failed = Open session failed: { $exc }
 notify-no-session-yet = No session yet for { $container } — wait for traces to appear
 notify-share-open-failed = Could not open share for { $name }: { $exc }
 jobs-banner-runs = Docker eval runs: { $n } active{ $latest }
-jobs-analysis-inflight = Analysis: { $n } in flight · { $cached } session(s) cached in this TUI
-jobs-analysis-cached = Analysis: { $n } session(s) cached in this TUI
-jobs-analysis-idle = Analysis: idle (no cached results in this TUI yet)
 jobs-control-attached = Control: attached · { $path }
 jobs-control-offline = Control: offline (this TUI only)
 jobs-work-dir = work dir: { $path }
@@ -1863,14 +1764,11 @@ persona-registry-hits = Registry: { $n } for { $query }{ $extra }
 persona-local-count = Local { $n } · r=registry
 persona-saved = Saved persona { $pid }
 persona-configure-title = Configure { $name }
-analysis-settings-help = Enabled analyzers: { $list }. Optional plugins: analysis.plugins as module:ClassName (active config: { $config }).
-browser-findings-chip = { $n } findings
 browser-high-chip = { $n } high
 browser-medium-chip = { $n } medium
 browser-flags-count = Flags ({ $n })
 
 browser-notes-count = Notes ({ $n })
-browser-findings-dim = · { $n } findings
 browser-status-none = none
 browser-status-clean = clean
 browser-status-idle = idle
@@ -1878,10 +1776,8 @@ browser-follow-ups-pending = { $n } follow-up(s) pending
 browser-follow-up-staged = Follow-up staged (waiting for agent)
 browser-follow-up-staged-final = Last turn staged (session ends after this turn)
 browser-more-queued = … +{ $n } more
-browser-report-counts = { $total } findings ({ $high } high, { $med } med)
 browser-flags-dim = { $n } flags
 browser-viewing-focus = Viewing: { $focus }
-browser-finding-events = { $n } events
 browser-more-children = … +{ $n } more
 browser-report-error = Error: { $msg }
 browser-skill-mounted = mounted
@@ -1891,13 +1787,6 @@ title-browser-extra-turn = · turn={ $outcome }
 title-browser-extra-live-turn = · LIVE turn={ $outcome }
 title-browser-extra-ending = · ending session
 title-browser-extra-awaiting = · awaiting follow-up
-report-md-model = *Model:* `{ $model }`
-report-md-session = *Session:* `{ $id }`
-report-md-plugin = *Plugin:* `{ $id }`
-report-md-finding = *Finding:* `{ $id }`
-report-md-severity = *Severity:* { $sev }
-report-md-category = *Category:* { $cat }
-report-md-sub-findings = *{ $n } sub-finding(s):*
 notify-delete-session-arm = Press [x] again to DELETE 1 session(s) from disk (traces + feedback_cache; run configs are kept)
 notify-deleted-sessions = Deleted { $deleted }/{ $requested } session(s){ $err_suffix }
 notify-deleted-sessions-errors = , errors={ $n }

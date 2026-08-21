@@ -1,7 +1,7 @@
 """Process-wide per-session inflight locks for heavy background work.
 
-One lock table keyed by ``(kind, resolved session_dir)`` so analysis and live
-refresh each single-flight per session across UI entry points. A coalesced
+One lock table keyed by ``(kind, resolved session_dir)`` so live
+refresh single-flights per session across UI entry points. A coalesced
 rerun bit records that another pass was requested while the lock was held;
 :func:`end` reports that so the owner can enqueue exactly one follow-up.
 """
@@ -11,7 +11,6 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-KIND_ANALYSIS = "analysis"
 KIND_REFRESH = "refresh"
 
 _lock = threading.Lock()

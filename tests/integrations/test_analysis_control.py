@@ -1,4 +1,4 @@
-"""Control-plane analysis/run and analysis/status."""
+"""Control owner does not run analysis."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from importlib import import_module
 from pathlib import Path
 
 import pytest
-from async_wait import wait_until
+from groket.integrations.control import PROTOCOL_VERSION
 
 
 def _short_sock(name: str) -> Path:
@@ -38,7 +38,6 @@ def _write_session(session_dir: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    # Complete session so analysis can cache.
     (session_dir / "events.jsonl").write_text(
         json.dumps({"type": "turn_ended", "timestamp": 1001}) + "\n",
         encoding="utf-8",
@@ -67,7 +66,10 @@ async def _request(
 
 
 @pytest.mark.asyncio
-async def test_analysis_run_and_status_on_domain_server(tmp_path: Path) -> None:
+async def test_owner_does_not_advertise_or_run_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Serve initialize omits analysis methods; analysis/run is unknown."""
     daemon = import_module("groket.integrations.daemon")
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
@@ -79,102 +81,34 @@ async def test_analysis_run_and_status_on_domain_server(tmp_path: Path) -> None:
         work_dir=work,
         traces_path=traces,
     )
+    assert not hasattr(server, "_analysis_jobs")
+    assert not hasattr(server, "_analysis_pool")
     await server.start()
     try:
         reader, writer = await asyncio.open_unix_connection(sock)
-        init = await _request(reader, writer, 1, "initialize", {"protocolVersion": "1.0.0"})
+        init = await _request(
+            reader, writer, 1, "initialize", {"protocolVersion": PROTOCOL_VERSION}
+        )
         caps = init["result"]["capabilities"]
-        assert "analysis/run" in caps
-        assert "analysis/status" in caps
+        assert "analysis/run" not in caps
+        assert "analysis/status" not in caps
+        assert init["result"]["protocolVersion"] == PROTOCOL_VERSION
 
-        idle = await _request(reader, writer, 2, "analysis/status", {"session": session.name})
-        assert idle["result"]["state"] == "idle"
-
-        started = await _request(
+        missing = await _request(
             reader,
             writer,
-            3,
+            2,
             "analysis/run",
             {"session": session.name, "force": True},
         )
-        assert started["result"]["state"] == "running"
-        assert started["result"]["jobId"]
+        assert "error" in missing
+        assert missing["error"]["code"] == -32601
 
-        # Wait for completion (basic analyzer is quick).
-        final: dict | None = None
-        req_id = 10
-
-        async def _terminal() -> bool:
-            nonlocal final, req_id
-            status = await _request(
-                reader, writer, req_id, "analysis/status", {"session": session.name}
-            )
-            req_id += 1
-            final = status["result"]
-            return bool(final and final["state"] in {"done", "error"})
-
-        await wait_until(_terminal, description="analysis job reaches done or error")
-        assert final is not None
-        assert final["state"] == "done"
-        assert final["sessionId"] == session.name
-        assert isinstance(final["analyzerIds"], list)
-
-        # Second run while idle starts again.
-        again = await _request(
-            reader,
-            writer,
-            100,
-            "analysis/run",
-            {"session": session.name, "force": False},
-        )
-        assert again["result"]["state"] in {"running", "done"}
+        status = await _request(reader, writer, 3, "analysis/status", {"session": session.name})
+        assert "error" in status
+        assert status["error"]["code"] == -32601
 
         writer.close()
         await writer.wait_closed()
     finally:
         await server.close()
-
-
-@pytest.mark.asyncio
-async def test_analysis_run_without_service_returns_501(tmp_path: Path) -> None:
-    control = import_module("groket.integrations.control")
-    session = tmp_path / "session-no-svc"
-    _write_session(session)
-    sock = _short_sock("nosvc.sock")
-    server = control.ControlServer(
-        socket_path=sock,
-        resolve_session=lambda ref: session if ref == session.name else None,
-        analysis_service=None,
-    )
-    await server.start()
-    try:
-        reader, writer = await asyncio.open_unix_connection(sock)
-        response = await _request(
-            reader,
-            writer,
-            1,
-            "analysis/run",
-            {"session": session.name},
-        )
-        assert response["error"]["code"] == 501
-        writer.close()
-        await writer.wait_closed()
-    finally:
-        await server.close()
-
-
-def test_local_access_analysis_run_summary(tmp_path: Path) -> None:
-    from groket.analysis.service import AnalysisService
-    from groket.paths import analysis_cache_dir
-    from groket.session.access import LocalSessionAccess
-
-    session = tmp_path / "sess-local"
-    _write_session(session)
-    svc = AnalysisService(tmp_path, cache_root=analysis_cache_dir())
-    access = LocalSessionAccess(
-        resolve_session=lambda ref: session if ref in {session.name, str(session)} else None,
-    )
-    summary = access.analysis_run(session.name, force=True, service=svc)
-    assert summary["state"] == "done"
-    assert summary["sessionId"] == session.name
-    assert summary["okCount"] + summary["errorCount"] >= 1

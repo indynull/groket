@@ -181,9 +181,7 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
     def _refresh_activity_header(self) -> None:
         """Inflight counts on the Activity help line (cheap; every tick)."""
         from ...job_pools import (
-            analysis_inflight,
             get_activity_log,
-            get_analysis_pool,
             get_live_refresh_pool,
             refresh_inflight,
         )
@@ -196,11 +194,9 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
         ctrl = self._control_log_path()
         base = t(
             "jobs-activity-status",
-            analysis=analysis_inflight(),
-            analysis_workers=get_analysis_pool().max_workers,
             refresh=refresh_inflight(),
             refresh_workers=get_live_refresh_pool().max_workers,
-            spin=log.spinner_frame() if (analysis_inflight() or refresh_inflight()) else "",
+            spin=log.spinner_frame() if refresh_inflight() else "",
         )
         if ctrl is not None:
             help_w.update(join_ui(base, t("jobs-activity-control-path", path=str(ctrl)), sep="\n"))
@@ -500,20 +496,6 @@ class JobsModal(TabPaneNavigation, QuitActions, ModalScreen[None]):
             )
             + batch_bit
         )
-        with suppress(Exception):
-            from ...job_pools import analysis_inflight
-
-            cached = len(getattr(app, "_plugin_results", None) or {})
-            inflight = max(
-                int(getattr(app, "_analysis_jobs_active", 0) or 0),
-                int(analysis_inflight()),
-            )
-            if inflight:
-                lines.append(t("jobs-analysis-inflight", n=inflight, cached=cached))
-            elif cached:
-                lines.append(t("jobs-analysis-cached", n=cached))
-            else:
-                lines.append(t("jobs-analysis-idle"))
         with suppress(Exception):
             if getattr(app, "is_control_client", lambda: False)():
                 sock = getattr(app, "_control_socket", None)

@@ -41,10 +41,6 @@ In the session browser:
 Report tab lists notes. Export (`E`) includes `notes/operator_notes.toml` when
 notes exist.
 
-Deferred **LLM analysis** plugins include session notes in the review prompt
-(as human evaluator focus areas). Editing notes invalidates the analysis
-cache for that session the same way timeline changes do.
-
 **Authoring** is via TUI, Emacs, Neovim, or HUD (control plane). Batch does not write notes.
 
 ## Ingest

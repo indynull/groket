@@ -49,7 +49,6 @@ _BINDING_TUPLES: tuple[tuple[Binding, ...], ...] = (
     B.PERSONA_EDITOR,
     B.MODAL_CANCEL_QUIT,
     B.FORM_SAVE,
-    B.RULES,
     B.MODAL_DISMISS,
     B.JOBS_MODAL,
 )
@@ -58,7 +57,7 @@ _BINDING_TUPLES: tuple[tuple[Binding, ...], ...] = (
 def _hud_push_rows(source: str) -> list[tuple[str, str]]:
     rows = list(_PUSH.findall(source))
     if 'format!("pane.{n}")' in source:
-        rows.extend((f"pane.{i}", f"ctrl+{i}") for i in range(1, 7))
+        rows.extend((f"pane.{i}", f"ctrl+{i}") for i in range(1, 6))
     return rows
 
 
@@ -231,7 +230,6 @@ def test_hud_named_ids_present() -> None:
         "pane.prev",
         "pane.1",
         "pane.5",
-        "pane.6",
         "edit.copy",
         "edit.copy_chord",
         "session.follow",

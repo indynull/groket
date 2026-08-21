@@ -30,7 +30,6 @@ from ..session.control_views import (
     MAX_CONTENT_CHARS,
     MAX_TIMELINE_LIMIT,
     build_session_diff,
-    build_session_findings,
     build_session_get,
     build_session_overview,
     build_session_timeline,
@@ -213,7 +212,7 @@ class LocalSessionAccess:
         self,
         session: str,
     ) -> JsonObject:
-        """Meta + turns + notes + findings (timeline rows via session/timeline)."""
+        """Meta + turns + notes (timeline rows via session/timeline)."""
         path = self.require_session(session)
         return build_session_overview(path, work_dir=self._work_dir)
 
@@ -261,11 +260,6 @@ class LocalSessionAccess:
     def session_usage(self, session: str) -> JsonObject:
         """Usage summary."""
         return build_session_usage(self.require_session(session))
-
-    def session_findings(self, session: str, *, limit: int | None = None) -> JsonObject:
-        """Cached analysis findings."""
-        lim = 80 if limit is None else max(0, min(int(limit), 200))
-        return build_session_findings(self.require_session(session), limit=lim)
 
     def session_diff(self, session: str) -> JsonObject:
         """Rewind snapshots or approximate ``search_replace`` edits."""
@@ -326,65 +320,6 @@ class LocalSessionAccess:
         path = self.require_session(session)
         snap = delete_note(path, note_id, expected_revision=expected_revision)
         return notes_snapshot_mapping(snap)
-
-    def analysis_run(
-        self,
-        session: str,
-        *,
-        force: bool = False,
-        service: object | None = None,
-    ) -> JsonObject:
-        """Run enabled analyzers synchronously (serve worker / tests).
-
-        :param service: :class:`~groket.analysis.service.AnalysisService` instance.
-        :returns: Status mapping (``state`` done|error plus counts).
-        :raises FileNotFoundError: Unknown session.
-        :raises RuntimeError: When *service* is missing.
-        """
-        if service is None:
-            raise RuntimeError("analysis service is unavailable")
-        path = self.require_session(session)
-        analyze_all = getattr(service, "analyze_all", None)
-        if not callable(analyze_all):
-            raise RuntimeError("analysis service is unavailable")
-        try:
-            results = analyze_all(path, force=bool(force))
-        except Exception as exc:
-            return {
-                "sessionId": path.name,
-                "path": str(path),
-                "state": "error",
-                "force": bool(force),
-                "error": str(exc)[:500],
-                "analyzerIds": [],
-                "okCount": 0,
-                "errorCount": 0,
-                "findingCount": 0,
-            }
-        if not isinstance(results, dict):
-            results = {}
-        ok_count = 0
-        err_count = 0
-        finding_count = 0
-        analyzer_ids: list[JsonValue] = []
-        for aid, result in results.items():
-            analyzer_ids.append(str(aid))
-            if getattr(result, "ok", False):
-                ok_count += 1
-                finding_count += int(getattr(result, "finding_count", 0) or 0)
-            else:
-                err_count += 1
-        return {
-            "sessionId": path.name,
-            "path": str(path),
-            "state": "done",
-            "force": bool(force),
-            "error": "",
-            "analyzerIds": analyzer_ids,
-            "okCount": ok_count,
-            "errorCount": err_count,
-            "findingCount": finding_count,
-        }
 
 
 class RemoteSessionAccess:
@@ -450,9 +385,6 @@ class RemoteSessionAccess:
     async def session_usage(self, session: str) -> JsonObject:
         return await self._client.session_usage(session)
 
-    async def session_findings(self, session: str, *, limit: int | None = None) -> JsonObject:
-        return await self._client.session_findings(session, limit=limit)
-
     async def session_diff(self, session: str) -> JsonObject:
         return await self._client.session_diff(session)
 
@@ -489,12 +421,6 @@ class RemoteSessionAccess:
         return await self._client.notes_delete(
             session, note_id, expected_revision=expected_revision
         )
-
-    async def analysis_run(self, session: str, *, force: bool = False) -> JsonObject:
-        return await self._client.analysis_run(session, force=force)
-
-    async def analysis_status(self, session: str) -> JsonObject:
-        return await self._client.analysis_status(session)
 
 
 __all__ = [

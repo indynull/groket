@@ -134,7 +134,7 @@ class _Host(App[None]):
         self.opened: Path | None = None
 
     def compose(self) -> ComposeResult:
-        yield BrowserScreen(self._session, plugin_results={})
+        yield BrowserScreen(self._session)
 
     def open_session_path(self, path: Path) -> None:
         self.opened = path

@@ -6,15 +6,13 @@ Synchronisation is condition-based (``wait_until``); see AGENTS.md §4.5c.
 
 from __future__ import annotations
 
+import inspect
 import json
 import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from groket.analysis.base import AnalysisResult, Finding
-from groket.analysis.service import AnalysisService
-from groket.models import Severity
 from groket.runs.run_manager import RunManager
 from groket.session.turn_gate import (
     list_queued_follow_ups,
@@ -27,7 +25,7 @@ from groket.ui.data_table import cursor_row_key
 from groket.ui.screens.browser import BrowserScreen
 from groket.ui.selectable_static import SelectableStatic
 from groket.ui.widgets.timeline import TimelineTable
-from textual.widgets import Input, LoadingIndicator, Static, Switch, TabbedContent
+from textual.widgets import Input, Static, Switch, TabbedContent
 
 from .pilot_helpers import static_plain, wait_until
 
@@ -141,7 +139,7 @@ def _host_app(work: Path, traces: Path) -> TraceEvalApp:
 
 async def _open_browser(app: TraceEvalApp, pilot, sess: Path) -> BrowserScreen:
     """Push BrowserScreen and wait until timeline is loaded; stop live refresh."""
-    app.push_screen(BrowserScreen(sess, plugin_results={}))
+    app.push_screen(BrowserScreen(sess))
 
     def ready() -> bool:
         scr = app.screen
@@ -158,7 +156,6 @@ async def _activate_tab(pilot, screen: BrowserScreen, pane_id: str) -> None:
     """Run tab action, set active authoritatively, wait until TabbedContent agrees."""
     actions = {
         "tab-timeline": screen.action_tab_timeline,
-        "tab-findings": screen.action_tab_findings,
         "tab-summary": screen.action_tab_summary,
         "tab-diff": screen.action_tab_diff,
         "tab-reports": screen.action_tab_report,
@@ -411,7 +408,7 @@ async def test_browser_timeline_filter_and_cursor_stable(tmp_path: Path) -> None
             tl.move_cursor(row=1, animate=False)
         key_before = cursor_row_key(tl)
 
-        tl.load_events(screen.timeline, screen._findings, list(screen._flags.values()))
+        tl.load_events(screen.timeline, list(screen._flags.values()))
         await pilot.pause()
         if key_before and tl.row_count:
             key_after = cursor_row_key(tl)
@@ -443,7 +440,7 @@ async def test_browser_timeline_view_filter_survives_reload(tmp_path: Path) -> N
         assert 0 < filtered_n <= full_n
 
         # Simulate full / light reload painting the unfiltered list first.
-        tl.load_events(screen.timeline, screen._findings, list(screen._flags.values()))
+        tl.load_events(screen.timeline, list(screen._flags.values()))
         await pilot.pause()
         assert tl.row_count == full_n  # unfiltered paint
         # Without reapply, the Select would still say "sess" while all rows show.
@@ -463,43 +460,16 @@ async def test_browser_with_plugin_findings_report(tmp_path: Path) -> None:
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
     sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="f1",
-        title="pilot finding",
-        severity=Severity.MEDIUM,
-        plugin_id="engine",
-        detail="x",
-        tool_call_ids=["c1"],
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="1 finding",
-            findings=[finding],
-        )
-    }
     app = _host_app(work, traces)
 
     async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser timeline with findings")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._render_report_overview()
-        screen._render_report_flags()
-        await pilot.pause()
+        screen = await _open_browser(app, pilot, sess)
         await _activate_tab(pilot, screen, "tab-reports")
-        assert screen._findings is not None
+        assert list(screen.query("#report-section-plugin-engine")) == []
+        assert (
+            list(screen.query("#report-section-flags")) != []
+            or list(screen.query("#report-section-notes")) != []
+        )
 
 
 # ── Report tab filter ────────────────────────────────────────────────────
@@ -511,41 +481,10 @@ async def test_browser_report_filter_sections(tmp_path: Path) -> None:
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
     sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="f2",
-        title="report filter finding",
-        severity=Severity.HIGH,
-        plugin_id="engine",
-        detail="detail text",
-        tool_call_ids=["c1"],
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="1 finding",
-            findings=[finding],
-        )
-    }
     app = _host_app(work, traces)
 
     async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser with findings")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
-
+        screen = await _open_browser(app, pilot, sess)
         await _activate_tab(pilot, screen, "tab-reports")
         screen._update_reports_tab()
         await pilot.pause()
@@ -561,397 +500,6 @@ async def test_browser_report_filter_sections(tmp_path: Path) -> None:
         screen._apply_report_visibility()
         await pilot.pause()
         assert screen._section_visible("flags")
-
-
-@pytest.mark.asyncio
-async def test_browser_report_plugin_multi_pane_selectable(tmp_path: Path) -> None:
-    """Plugin report artifact splits into focusable SelectableStatic panes."""
-    from groket.ui.selectable_static import SelectableStatic
-    from textual.containers import Vertical
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="mf1",
-        title="Ignored MCP",
-        severity=Severity.HIGH,
-        plugin_id="engine",
-        detail="short",
-        extras={
-            "what_model_did": "Claimed MCP failed",
-            "what_should_have_done": "Call MCP first",
-            "why_mistake": "Instructions",
-            "where": "Turn 0",
-            "pattern": "skip",
-        },
-    )
-    report_md = """# Model Feedback form drafts — sess
-
-Intro line for the plugin.
-
-## Session summary
-
-Overall summary text.
-
-## Issue 1: Ignored MCP
-
-### Form fields (copy line-by-line)
-
-```
-Model Name: pilot-model
-Session ID: sess
-Severity: Major
-```
-
-### Issue (copy into the Issue box)
-
-```
-What: Claimed MCP failed
-Where: Turn 0
-Why: Instructions
-Should have: Call MCP first
-Pattern: skip
-```
-"""
-    # Use analyzer_id ``engine`` so default enabled plugins keep the result.
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="1 finding",
-            findings=[finding],
-            artifacts={"report": report_md},
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser with multi-pane report")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
-
-        await _activate_tab(pilot, screen, "tab-reports")
-        screen._update_reports_tab()
-        await pilot.pause()
-
-        section = screen.query_one("#report-section-plugin-engine", Vertical)
-        panes = list(section.query(SelectableStatic))
-        # header + preamble + summary + issue header + form + issue box
-        assert len(panes) >= 4
-        plains = [p.get_plain_text() for p in panes]
-        joined = "\n".join(plains)
-        assert "Claimed MCP failed" in joined
-        assert "Model Name: pilot-model" in joined
-        # Paste-ready Issue pane exists without Form fields mixed in
-        issue_only = [p for p in plains if p.strip().startswith("What:") and "Model Name:" not in p]
-        assert issue_only, plains
-        form_only = [p for p in plains if "Model Name: pilot-model" in p and "What:" not in p]
-        assert form_only, plains
-        # Each pane is focusable for Tab + y
-        assert all(p.can_focus for p in panes)
-
-
-@pytest.mark.asyncio
-async def test_analysis_changed_clears_report_loading_while_open(tmp_path: Path) -> None:
-    """Control analysis/changed must clear pending so Report is not stuck loading.
-
-    Repro: open a session, analysis finishes on the owner while the browser is
-    already open on Report — results used to land under permanent loading overlays
-    until the operator left and re-entered the session.
-    """
-    from textual.containers import Vertical
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="f1",
-        title="Stuck report finding",
-        severity=Severity.HIGH,
-        plugin_id="engine",
-        detail="detail",
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="1 finding",
-            findings=[finding],
-            artifacts={"report": "# Report\n\n## Issue\n\nWhat: Stuck report finding\n"},
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        screen = await _open_browser(app, pilot, sess)
-        await _activate_tab(pilot, screen, "tab-reports")
-        screen._analysis_pending = True
-        screen._show_analysis_pending()
-        await pilot.pause()
-        assert screen.query_one("#reports-scroll").loading is True
-
-        class _CachedSvc:
-            def load_cached_all(self, *_a: object, **_k: object) -> dict:
-                return results
-
-        app._analysis_svc = lambda: _CachedSvc()  # type: ignore[method-assign]
-        app._control_analysis_changed_ui(sess.name)
-        await pilot.pause()
-        await pilot.pause()
-
-        assert screen._analysis_pending is False
-        assert screen.query_one("#reports-scroll").loading is False
-        assert len(screen._findings) == 1
-        section = screen.query_one("#report-section-plugin-engine", Vertical)
-        assert section.loading is False
-        plains = [p.get_plain_text() for p in section.query(SelectableStatic)]
-        joined = "\n".join(plains)
-        assert "Stuck report finding" in joined
-
-
-@pytest.mark.asyncio
-async def test_apply_analysis_results_paints_report_from_empty(tmp_path: Path) -> None:
-    """Home/batch finish while the browser is open paints Report without re-entry."""
-    from textual.containers import Vertical
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="f2",
-        title="Batch finding",
-        severity=Severity.MEDIUM,
-        plugin_id="engine",
-        detail="d",
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="1",
-            findings=[finding],
-            artifacts={"report": "## Body\n\nbatch body text\n"},
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        screen = await _open_browser(app, pilot, sess)
-        await _activate_tab(pilot, screen, "tab-reports")
-        screen._analysis_pending = True
-        screen._show_analysis_pending()
-        await pilot.pause()
-
-        app._push_analysis_results_to_open_browser(sess, results)
-        await pilot.pause()
-        await pilot.pause()
-
-        assert screen._analysis_pending is False
-        assert screen.query_one("#reports-scroll").loading is False
-        section = screen.query_one("#report-section-plugin-engine", Vertical)
-        joined = "\n".join(p.get_plain_text() for p in section.query(SelectableStatic))
-        assert "Batch finding" in joined
-        assert "batch body text" in joined
-
-
-@pytest.mark.asyncio
-async def test_browser_analysis_pending_collapses_report_panes(tmp_path: Path) -> None:
-    """Pending analysis shows LoadingIndicator and widget.loading on report cards."""
-    from groket.ui.selectable_static import SelectableStatic
-    from textual.containers import Vertical
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    report_md = """# Report
-
-## One
-
-body one
-
-## Two
-
-body two
-
-## Three
-
-body three
-"""
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="ok",
-            findings=[],
-            artifacts={"report": report_md},
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser with multi-pane report")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
-
-        await _activate_tab(pilot, screen, "tab-reports")
-        screen._update_reports_tab()
-        await pilot.pause()
-
-        section = screen.query_one("#report-section-plugin-engine", Vertical)
-        before = list(section.query(SelectableStatic))
-        assert len(before) >= 3
-
-        # Not pending: paint is a no-op (does not stack spinners on idle open).
-        screen._analysis_pending = False
-        screen._show_analysis_pending()
-        await pilot.pause()
-        assert len(list(section.query(SelectableStatic))) == len(before)
-
-        screen._analysis_pending = True
-        screen._paint_analysis_pending_spinner(full=True)
-        await pilot.pause()
-
-        assert section.loading is True
-        pending = screen.query_one("#browser-analysis-loading", LoadingIndicator)
-        assert pending.display
-        assert screen.query_one("#findings-table").loading is True
-        assert screen.query_one("#reports-scroll").loading is True
-
-
-@pytest.mark.asyncio
-async def test_browser_analysis_pending_marks_report_when_opened(tmp_path: Path) -> None:
-    """Opening Report during analysis shows loading on the scroll and plugin cards."""
-    from textual.containers import Vertical
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="ok",
-            findings=[],
-            artifacts={"report": "# Report\n\n## One\n\nbody\n"},
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser open on Timeline")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
-        assert screen._active_browser_tab() == "tab-timeline"
-
-        screen._analysis_pending = True
-        screen._show_analysis_pending()
-        await pilot.pause()
-        assert screen.query_one("#browser-analysis-loading", LoadingIndicator).display
-        assert screen.query_one("#findings-table").loading is True
-
-        await _activate_tab(pilot, screen, "tab-reports")
-        await wait_until(
-            pilot,
-            lambda: bool(screen.query_one("#reports-scroll").loading),
-            description="Report scroll loading after open during wait",
-        )
-
-        def engine_loading() -> bool:
-            try:
-                return bool(screen.query_one("#report-section-plugin-engine", Vertical).loading)
-            except Exception:
-                return False
-
-        await wait_until(
-            pilot,
-            engine_loading,
-            description="engine report card mounted and loading",
-        )
-
-
-@pytest.mark.asyncio
-async def test_browser_stale_analysis_is_a_note_not_a_banner(tmp_path: Path) -> None:
-    """Stale analysis is a Report note; Rich tags stay off the page."""
-    from textual.css.query import NoMatches
-
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        screen = await _open_browser(app, pilot, sess)
-        screen._stop_live_refresh()
-        with pytest.raises(NoMatches):
-            screen.query_one("#analysis-stale-banner")
-
-        with patch.object(
-            AnalysisService,
-            "stale_analyzer_hints",
-            return_value=["engine cache older than plugin"],
-        ):
-            screen._apply_stale_analysis_hints(repaint=False)
-            await _activate_tab(pilot, screen, "tab-reports")
-            screen._update_reports_tab()
-
-            def has_note() -> bool:
-                report = screen.query_one("#report-overview-content", SelectableStatic)
-                plain = report.get_plain_text() or ""
-                return "Stale analysis" in plain and "engine cache older than plugin" in plain
-
-            await wait_until(
-                pilot,
-                has_note,
-                description="stale analysis note on Report",
-            )
-            report = screen.query_one("#report-overview-content", SelectableStatic)
-            plain = report.get_plain_text() or ""
-            assert "[bold yellow]" not in plain
-            assert "[/]" not in plain
-
-
-# ── Summary stats tables ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -1459,7 +1007,7 @@ async def test_browser_control_paints_first_page_before_remainder(
     app.session_access = lambda: access  # type: ignore[method-assign]
 
     async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results={}))
+        app.push_screen(BrowserScreen(sess))
         await wait_until(
             pilot,
             lambda: isinstance(app.screen, BrowserScreen) and saw_first.is_set(),
@@ -1553,68 +1101,6 @@ async def test_browser_open_event_asks_owner_ceiling(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_export_finding(tmp_path: Path) -> None:
-    """Export finding creates a markdown report file."""
-    work = tmp_path / "work"
-    traces = work / "runs" / "traces"
-    sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="export-f1",
-        title="Exported finding",
-        severity=Severity.HIGH,
-        plugin_id="engine",
-        detail="Should have done X",
-        tool_call_ids=["c1"],
-        extras={"should_have": "done X instead"},
-        children=[
-            Finding(
-                id="child-f1",
-                title="Sub finding",
-                severity=Severity.LOW,
-                plugin_id="engine",
-            ),
-        ],
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            findings=[finding],
-        )
-    }
-    app = _host_app(work, traces)
-
-    async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
-
-        def ready() -> bool:
-            scr = app.screen
-            return isinstance(scr, BrowserScreen) and bool(scr.timeline)
-
-        await wait_until(pilot, ready, description="browser for export")
-        screen = app.screen
-        assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
-
-        screen._selected_finding = finding
-        await _activate_tab(pilot, screen, "tab-findings")
-        screen.action_export_finding()
-        await pilot.pause()
-        reports_dir = screen._reports_dir()
-        if reports_dir.exists():
-            md_files = list(reports_dir.glob("*.md"))
-            assert len(md_files) >= 1
-
-
-# ── Timeline view modes ─────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
 async def test_browser_timeline_view_modes(tmp_path: Path) -> None:
     """Exercise all timeline View select modes."""
     work = tmp_path / "work"
@@ -1669,7 +1155,7 @@ async def test_browser_refresh_context(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_show_findings_action(tmp_path: Path) -> None:
+async def test_browser_show_findings_action_removed(tmp_path: Path) -> None:
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
     sess = _write_multi_turn_session(traces)
@@ -1677,8 +1163,7 @@ async def test_browser_show_findings_action(tmp_path: Path) -> None:
 
     async with app.run_test(size=(140, 48)) as pilot:
         screen = await _open_browser(app, pilot, sess)
-        screen.action_show_findings()
-        await pilot.pause()
+        assert not hasattr(screen, "action_show_findings")
 
 
 # ── Focus follow-up field ────────────────────────────────────────────────
@@ -1771,9 +1256,6 @@ async def test_browser_check_action_follow_up(tmp_path: Path) -> None:
         for action in ("send_follow_up", "mark_session_done", "focus_follow_up"):
             result = screen.check_action(action, ())
             assert result in (True, False)
-        # Export requires findings tab active
-        result = screen.check_action("export_finding", ())
-        assert result in (True, False)
 
 
 # ── Open share (no URL) ─────────────────────────────────────────────────
@@ -1797,54 +1279,56 @@ async def test_browser_open_share_no_url(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_browser_report_plugin_helpers(tmp_path: Path) -> None:
-    assert BrowserScreen._plugin_title("engine") == "Detectors"
-    assert BrowserScreen._plugin_title("custom_thing") == "Custom Thing"
-    assert BrowserScreen._report_plugin_slug("test-plugin") == "test-plugin"
-    assert BrowserScreen._report_plugin_slug("a/b") == "a_b"
-
-
-# ── Findings row mapping ────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_browser_findings_row_index(tmp_path: Path) -> None:
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
     sess = _write_multi_turn_session(traces)
-    finding = Finding(
-        id="f-row-test",
-        title="row test finding",
-        severity=Severity.LOW,
-        plugin_id="engine",
-    )
-    results = {
-        "engine": AnalysisResult(
-            session_id=sess.name,
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            findings=[finding],
-        )
-    }
+    app = _host_app(work, traces)
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = await _open_browser(app, pilot, sess)
+        assert not hasattr(screen, "_report_plugin_slug")
+        assert not hasattr(screen, "_collect_findings")
+        assert not hasattr(screen, "apply_analysis_results")
+        assert screen._report_section_dom_id("flags") == "report-section-flags"
+        assert screen._report_section_dom_id("notes") == "report-section-notes"
+
+
+@pytest.mark.asyncio
+async def test_browser_has_no_findings_tab(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    sess = _write_multi_turn_session(traces)
     app = _host_app(work, traces)
 
     async with app.run_test(size=(140, 48)) as pilot:
-        app.push_screen(BrowserScreen(sess, plugin_results=results))
+        app.push_screen(BrowserScreen(sess))
 
         def ready() -> bool:
             scr = app.screen
             return isinstance(scr, BrowserScreen) and bool(scr.timeline)
 
-        await wait_until(pilot, ready, description="browser for row test")
+        await wait_until(pilot, ready, description="browser open")
         screen = app.screen
         assert isinstance(screen, BrowserScreen)
-        screen._stop_live_refresh()
-        screen._collect_findings()
-        screen._populate_analysis_ui()
-        await pilot.pause()
+        tabs = screen.query_one("#browser-tabs", TabbedContent)
+        assert "tab-findings" not in {p.id for p in tabs.query("TabPane")}
+        assert list(screen.query("#findings-table")) == []
+        assert list(screen.query("#report-sections-host")) == []
+        assert list(screen.query(".report-pane")) == []
+        assert list(screen.query("#browser-analysis-loading")) == []
+        assert not hasattr(screen, "_schedule_analysis")
+        assert not hasattr(screen, "_should_auto_analyze")
+        assert not hasattr(screen, "_auto_needs_background_job")
+        assert not hasattr(screen, "_findings_table_entries")
+        assert not hasattr(screen, "_selected_finding")
+        assert not hasattr(app, "_plugin_results")
+        assert not hasattr(app, "_findings_for_session")
+        from groket.ui.render_detail import render_event_detail
+        from groket.ui.widgets.detail_view import DetailView
 
-        await _activate_tab(pilot, screen, "tab-findings")
-        findings_table = screen.query_one("#findings-table")
-        if findings_table.row_count > 0:
-            findings_table.move_cursor(row=0, animate=False)
-            await pilot.pause()
+        tl = screen.query_one("#timeline-list", TimelineTable)
+        assert tl.events
+        screen._current_event = tl.events[0]
+        screen._show_selected_event_detail()
+        body = static_plain(screen.query_one("#detail-panel", DetailView).query_one("#detail-body"))
+        assert "finding" not in body.casefold()
+        assert "finding" not in inspect.signature(render_event_detail).parameters

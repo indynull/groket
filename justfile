@@ -33,7 +33,6 @@ lint-complexity:
 # Regenerate schemas/*.schema.json from Pydantic.
 schema:
     uv run python -c "from pathlib import Path; from groket.runs.task_schema import emit_tasks_schema; emit_tasks_schema(Path('schemas/tasks.schema.json'))"
-    uv run python -c "from pathlib import Path; from groket.engine.rule_schema import emit_rules_schema; emit_rules_schema(Path('schemas/rules.schema.json'))"
     uv run python -c "from pathlib import Path; from groket.config import emit_config_schema; emit_config_schema(Path('schemas/config.schema.json'))"
     uv run python -c "from pathlib import Path; from groket.integrations.control_contract import emit_control_schema, emit_control_doc; emit_control_schema(Path('schemas/control.schema.json')); emit_control_doc(Path('docs/control.md'))"
 
@@ -54,7 +53,6 @@ schema-check:
       rm -f "$tmp"
     }
     check 'from pathlib import Path; from groket.runs.task_schema import emit_tasks_schema; import sys; emit_tasks_schema(Path(sys.argv[1]))' schemas/tasks.schema.json
-    check 'from pathlib import Path; from groket.engine.rule_schema import emit_rules_schema; import sys; emit_rules_schema(Path(sys.argv[1]))' schemas/rules.schema.json
     check 'from pathlib import Path; from groket.config import emit_config_schema; import sys; emit_config_schema(Path(sys.argv[1]))' schemas/config.schema.json
     check 'from pathlib import Path; from groket.integrations.control_contract import emit_control_schema; import sys; emit_control_schema(Path(sys.argv[1]))' schemas/control.schema.json
     check 'from pathlib import Path; from groket.integrations.control_contract import emit_control_doc; import sys; emit_control_doc(Path(sys.argv[1]))' docs/control.md

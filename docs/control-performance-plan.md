@@ -1,4 +1,4 @@
-# Control owner performance: analysis and plan
+# Control owner performance plan
 
 This document is the diagnosis of what `groket serve` does today, what is
 native Rust versus Python, how the four clients attach, freshly measured
@@ -114,7 +114,6 @@ sessions, then:
 | `session/changed` | Session files or catalog rebuild (`sessionId` empty when the whole list is new) |
 | `notes/changed` | `operator_notes.toml` |
 | `session/selected` | After `session/open` |
-| `analysis/changed` | Analysis job state |
 
 Broadcast is JSON-RPC **notifications** (no `id`). The owner adds a
 writer to the broadcast set only **after** the current request finishes,
@@ -135,17 +134,9 @@ HUD `plan_tick` (`desktop/src/live.rs`) treats `session/changed` as
 + timeline tail. Four host sessions appending therefore rebuild
 overview on every coalesced write. See §4.4 and moment I.
 
-### 1.4 Analysis
+### 1.4 Overview extras
 
-`analysis/run` constructs `AnalysisService` on first use (not at serve
-start). Job table in `ControlServer._analysis_jobs`. Worker
-`_run_analysis_job` → `LocalSessionAccess.analysis_run` → publish
-`analysis/changed`. `analysis/status` is an **in-memory dict lookup**
-(comment: do not resolve/catalog-scan on the poll path).
-
-`session/overview` embeds **cached** findings (`build_session_findings`)
-and maps them onto turn indexes from the just-built segments. Opening a
-session does not start analyzers. It does pay turn-mapping of the cache.
+`session/overview` carries notes.
 
 ---
 
@@ -177,7 +168,7 @@ Python `_scan_hit_is_listed` (drop resume-seed / subagent).
 - Catalog row meta (`load_session_meta_list` / future `load_host_list_meta`).
 - JSON-RPC encode: stdlib `json.dumps` in `ControlServer._send` (disk
   parse already uses `orjson`; the socket does not).
-- Analysis plugins, notes, diff, editor `session/render`.
+- Notes, diff, editor `session/render`.
 
 ### 2.3 Client-side Rust (not the owner)
 
@@ -378,7 +369,6 @@ is `running`. Moments A–H do not name this. Moment I does.
 | `collect_host_session_dirs` | Host discovery is shallow (fixes the old 163 s junk walk in the 2026-08-09 table) |
 | Incremental `parse_timeline` | Growth of an already-open session does not rescan from byte 0 |
 | Single-flight parse/overview | HUD open + live poll share one build |
-| Analysis lazy | `AnalysisService` not imported at serve or `TraceEvalApp` import |
 
 ### Open pull request 29
 
@@ -388,7 +378,7 @@ Does:
 
 - `load_host_list_meta`: `summary.json` + `signals.json`. No `events.jsonl`,
   no `updates.jsonl` tail, no title infer from the trace.
-- Stamp-gated snapshot (`mtime_export.py`) under the analysis cache dir.
+- Stamp-gated snapshot (`mtime_export.py`) under the host catalog cache dir.
   Stamp is path + mtimes of `summary.json`, `signals.json`, **and**
   `updates.jsonl` (mtime only).
 - `groket export-host -o FILE` writes that snapshot without starting serve.
@@ -547,10 +537,8 @@ parent) if resident set climbs on this host tree. Measure `VmRSS` from
 
 ### Analysis and editors off the click path
 
-Findings in overview are cache-only and do not need turn mapping to show
-titles (map on the Findings tab). `analysis/run` stays explicit. Editors
-keep `session/render` as a full-parse document. The click path is get +
-first timeline page only.
+Editors keep `session/render` as a full-parse document. The click path
+is get + first timeline page only.
 
 ### Freeze
 

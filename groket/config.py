@@ -25,45 +25,21 @@ SCHEMA_TITLE = "groket-config"
 SCHEMA_ID = "https://indynull.github.io/groket/schemas/config.schema.json"
 SCHEMA_COMMENT = f":schema {SCHEMA_ID}"
 
-_AUTO_ANALYZE_WHEN = frozenset({"session_complete", "never"})
-
 _CACHE: AppConfig | None = None
 _CACHE_PATH: Path | None = None
 _DOC_CACHE: tomlkit.TOMLDocument | None = None
 
 
 class AnalysisPrefs(BaseModel):
-    """``[analysis]``: plugins and worker pools."""
+    """``[analysis]``: worker pools."""
 
     model_config = ConfigDict(extra="ignore")
 
-    plugins: list[str] = Field(
-        default_factory=list,
-        description="``module:Class`` analyzers under ~/.groket/plugins/.",
-    )
-    auto_analyze_when: str = Field(
-        default="session_complete",
-        description="When to run analyzers: session_complete or never.",
-    )
-    analysis_workers: int = Field(default=1, ge=1, description="Serial analysis pool size.")
     live_refresh_workers: int = Field(
         default=1, ge=1, description="Live timeline refresh pool size."
     )
 
-    @field_validator("plugins", mode="before")
-    @classmethod
-    def _plugins(cls, value: object) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(p).strip() for p in value if isinstance(p, str) and p.strip()]
-
-    @field_validator("auto_analyze_when", mode="before")
-    @classmethod
-    def _when(cls, value: object) -> str:
-        raw = str(value or "session_complete").strip().lower()
-        return raw if raw in _AUTO_ANALYZE_WHEN else "session_complete"
-
-    @field_validator("analysis_workers", "live_refresh_workers", mode="before")
+    @field_validator("live_refresh_workers", mode="before")
     @classmethod
     def _workers(cls, value: object) -> int:
         if isinstance(value, bool):
@@ -185,24 +161,12 @@ def _ensure_table(container: tomlkit.TOMLDocument | Table, key: str) -> Table:
     return table
 
 
-def _set_plugins(table: Table, plugins: list[str]) -> None:
-    arr = tomlkit.array()
-    if len(plugins) > 1:
-        arr.multiline(True)
-    for name in plugins:
-        arr.append(name)
-    table["plugins"] = arr
-
-
 def _apply_cfg(doc: tomlkit.TOMLDocument, cfg: AppConfig) -> None:
     doc["theme"] = cfg.theme
     doc["follow_os"] = cfg.follow_os
     doc["show_host_sessions"] = cfg.show_host_sessions
     doc["auto_serve"] = cfg.auto_serve
     analysis = _ensure_table(doc, "analysis")
-    _set_plugins(analysis, list(cfg.analysis.plugins))
-    analysis["auto_analyze_when"] = cfg.analysis.auto_analyze_when
-    analysis["analysis_workers"] = cfg.analysis.analysis_workers
     analysis["live_refresh_workers"] = cfg.analysis.live_refresh_workers
     hud = _ensure_table(doc, "hud")
     hud["window_mode"] = cfg.hud.window_mode

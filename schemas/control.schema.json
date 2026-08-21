@@ -31,7 +31,6 @@
         "session/timeline",
         "session/turns",
         "session/usage",
-        "session/findings",
         "session/diff",
         "session/open",
         "session/render",
@@ -39,9 +38,7 @@
         "session/done",
         "notes/list",
         "notes/upsert",
-        "notes/delete",
-        "analysis/run",
-        "analysis/status"
+        "notes/delete"
       ],
       "properties": {
         "initialize": {
@@ -355,40 +352,6 @@
             "params"
           ]
         },
-        "session/findings": {
-          "description": "Cached analysis findings",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "params": {
-              "title": "session/findings params",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "session": {
-                  "description": "Session id or path.",
-                  "type": "string"
-                },
-                "limit": {
-                  "description": "Max findings to return.",
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "session"
-              ]
-            },
-            "result": {
-              "title": "session/findings result",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {}
-            }
-          },
-          "required": [
-            "params"
-          ]
-        },
         "session/diff": {
           "description": "Rewind snapshots or approximate `search_replace` edits (files + hunks + prompt/assistant text)",
           "type": "object",
@@ -668,70 +631,6 @@
           "required": [
             "params"
           ]
-        },
-        "analysis/run": {
-          "description": "Start analysis on the owner (`force` optional)",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "params": {
-              "title": "analysis/run params",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "session": {
-                  "description": "Session id or path.",
-                  "type": "string"
-                },
-                "force": {
-                  "description": "Re-run even when a cache hit exists.",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "session"
-              ]
-            },
-            "result": {
-              "title": "analysis/run result",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {}
-            }
-          },
-          "required": [
-            "params"
-          ]
-        },
-        "analysis/status": {
-          "description": "Job state: `idle` / `running` / `done` / `error`",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "params": {
-              "title": "analysis/status params",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "session": {
-                  "description": "Session id or path.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "session"
-              ]
-            },
-            "result": {
-              "title": "analysis/status result",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {}
-            }
-          },
-          "required": [
-            "params"
-          ]
         }
       }
     },
@@ -741,8 +640,7 @@
       "required": [
         "session/selected",
         "session/changed",
-        "notes/changed",
-        "analysis/changed"
+        "notes/changed"
       ],
       "properties": {
         "session/selected": {
@@ -811,31 +709,6 @@
                 },
                 "revision": {
                   "description": "Notes document revision.",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "required": [
-            "params"
-          ]
-        },
-        "analysis/changed": {
-          "description": "Analysis job progressed",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "params": {
-              "title": "analysis/changed params",
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "sessionId": {
-                  "description": "Session directory name.",
-                  "type": "string"
-                },
-                "state": {
-                  "description": "Job state: idle, running, done, or error.",
                   "type": "string"
                 }
               }

@@ -16,8 +16,6 @@
   r               New run
   C               Recipes
   P               Personas
-  d               Rules
-  a               Analyze the selection
   s               Select (also Space)
   S               Select all
   R               Re-run the highlighted recipe as a new session
@@ -30,7 +28,7 @@
   x               Delete (press twice)
 
 [bold]Browser[/bold]
-  [ ]  1-5        Timeline, Summary, Diff, Findings, Report
+  [ ]  1-4        Timeline, Summary, Diff, Report
   Diff            Rewind snapshots (or approximate search_replace edits); Prompt/Assistant tabs above a files and hunk split; / fuzzy-finds path or hunk; h/l steps snapshots; y copies the highlighted file
 
   h / l / Left / Right    Previous / next turn on the Timeline
@@ -39,13 +37,12 @@
   Summary         Session glance; Tasks, Workflows, Subagents, and Stats tabs (click the strip)
   Tail            Follow new events to the end while a turn is open (terminal and HUD). Off keeps the highlight still.
   Enter           Full-width event (Esc back to the list); or open a child from a spawn/finish row
-  i               Jump to Findings
   f               Flag this event
   N               New note
   O               Edit or delete note
   n               Follow-up while awaiting
   e               Done while awaiting
-  y               Copy the selection, the finding, or the focused / primary pane body
+  y               Copy the selection or the focused / primary pane body
   Ctrl+Shift+C    Same as y
   Ctrl+C          Copy the selection or focused body; quit hint when neither applies
   mouse drag      Select text; release copies the selection (multi-line OK); y still works

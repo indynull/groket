@@ -62,18 +62,19 @@ async def test_app_mounts_activity_bar(tmp_path: Path) -> None:
         bar.refresh_activity()
         await pilot.pause()
         counts = activity_counters_from_app(app)
+        assert "analyze" not in counts
         line = build_activity_line(
             pending=counts["pending"],
             building=counts["building"],
             running=counts["running"],
             extracting=counts["extracting"],
             awaiting=counts["awaiting"],
-            analyze_active=counts["analyze"],
             refresh_active=counts["refresh"],
             sessions_loaded=counts["sessions"],
         )
         plain = line.plain.lower()
         assert "sessions" in plain
+        assert "analysis" not in plain
         assert "live" not in plain
         assert "lib" not in plain
 

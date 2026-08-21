@@ -3,8 +3,7 @@
 Serialised models use Pydantic v2 (:class:`Flag`, :class:`EvalRun`). Hot-path
 trace types use dataclasses (:class:`ToolCall`, :class:`TraceEvent`). Shared
 aliases (:data:`JsonValue`, :data:`JsonObject`, :class:`ChatMessage`,
-:data:`RuleParams`, :data:`ToolInput`, :data:`MatchVariables`) define detector
-and JSON/YAML boundaries.
+:data:`ToolInput`) define JSON/YAML boundaries.
 """
 
 from __future__ import annotations
@@ -39,10 +38,6 @@ type JsonValue = str | int | float | bool | dict[str, JsonValue] | list[JsonValu
 type JsonObject = dict[str, JsonValue]
 
 # Tool inputs use :class:`ToolInputBag` (alias :data:`ToolInput`).
-
-# Match / template variables for rule summary strings (JSON-compatible).
-type TemplateValue = JsonValue
-type MatchVariables = JsonObject
 
 
 def json_as_str(value: JsonValue | None, default: str = "") -> str:
@@ -249,10 +244,6 @@ class ParamBag:
         return list(default or ())
 
 
-# Rule YAML ``params:`` — prefer :class:`ParamBag` at detector boundaries.
-type RuleParams = ParamBag
-
-
 class ToolInputBag(ParamBag):
     """Tool / MCP argument bag with the same accessors as :class:`ParamBag`."""
 
@@ -278,26 +269,6 @@ class ChatMessage(TypedDict, total=False):
 
 
 type ChatHistory = Sequence[ChatMessage]
-
-
-class Severity(str, Enum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-    @property
-    def icon(self) -> str:
-        return {"high": "[!!]", "medium": "[! ]", "low": "[  ]"}[self.value]
-
-    @property
-    def color(self) -> str:
-        return {"high": "red", "medium": "yellow", "low": "dim"}[self.value]
-
-    def __lt__(self, other: object) -> bool:
-        if not isinstance(other, Severity):
-            return NotImplemented
-        order = {Severity.HIGH: 0, Severity.MEDIUM: 1, Severity.LOW: 2}
-        return order[self] < order[other]
 
 
 class FlagVerdict(str, Enum):

@@ -1037,8 +1037,8 @@ def main() -> int:
                 "skipped": True,
             }
         )
-    step("07-findings", "Ctrl+5 Findings", lambda: walk.key("ctrl+5"))
-    step("08-notes", "Ctrl+6 Notes", lambda: walk.key("ctrl+6"))
+    step("07-diff", "Ctrl+4 Diff", lambda: walk.key("ctrl+4"))
+    step("08-notes", "Ctrl+5 Notes", lambda: walk.key("ctrl+5"))
     step("09-overview-return", "Ctrl+1 Overview", lambda: walk.key("ctrl+1"))
 
     # Pane shots should not all be bit-identical (keys landed).

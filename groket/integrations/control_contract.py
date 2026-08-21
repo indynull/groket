@@ -28,7 +28,6 @@ SCHEMA_ID = "https://indynull.github.io/groket/schemas/control.schema.json"
 NOTIFY_SESSION_SELECTED = "session/selected"
 NOTIFY_SESSION_CHANGED = "session/changed"
 NOTIFY_NOTES_CHANGED = "notes/changed"
-NOTIFY_ANALYSIS_CHANGED = "analysis/changed"
 
 
 @dataclass(frozen=True)
@@ -220,14 +219,6 @@ METHODS: tuple[MethodSpec, ...] = (
         params=(_SESSION,),
     ),
     MethodSpec(
-        name="session/findings",
-        role="Cached analysis findings",
-        params=(
-            _SESSION,
-            FieldSpec("limit", "Max findings to return.", json_type="integer"),
-        ),
-    ),
-    MethodSpec(
         name="session/diff",
         role="Rewind snapshots or approximate `search_replace` edits "
         "(files + hunks + prompt/assistant text)",
@@ -291,19 +282,6 @@ METHODS: tuple[MethodSpec, ...] = (
             _EXPECTED_REV,
         ),
     ),
-    MethodSpec(
-        name="analysis/run",
-        role="Start analysis on the owner (`force` optional)",
-        params=(
-            _SESSION,
-            FieldSpec("force", "Re-run even when a cache hit exists.", json_type="boolean"),
-        ),
-    ),
-    MethodSpec(
-        name="analysis/status",
-        role="Job state: `idle` / `running` / `done` / `error`",
-        params=(_SESSION,),
-    ),
 )
 
 
@@ -329,14 +307,6 @@ NOTIFICATIONS: tuple[NotificationSpec, ...] = (
         name=NOTIFY_NOTES_CHANGED,
         when="Notes written or deleted",
         params=(_SESSION_ID, _REVISION),
-    ),
-    NotificationSpec(
-        name=NOTIFY_ANALYSIS_CHANGED,
-        when="Analysis job progressed",
-        params=(
-            _SESSION_ID,
-            FieldSpec("state", "Job state: idle, running, done, or error."),
-        ),
     ),
 )
 
@@ -619,7 +589,6 @@ def emit_control_doc(out: Path | None = None) -> str:
 
 __all__ = (
     "MIN_PROTOCOL_VERSION",
-    "NOTIFY_ANALYSIS_CHANGED",
     "NOTIFY_NOTES_CHANGED",
     "NOTIFY_SESSION_CHANGED",
     "NOTIFY_SESSION_SELECTED",

@@ -24,11 +24,11 @@ use crate::format::{
 use crate::fuzzy::session_search_indices;
 use crate::live::{
     card_marks_from_overview, clamp_scroll, diff_hunk_scroll_y, filter_timeline_indices,
-    filter_turn_indices, finding_card_height, first_list_fetch, is_partial_list_page,
+    filter_turn_indices, first_list_fetch, is_partial_list_page,
     is_soft_notes_save_error, last_timeline_page_offset, list_focus_after_scroll,
     list_scroll_to_cover, list_scroll_to_top, merge_catalog_rows, merge_timeline_by_index,
     next_list_offset, next_spotlight_limit, note_card_height, note_field_input_key,
-    note_text_input_keys, notes_schema_fields, ordered_finding_indices, patch_catalog_delta,
+    note_text_input_keys, notes_schema_fields, patch_catalog_delta,
     patch_list_row_from_meta, plan_tick, previous_timeline_page, scroll_after_prepend,
     session_card_height, session_needs_live_poll, session_rpc_ref, should_fetch_timeline,
     should_load_previous_timeline, should_page_recent, spotlight_recent,
@@ -49,7 +49,7 @@ use crate::theme;
 use crate::view;
 use crate::wire::{
     decode_overview, decode_session_list, decode_session_list_response, decode_timeline_page,
-    FindingRow, NotesBlock, Overview, TimelineEvent,
+    NotesBlock, Overview, TimelineEvent,
 };
 
 const HUD_W: f32 = 780.0;
@@ -165,7 +165,6 @@ pub enum Message {
     /// Highlight a Tasks / Workflows / Subagents row (second press opens).
     FocusOverviewRow(usize),
     WorkflowChildScroll(icedtea::collection::VisibleWindow),
-    FindingScroll(icedtea::collection::VisibleWindow),
     NoteScroll(icedtea::collection::VisibleWindow),
     StatsScroll(icedtea::collection::VisibleWindow),
     StatsHScroll(f32),
@@ -187,10 +186,6 @@ pub enum Message {
     MdPointer {
         slot: usize,
         ev: icedtea::select::MarkdownPointer,
-    },
-    FindingExpand {
-        id: String,
-        open: bool,
     },
     NoteExpand {
         id: String,
@@ -277,9 +272,6 @@ pub struct Hud {
     wf_child_window: icedtea::collection::VisibleWindow,
     wf_child_heights: Vec<f32>,
     wf_child_scroll_id: Id,
-    finding_window: icedtea::collection::VisibleWindow,
-    finding_heights: Vec<f32>,
-    finding_scroll_id: Id,
     note_window: icedtea::collection::VisibleWindow,
     note_heights: Vec<f32>,
     note_scroll_id: Id,
@@ -364,7 +356,6 @@ pub struct Hud {
     event_marks: std::collections::HashMap<i64, CardMark>,
     seen_status: std::collections::HashMap<String, String>,
     notices_primed: bool,
-    seen_analysis: std::collections::HashMap<String, String>,
     toasts: icedtea::toast::ToastQueue,
     last_tick: Instant,
     spin_phase: f32,
@@ -376,9 +367,7 @@ pub struct Hud {
     page_dir: Option<icedtea::motion::Slide>,
     reduced_motion: bool,
     catalog_busy: bool,
-    findings_open: HashSet<String>,
     notes_open: HashSet<String>,
-    finding_motion: HashMap<String, Animation<bool>>,
     note_motion: HashMap<String, Animation<bool>>,
     /// Last focused Turns row (`turns.timeline`, `edit.copy`).
     turns_focus: Option<i64>,
@@ -454,9 +443,6 @@ impl Default for Hud {
             wf_child_window: icedtea::collection::VisibleWindow::new(400.0),
             wf_child_heights: vec![],
             wf_child_scroll_id: Id::new("hud-wf-children"),
-            finding_window: icedtea::collection::VisibleWindow::new(400.0),
-            finding_heights: vec![],
-            finding_scroll_id: Id::new("hud-findings"),
             note_window: icedtea::collection::VisibleWindow::new(400.0),
             note_heights: vec![],
             note_scroll_id: Id::new("hud-notes"),
@@ -538,7 +524,6 @@ impl Default for Hud {
             event_marks: std::collections::HashMap::new(),
             seen_status: std::collections::HashMap::new(),
             notices_primed: false,
-            seen_analysis: std::collections::HashMap::new(),
             toasts: icedtea::toast::ToastQueue::new(),
             last_tick: Instant::now(),
             spin_phase: 0.0,
@@ -550,9 +535,7 @@ impl Default for Hud {
             page_dir: None,
             reduced_motion: motion::detect_reduced_motion(),
             catalog_busy: false,
-            findings_open: HashSet::new(),
             notes_open: HashSet::new(),
-            finding_motion: HashMap::new(),
             note_motion: HashMap::new(),
             turns_focus: None,
             turns_query: String::new(),
@@ -1268,14 +1251,6 @@ impl Hud {
                 };
                 Task::none()
             }
-            Message::FindingScroll(win) => {
-                self.finding_window = if self.finding_heights.is_empty() {
-                    icedtea::collection::VisibleWindow::new(win.viewport.max(1.0))
-                } else {
-                    win
-                };
-                Task::none()
-            }
             Message::NoteScroll(win) => {
                 self.note_window = if self.note_heights.is_empty() {
                     icedtea::collection::VisibleWindow::new(win.viewport.max(1.0))
@@ -1335,13 +1310,8 @@ impl Hud {
                 }
                 Task::batch([self.load_overview(false), self.focus_browse()])
             }
-            Message::FindingExpand { id, open } => {
-                self.set_expand(true, id, open);
-                self.bind_copy_bodies();
-                Task::none()
-            }
             Message::NoteExpand { id, open } => {
-                self.set_expand(false, id, open);
+                self.set_note_expand(id, open);
                 self.bind_copy_bodies();
                 Task::none()
             }
@@ -1930,15 +1900,6 @@ impl Hud {
             .map(|r| r.children.as_slice())
             .unwrap_or(&[])
     }
-    pub fn finding_window(&self) -> icedtea::collection::VisibleWindow {
-        self.finding_window
-    }
-    pub fn finding_heights(&self) -> &[f32] {
-        &self.finding_heights
-    }
-    pub fn finding_scroll_id(&self) -> Id {
-        self.finding_scroll_id.clone()
-    }
     pub fn note_window(&self) -> icedtea::collection::VisibleWindow {
         self.note_window
     }
@@ -2161,28 +2122,6 @@ impl Hud {
         self.wf_child_window.scroll = clamp_scroll(self.wf_child_window.scroll, content, view_h);
     }
 
-    fn rebuild_finding_heights(&mut self) {
-        let ov = self.overview.as_ref();
-        self.finding_heights = ov
-            .map(|o| {
-                let findings = &o.findings.findings;
-                ordered_finding_indices(findings)
-                    .into_iter()
-                    .filter_map(|i| findings.get(i))
-                    .map(|f| {
-                        finding_card_height(
-                            &f.detail,
-                            self.findings_open.contains(&finding_menu_key(f)),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let view_h = self.finding_window.viewport.max(1.0);
-        let content: f32 = self.finding_heights.iter().copied().sum();
-        self.finding_window.scroll = clamp_scroll(self.finding_window.scroll, content, view_h);
-    }
-
     fn rebuild_note_heights(&mut self) {
         let ov = self.overview.as_ref();
         let mut notes: Vec<&crate::wire::NoteRow> = ov
@@ -2204,7 +2143,6 @@ impl Hud {
     fn rebuild_clip_lists(&mut self) {
         self.rebuild_overview_heights();
         self.rebuild_wf_child_heights();
-        self.rebuild_finding_heights();
         self.rebuild_note_heights();
     }
 
@@ -2466,19 +2404,6 @@ impl Hud {
             .iter()
             .map(|t| (t.turn_index, t.summary.clone(), t.assistant_summary.clone()))
             .collect();
-        let findings: Vec<(String, String)> = o
-            .findings
-            .findings
-            .iter()
-            .map(|f| {
-                let body = if f.detail.is_empty() {
-                    f.title.clone()
-                } else {
-                    f.detail.clone()
-                };
-                (finding_menu_key(f), body)
-            })
-            .collect();
         let notes: Vec<(String, String)> = o
             .notes
             .notes
@@ -2498,15 +2423,6 @@ impl Hud {
             }
             if !asst.is_empty() {
                 self.bind_markdown(format!("turn.{i}.assistant"), &asst);
-            }
-        }
-        for (id, body) in findings {
-            if !body.is_empty() {
-                if looks_like_markdown(&body) {
-                    self.bind_markdown(format!("finding.{id}"), &body);
-                } else {
-                    self.bind_field(format!("finding.{id}"), &body);
-                }
             }
         }
         for (id, body) in notes {
@@ -2629,10 +2545,6 @@ impl Hud {
                     }
                 }
             }
-            Tab::Findings => {
-                let id = self.findings_open.iter().next()?;
-                format!("finding.{id}")
-            }
             Tab::Notes => {
                 let id = self.notes_open.iter().next()?;
                 format!("note.{id}")
@@ -2713,23 +2625,6 @@ impl Hud {
                 .map(|t| extract_turn(&t.label, &t.summary, &t.assistant_summary))
                 .unwrap_or_default(),
             Tab::Diff => self.selected_diff_unified(),
-            Tab::Findings => self
-                .overview
-                .as_ref()
-                .and_then(|o| {
-                    o.findings
-                        .findings
-                        .iter()
-                        .find(|f| self.findings_open.contains(&finding_menu_key(f)))
-                })
-                .map(|f| {
-                    if f.detail.is_empty() {
-                        f.title.clone()
-                    } else {
-                        f.detail.clone()
-                    }
-                })
-                .unwrap_or_default(),
             Tab::Notes => self
                 .overview
                 .as_ref()
@@ -2906,8 +2801,7 @@ impl Hud {
 
     fn expanders_moving(&self) -> bool {
         let now = Instant::now();
-        self.finding_motion.values().any(|a| a.is_animating(now))
-            || self.note_motion.values().any(|a| a.is_animating(now))
+        self.note_motion.values().any(|a| a.is_animating(now))
     }
 
     fn needs_motion_tick(&self) -> bool {
@@ -2963,36 +2857,28 @@ impl Hud {
         );
     }
 
-    fn set_expand(&mut self, findings: bool, id: String, open: bool) {
+    fn set_note_expand(&mut self, id: String, open: bool) {
         let reduced = self.reduced_motion;
-        let (set, store) = if findings {
-            (&mut self.findings_open, &mut self.finding_motion)
-        } else {
-            (&mut self.notes_open, &mut self.note_motion)
-        };
         if open {
-            set.insert(id.clone());
+            self.notes_open.insert(id.clone());
         } else {
-            set.remove(&id);
+            self.notes_open.remove(&id);
         }
         let now = Instant::now();
-        let prev = store
+        let prev = self
+            .note_motion
             .remove(&id)
             .unwrap_or_else(|| motion::disclose_animation(!open, reduced));
         if reduced {
-            store.insert(id, motion::disclose_animation(open, true));
-        } else {
-            let mut anim = prev
-                .duration(MotionRole::Disclose.duration(false))
-                .easing(MotionRole::Disclose.easing());
-            anim.go_mut(open, now);
-            store.insert(id, anim);
+            self.note_motion
+                .insert(id, motion::disclose_animation(open, true));
+            return;
         }
-        if findings {
-            self.rebuild_finding_heights();
-        } else {
-            self.rebuild_note_heights();
-        }
+        let mut anim = prev
+            .duration(MotionRole::Disclose.duration(false))
+            .easing(MotionRole::Disclose.easing());
+        anim.go_mut(open, now);
+        self.note_motion.insert(id, anim);
     }
 
     fn expand_progress(
@@ -3008,10 +2894,6 @@ impl Hud {
         } else {
             0.0
         }
-    }
-
-    pub fn finding_expand_progress(&self, id: &str) -> f32 {
-        Self::expand_progress(&self.findings_open, &self.finding_motion, id)
     }
 
     pub fn note_expand_progress(&self, id: &str) -> f32 {
@@ -3569,9 +3451,7 @@ impl Hud {
         self.turns_focus = None;
         self.turns_query.clear();
         self.turns_filter.clear();
-        self.findings_open.clear();
         self.notes_open.clear();
-        self.finding_motion.clear();
         self.note_motion.clear();
         self.fields = icedtea::field::Selectables::new();
         self.note_draft = NoteDraft::default();
@@ -5140,26 +5020,6 @@ impl Hud {
                 }
             })
             .collect();
-        for (method, params) in &notifies {
-            if method != "analysis/changed" {
-                continue;
-            }
-            let sid = params
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let title = self
-                .all_sessions
-                .iter()
-                .find(|r| r.session_id == sid)
-                .map(|r| r.display_title().to_string())
-                .unwrap_or_default();
-            if let Some(n) =
-                crate::desktop::take_analysis_notice(&mut self.seen_analysis, params, &title)
-            {
-                crate::desktop::post(n);
-            }
-        }
         let selected = self.selected_sid().unwrap_or_default();
         let live = session_needs_live_poll(
             &self.selected_status(),
@@ -5239,9 +5099,6 @@ impl Hud {
     }
     pub fn spin_phase(&self) -> f32 {
         self.spin_phase
-    }
-    pub fn finding_expanded(&self, id: &str) -> bool {
-        self.findings_open.contains(id)
     }
     pub fn note_expanded(&self, id: &str) -> bool {
         self.notes_open.contains(id)
@@ -5968,7 +5825,7 @@ impl Hud {
                 }
                 Task::none()
             }
-            Tab::Diff | Tab::Findings | Tab::Notes => Task::none(),
+            Tab::Diff | Tab::Notes => Task::none(),
         }
     }
 }
@@ -6061,18 +5918,6 @@ fn fetch_timeline(req: TimelineFetch) -> Task<Message> {
             advance: req.advance,
             result,
         },
-    )
-}
-
-fn finding_menu_key(f: &FindingRow) -> String {
-    if !f.id.is_empty() {
-        return f.id.clone();
-    }
-    format!(
-        "{}|{}|{}",
-        f.severity,
-        f.title,
-        f.primary_event_index.unwrap_or(-1)
     )
 }
 
@@ -6591,7 +6436,6 @@ mod tests {
                     }
                 ]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -7965,7 +7809,6 @@ mod tests {
                 "title": "Disk"
             },
             "turns": { "total": 0, "turns": [] },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8146,7 +7989,6 @@ mod tests {
                     "eventIndexes": [10, 11, 12]
                 }]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8251,7 +8093,6 @@ mod tests {
                     }
                 ]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8306,7 +8147,6 @@ mod tests {
                     }
                 ]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8357,7 +8197,6 @@ mod tests {
                     }
                 ]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8401,7 +8240,6 @@ mod tests {
                     "eventIndexes": [20, 21]
                 }]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8632,18 +8470,6 @@ mod tests {
     }
 
     #[test]
-    fn finding_jump_without_event_opens_overview() {
-        let f = FindingRow {
-            title: "x".into(),
-            ..FindingRow::default()
-        };
-        assert!(matches!(
-            crate::view::finding_jump(&f),
-            Message::SetTab(Tab::Overview)
-        ));
-    }
-
-    #[test]
     fn events_tab_all_turns_fetches_full_timeline() {
         // All turns (no prompt filter) still loads the first page — empty shell
         // was dishonest (see should_fetch_timeline).
@@ -8660,7 +8486,6 @@ mod tests {
                     "eventIndexes": [1, 2]
                 }]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8723,7 +8548,6 @@ mod tests {
                 "eventIndex": 4
             }],
             "turns": { "total": 0, "turns": [] },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8758,7 +8582,6 @@ mod tests {
                 "eventIndex": 9
             }],
             "turns": { "total": 0, "turns": [] },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8788,7 +8611,6 @@ mod tests {
                 "promptPreview": "hourly ping"
             }],
             "turns": { "total": 0, "turns": [] },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8878,7 +8700,6 @@ mod tests {
                     "eventIndexes": [10, 11]
                 }]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -8913,38 +8734,6 @@ mod tests {
         assert_eq!(hud.tab(), Tab::Timeline);
         assert_eq!(hud.timeline_focus(), Some(12));
         assert!(hud.is_timeline_open(12));
-    }
-
-    #[test]
-    fn failed_workflow_finding_is_on_findings() {
-        use crate::wire::{FindingRow, FindingsBlock, Overview};
-        let mut hud = hud_with_session();
-        hud.overview = Some(Overview {
-            findings: FindingsBlock {
-                findings: vec![FindingRow {
-                    id: "workflow:wf_sprint8".into(),
-                    plugin_id: "basic".into(),
-                    title: "Workflow sprint-8 failed".into(),
-                    event_indices: vec![12],
-                    ..FindingRow::default()
-                }],
-                ..FindingsBlock::default()
-            },
-            ..Overview::default()
-        });
-        let _ = hud.update(Message::SetTab(Tab::Findings));
-        assert_eq!(hud.tab(), Tab::Findings);
-        let titles: Vec<String> = hud
-            .overview()
-            .map(|o| {
-                o.findings
-                    .findings
-                    .iter()
-                    .map(|f| f.title.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert!(titles.iter().any(|t| t.contains("sprint-8")));
     }
 
     #[test]
@@ -8997,18 +8786,8 @@ mod tests {
     }
 
     #[test]
-    fn finding_and_note_expanders_open_independently() {
+    fn note_expanders_open_independently() {
         let mut hud = Hud::default();
-        let _ = hud.update(Message::FindingExpand {
-            id: "a".into(),
-            open: true,
-        });
-        let _ = hud.update(Message::FindingExpand {
-            id: "b".into(),
-            open: true,
-        });
-        assert!(hud.finding_expanded("a"));
-        assert!(hud.finding_expanded("b"));
         let _ = hud.update(Message::NoteExpand {
             id: "n1".into(),
             open: true,
@@ -9019,12 +8798,12 @@ mod tests {
         });
         assert!(hud.note_expanded("n1"));
         assert!(hud.note_expanded("n2"));
-        let _ = hud.update(Message::FindingExpand {
-            id: "a".into(),
+        let _ = hud.update(Message::NoteExpand {
+            id: "n1".into(),
             open: false,
         });
-        assert!(!hud.finding_expanded("a"));
-        assert!(hud.finding_expanded("b"));
+        assert!(!hud.note_expanded("n1"));
+        assert!(hud.note_expanded("n2"));
     }
 
     #[test]
@@ -9051,14 +8830,14 @@ mod tests {
             hud.extract_src(ExtractKey::Overview("path")).as_deref(),
             Some("/workspace/sess-wire")
         );
-        // Raw event/findings counts are not copyable Overview fields.
+        // Raw event counts are not copyable Overview fields.
         assert_eq!(hud.extract_src(ExtractKey::Overview("events")), None);
         assert!(hud.extract(ExtractKey::Overview("session")).is_some());
     }
 
     #[test]
-    fn finding_turn_and_summary_bodies_bind_for_copy() {
-        use crate::wire::{FindingRow, FindingsBlock, Overview, TurnRow, TurnsBlock};
+    fn turn_and_summary_bodies_bind_for_copy() {
+        use crate::wire::{Overview, TurnRow, TurnsBlock};
         let mut hud = hud_with_session();
         hud.overview = Some(Overview {
             summary: "session blurb".into(),
@@ -9071,18 +8850,9 @@ mod tests {
                 }],
                 ..TurnsBlock::default()
             },
-            findings: FindingsBlock {
-                findings: vec![FindingRow {
-                    id: "f1".into(),
-                    title: "Claimed MCP failed".into(),
-                    detail: "What: bad tool\nWhere: call 3".into(),
-                    ..FindingRow::default()
-                }],
-                ..FindingsBlock::default()
-            },
             ..Overview::default()
         });
-        let _ = hud.update(Message::SetTab(Tab::Findings));
+        let _ = hud.update(Message::SetTab(Tab::Overview));
         assert_eq!(
             hud.field("overview.summary").map(|c| c.text()).as_deref(),
             Some("session blurb")
@@ -9095,10 +8865,7 @@ mod tests {
             hud.field("turn.2.assistant").map(|c| c.text()).as_deref(),
             Some("done")
         );
-        assert_eq!(
-            hud.field("finding.f1").map(|c| c.text()).as_deref(),
-            Some("What: bad tool\nWhere: call 3")
-        );
+        assert!(hud.field("finding.f1").is_none());
     }
 
     #[test]
@@ -9446,7 +9213,6 @@ mod tests {
                     }
                 ]
             },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         })
     }
@@ -10315,7 +10081,6 @@ mod tests {
                 "status": "running"
             },
             "turns": { "turns": [] },
-            "findings": { "count": 0, "findings": [] },
             "notes": { "count": 0, "notes": [] }
         });
         let _ = hud.update(Message::OverviewLoaded {
@@ -10486,34 +10251,34 @@ mod tests {
             reduced_motion: false,
             ..Hud::default()
         };
-        let _ = hud.update(Message::FindingExpand {
+        let _ = hud.update(Message::NoteExpand {
             id: "a".into(),
             open: true,
         });
-        assert!(hud.finding_expanded("a"));
+        assert!(hud.note_expanded("a"));
         assert!(
-            hud.finding_motion
+            hud.note_motion
                 .get("a")
                 .is_some_and(|a| a.is_animating(Instant::now())),
             "opening must start disclose animation"
         );
-        assert!(hud.finding_expand_progress("a") < 1.0);
+        assert!(hud.note_expand_progress("a") < 1.0);
         let started = Instant::now() - Duration::from_millis(80);
         let mut anim = motion::disclose_animation(false, false);
         anim.go_mut(true, started);
-        hud.finding_motion.insert("a".into(), anim);
-        let p = hud.finding_expand_progress("a");
+        hud.note_motion.insert("a".into(), anim);
+        let p = hud.note_expand_progress("a");
         assert!(p > 0.0 && p < 1.0, "expander progress {p}");
         let mut snap = Hud {
             reduced_motion: true,
             ..Hud::default()
         };
-        let _ = snap.update(Message::FindingExpand {
+        let _ = snap.update(Message::NoteExpand {
             id: "b".into(),
             open: true,
         });
-        assert!((snap.finding_expand_progress("b") - 1.0).abs() < 0.01);
-        assert!(snap.finding_expanded("b"));
+        assert!((snap.note_expand_progress("b") - 1.0).abs() < 0.01);
+        assert!(snap.note_expanded("b"));
     }
 
     #[test]

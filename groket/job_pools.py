@@ -114,7 +114,6 @@ class JobPool:
 
 # Process-wide pools (reset on config reload via :func:`configure_job_pools`).
 _activity_log = ActivityLog()
-_analysis_pool = JobPool("analysis", 1, _activity_log)
 _live_refresh_pool = JobPool("refresh", 1, _activity_log)
 _pools_lock = threading.Lock()
 
@@ -123,36 +122,24 @@ def get_activity_log() -> ActivityLog:
     return _activity_log
 
 
-def get_analysis_pool() -> JobPool:
-    return _analysis_pool
-
-
 def get_live_refresh_pool() -> JobPool:
     return _live_refresh_pool
 
 
 def configure_job_pools(
     *,
-    analysis_workers: int = 1,
     live_refresh_workers: int = 1,
 ) -> None:
-    """Replace global pools (call when analysis settings are saved)."""
-    global _analysis_pool, _live_refresh_pool
+    """Replace the live-refresh pool (call when prefs change)."""
+    global _live_refresh_pool
     with _pools_lock:
-        old_a, old_r = _analysis_pool, _live_refresh_pool
-        _analysis_pool = JobPool("analysis", analysis_workers, _activity_log)
+        old_r = _live_refresh_pool
         _live_refresh_pool = JobPool("refresh", live_refresh_workers, _activity_log)
         _activity_log.log(
             "system",
-            f"pools reconfigured analysis={max(1, analysis_workers)} "
-            f"refresh={max(1, live_refresh_workers)}",
+            f"pools reconfigured refresh={max(1, live_refresh_workers)}",
         )
-        old_a.shutdown(wait=False)
         old_r.shutdown(wait=False)
-
-
-def analysis_inflight() -> int:
-    return _analysis_pool.inflight
 
 
 def refresh_inflight() -> int:

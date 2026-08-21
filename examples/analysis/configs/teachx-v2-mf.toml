@@ -1,7 +1,0 @@
-#:schema https://indynull.github.io/groket/schemas/config.schema.json
-
-[analysis]
-plugins = ["teachx_v2_mf:TeachxV2MfAnalyzer"]
-auto_analyze_when = "session_complete"
-analysis_workers = 1
-live_refresh_workers = 1

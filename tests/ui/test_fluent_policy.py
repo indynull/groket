@@ -23,7 +23,6 @@ def test_notify_messages() -> None:
     setup_i18n("en")
     assert "/tmp" in t("notify-scanning", path="/tmp")
     assert "3" in t("notify-loaded-sessions", n=3)
-    assert "2" in t("notify-analyzing", n=2, plugins=1)
 
 
 def test_check_fluent_script_exits_zero() -> None:

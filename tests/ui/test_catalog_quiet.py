@@ -8,37 +8,25 @@ from groket.models import SessionMeta
 from groket.ui.app import TraceEvalApp
 
 
-def test_importing_trace_eval_app_does_not_import_analysis_service() -> None:
-    """Cold ``import groket.ui.app`` must not pull AnalysisService / builtins."""
+def test_importing_trace_eval_app_does_not_import_scoring_packages() -> None:
+    """Cold ``import groket.ui.app`` must not pull deleted scoring packages."""
     import sys
 
-    saved = {
-        name: sys.modules[name]
-        for name in list(sys.modules)
-        if name == "groket.analysis" or name.startswith("groket.analysis.")
-    }
-    for name in list(saved):
-        del sys.modules[name]
     ui_app = sys.modules.pop("groket.ui.app", None)
     try:
         import groket.ui.app as app_mod
 
-        assert "groket.analysis.service" not in sys.modules
-        assert "groket.analysis.basic" not in sys.modules
-        assert "groket.analysis.plugins.engine.analyzer" not in sys.modules
-        assert "groket.analysis.plugins.engine" not in sys.modules
+        assert "groket.analysis" not in sys.modules
+        assert "groket.engine" not in sys.modules
+        assert "groket.analyzer" not in sys.modules
         assert app_mod.TraceEvalApp is not None
     finally:
         if ui_app is not None:
             sys.modules["groket.ui.app"] = ui_app
-        for name in list(sys.modules):
-            if name == "groket.analysis" or name.startswith("groket.analysis."):
-                del sys.modules[name]
-        sys.modules.update(saved)
 
 
-def test_tui_on_mount_does_not_construct_analysis_service() -> None:
-    """Opening the TUI must not construct AnalysisService or load plugins."""
+def test_tui_on_mount_does_not_construct_scoring_services() -> None:
+    """Opening the TUI must not construct deleted scoring services."""
     source = Path(__file__).resolve().parents[2] / "groket" / "ui" / "app.py"
     text = source.read_text(encoding="utf-8")
     chunk = text.split("class TraceEvalApp", 1)[1]
@@ -46,6 +34,7 @@ def test_tui_on_mount_does_not_construct_analysis_service() -> None:
     assert "AnalysisService(" not in on_mount
     assert "set_analysis_service" not in on_mount
     assert "load_config_plugins" not in on_mount
+    assert "RulesScreen" not in on_mount
 
 
 def test_first_control_catalog_paint_requests_a_page() -> None:
@@ -349,33 +338,6 @@ def test_browser_screen_init_sets_pending_and_live_attrs(tmp_path: Path) -> None
     assert screen._session_is_pending() is False
 
 
-def test_browser_analysis_svc_uses_app_not_bare_default(tmp_path: Path) -> None:
-    """Open-session analysis must use TraceEvalApp._analysis_svc (app work_dir)."""
-    from groket.ui.screens.browser import BrowserScreen
-
-    work = tmp_path / "app-work"
-    traces = work / "runs" / "traces"
-    traces.mkdir(parents=True)
-    sess = traces / "sess-a"
-    sess.mkdir()
-    app = TraceEvalApp(
-        work_dir=work,
-        traces_path=traces,
-        control_socket=None,
-    )
-    screen = BrowserScreen(sess)
-    seen: list[Path] = []
-
-    def fake_svc() -> object:
-        seen.append(app.work_dir)
-        return type("Svc", (), {"config": type("C", (), {"auto_analyze_when": "never"})()})()
-
-    app._analysis_svc = fake_svc  # type: ignore[method-assign]
-    screen._app = app  # type: ignore[attr-defined]
-    assert screen._should_auto_analyze() is False
-    assert seen == [app.work_dir]
-
-
 def test_load_sessions_is_threaded_worker() -> None:
     source = Path(__file__).resolve().parents[2] / "groket" / "ui" / "app.py"
     text = source.read_text(encoding="utf-8")
@@ -424,7 +386,7 @@ def test_quiet_unchanged_catalog_skips_table_rebuild(tmp_path: Path, monkeypatch
         lambda _app, cb, *a, **k: ui.append(getattr(cb, "__name__", str(cb))),
     )
     gen = app._begin_sessions_load()
-    app._load_sessions_via_control(gen, quiet=True, clear_plugins=False)
+    app._load_sessions_via_control(gen, quiet=True)
     assert fetches == [{"query": "", "since_revision": 7, "drain": False}]
     assert app._meta_only[0][0].session_id == "keep"
     assert " _populate_session_table" not in ui
@@ -495,7 +457,7 @@ def test_quiet_poll_drains_when_owner_returns_full_page(tmp_path: Path, monkeypa
     monkeypatch.setattr(app, "_fetch_control_catalog_sync", fake_fetch)
     monkeypatch.setattr("groket.ui.app.call_ui", lambda *_a, **_k: None)
     gen = app._begin_sessions_load()
-    app._load_sessions_via_control(gen, quiet=True, clear_plugins=False)
+    app._load_sessions_via_control(gen, quiet=True)
     assert fetches[0] == {"since_revision": 1, "drain": False}
     assert any(f.get("drain") is True for f in fetches)
     ids = {meta.session_id for meta, _label in app._meta_only}

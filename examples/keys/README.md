@@ -2,10 +2,9 @@
 
 Copy a map to `~/.groket/keys.toml` (or point `GROKET_KEYS` at the file).
 The file is diffs only: omitted ids keep catalog defaults, including
-`y` (copy the selection, the finding, or the pane), `/` (search), and
+`y` (copy the selection or the pane), `/` (search), and
 `h`/`l` plus Left/Right (Timeline turns and Diff snapshots). Left/Right
-are not remapped: they are not letters. Next-turn is not `i` (Colemak
-physical L) because Findings already uses `i` on the browser.
+are not remapped: they are not letters.
 
 ```bash
 mkdir -p ~/.groket

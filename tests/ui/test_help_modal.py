@@ -17,6 +17,9 @@ def test_help_markup_nonempty() -> None:
     assert isinstance(text, str)
     assert len(text) > 10
     assert f"groket {__version__}" in text
+    assert "Export a session bundle" in text
+    assert "Run plugins" not in text
+    assert "groket analyzer" not in text.lower()
 
 
 class _HelpApp(App):

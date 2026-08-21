@@ -1,7 +1,0 @@
-#:schema https://indynull.github.io/groket/schemas/config.schema.json
-
-[analysis]
-plugins = [
-  "diff_reviewer:DiffReviewerAnalyzer",
-  "conversation_flow:ConversationFlowAnalyzer",
-]

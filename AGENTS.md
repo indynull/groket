@@ -7,7 +7,7 @@ Grok Build sessions (Python 3.13+). Similar in spirit to
 [toolong](https://github.com/Textualize/toolong).
 
 Operators read traces and paste prompts, replies, and tool output into
-findings. Every body that is useful to quote must be selectable on both
+notes. Every body that is useful to quote must be selectable on both
 the terminal and the desktop HUD.
 
 This file is the contract for humans and coding agents working in the repo.
@@ -33,9 +33,8 @@ just ci             # lint + schema-check + hud-check + examples-check + test (l
 | ``groket hud`` | Desktop palette (iced; control client) |
 | ``groket doctor`` | Host checks (Docker, Grok auth, paths) — no TUI |
 | ``groket editor …`` | Packaged Emacs / Neovim client paths |
-| ``groket gen …`` | Scaffold under ``~/.groket/`` (detector, rule, plugin, tasks) |
+| ``groket gen …`` | Scaffold under ``~/.groket/`` (tasks) |
 | ``groket batch …`` | Headless Docker from task YAML (``examples/tasks/``) |
-| ``groket rules …`` | Validate rules / composites YAML |
 
 Prefer **`uv run …`** so tools match the lockfile.
 
@@ -49,7 +48,7 @@ second library that duplicates an existing choice.
 | TUI | **Textual** (+ **Rich**) | Screens, widgets, themes |
 | CLI | **Typer** (+ Click, shellingham) | Subcommands, help, completion |
 | i18n | **fluent.runtime** | ``locale/<lang>/main.ftl`` |
-| Data | **Pydantic v2**, **PyYAML** | Config / models; rule & task YAML |
+| Data | **Pydantic v2**, **PyYAML** | Config / models; task YAML |
 | Docker | **python-on-whales** | Container orchestration |
 
 ---
@@ -95,7 +94,7 @@ If a single path is wrong, fix that path.
 ### Feature delivery (mandatory for product changes)
 
 A “feature” is any operator-visible capability or launch behaviour (keys,
-runner options, batch task fields, Docker entrypoint env, analysis surfaces).
+runner options, batch task fields, Docker entrypoint env).
 **Do not ship half-finished surfaces.** Implement and document the full path
 in the same unit of work (or a tight stack of commits), not “code now, docs
 later.”
@@ -152,8 +151,8 @@ groket/
   cli.py, models.py, config.py, parser.py, paths.py, constants.py, utils.py, flags.py
   event_types.py         # event type sets for filters / segmentation
   fs_watch.py            # TraceTreeWatch (live session / trace FS events)
-  job_pools.py           # serial analysis + live-refresh worker pools
-  session_inflight.py    # per-session inflight locks (analysis, refresh)
+  job_pools.py           # live-refresh worker pool
+  session_inflight.py    # per-session inflight locks (refresh)
   assets_loader.py       # repo assets/ or wheel-embedded templates
   scan.py                # session walk + updates.jsonl keep/skip (Python + groket._scan)
   keys/                  # action catalog + keys.toml overlay
@@ -171,15 +170,13 @@ groket/
   session/control_views.py  # wire payloads for session/get|timeline|turns|usage
 # Sibling crates (Cargo workspace): desktop/ (binary groket-hud), scan/ (groket._scan)
   diagnostics/           # host checks (``groket doctor`` + in-app self-test)
-  analysis/              # Analyzer protocol, service, registry, cache, inflight, llm/
-  engine/                # detectors, rules loader, runner, rule_schema
   capabilities/          # MCP / skills / Grok Build marketplace plugins
   docker/                # orchestrator, base_profiles, resources
   extensions/            # groket gen scaffolds
   locale/                # Fluent .ftl + help.rich.txt
   ui/                    # Textual UI
     app.py               # TraceEvalApp — sessions home
-    screens/             # browser, runner, jobs, personas, rules, run_configs
+    screens/             # browser, runner, jobs, personas, run_configs
     widgets/             # timeline, detail, help_modal, controls, activity_bar, …
     bindings.py, commands.py, i18n.py, text.py, styles.py, prefs.py
     data_table.py, panel_render.py, render_detail.py, forms.py, fuzzy.py
@@ -189,15 +186,14 @@ groket/
 
 assets/                  # non-Python templates (not coverage source)
   docker/                # entrypoint, Dockerfiles, share helpers
-  config/                # empty rules.yaml / composites.yaml stubs
 
 examples/                # supported reference packs (CI: just examples-check) — not auto-loaded
-schemas/                 # committed JSON Schema (tasks, rules, config)
+schemas/                 # committed JSON Schema (tasks, config)
 Optional wheel mirror: groket/_embedded_assets/
 ```
 
-**Data flow:** ``parser`` / ``models`` → ``runs`` | ``session`` | ``analysis`` |
-``engine`` → ``ui``. Prefer domain modules for parse and Docker orchestration.
+**Data flow:** ``parser`` / ``models`` → ``runs`` | ``session`` →
+``ui``. Prefer domain modules for parse and Docker orchestration.
 UI may schedule **read-only** live reloads (meta / signals / light timeline) on
 worker pools; it must not start eval containers from widgets.
 
@@ -206,7 +202,7 @@ per-user Unix socket (JSON-RPC for Emacs/Neovim/HUD/TUI). Lifecycle: bare
 ``serve`` starts (foreground; ``-d`` detaches); ``serve stop`` /
 ``restart`` / ``status``. Domain path: ``session/access`` +
 ``session/catalog`` / ``control_views`` + notes on disk; serve also warms the
-catalog, watches the traces tree, and runs analysis jobs. TUI **never
+catalog and watches the traces tree. TUI **never
 owns** the socket: default is detach-start owner if free (``--no-serve``
 skips spawn; ``--no-socket`` runs offline), then attach and listen.
 When a socket is configured, the home catalog is control-only — attach
@@ -230,7 +226,7 @@ Static Docker/YAML templates load via :mod:`groket.assets_loader`.
 
 | Root | Default | Holds |
 |------|---------|--------|
-| **Config home** (`APP_HOME`) | ``~/.groket`` | ``config.toml``, ``hud.log``, personas, detectors, rules, analysis plugins, tasks scaffolds, analysis cache, reports, flag fallbacks, notes_schema.toml, notes fallback, optional ``models.yaml`` |
+| **Config home** (`APP_HOME`) | ``~/.groket`` | ``config.toml``, ``hud.log``, personas, tasks scaffolds, reports, flag fallbacks, notes_schema.toml, notes fallback, optional ``models.yaml`` |
 | **Work dir** | ``~/.groket/work`` (CLI path overrides) | ``runs/traces/``, ``runs/run_configs/``, feedback cache, Docker build contexts, batch ``eval_results.json`` |
 
 - TUI **Eval** catalog = ``work/runs/traces`` (sessions this tool launched via
@@ -321,10 +317,6 @@ Python Rich styles on a full ``t(...)`` result.
   Forced third-party signatures: one-line library comment (e.g. ``# Textual``).
 - Recursive JSON: PEP 695 ``type`` aliases (3.13+). Prefer
   :func:`~groket.models.as_json_object` when building mappings.
-- Detectors:
-  ``(tool_calls, messages, params: RuleParams) -> list[Match]``.
-- Analyzers:
-  ``analyze(self, session_dir: Path, **kwargs: Unpack[AnalyzeContext]) -> AnalysisResult``.
 - ``logger = logging.getLogger(__name__)``. ``print`` / ``typer.echo`` only in
   ``cli.py``.
 - Init all instance attrs in ``__init__``. Delete dead code.
@@ -378,7 +370,6 @@ Published schemas (also under ``schemas/``; GitHub Pages via
 ``.github/workflows/pages.yml``):
 
 - https://indynull.github.io/groket/schemas/tasks.schema.json  
-- https://indynull.github.io/groket/schemas/rules.schema.json  
 - https://indynull.github.io/groket/schemas/config.schema.json  
 - https://indynull.github.io/groket/schemas/control.schema.json  
 
@@ -390,7 +381,7 @@ Behaviour that belongs to a dataclass or cache lives on that type.
 
 | Module | Allowed | Forbidden |
 |--------|---------|-----------|
-| ``models.py``, ``*/models.py``, ``analysis/base.py`` | Types, enums, aliases, trivial properties | Standalone strip/regex/I/O helpers |
+| ``models.py``, ``*/models.py`` | Types, enums, aliases, trivial properties | Standalone strip/regex/I/O helpers |
 | ``parser.py`` | Parse/load + private parse helpers for this API | UI, Docker orchestration |
 | ``paths.py``, ``constants.py`` | Paths / constants | Business logic, widgets |
 | ``utils.py`` | Pure cross-cutting helpers | Domain models, ``ui`` imports |
@@ -483,9 +474,7 @@ add a new module-level ``def _…`` pile next to that type. Tests:
 | ``print`` outside CLI | T20 (``cli.py`` only) |
 
 **Not dead without checking call paths:** Textual hooks (``compose``,
-``action_*``, ``on_*``, ``BINDINGS``, …); ``@detector`` modules loaded from
-``~/.groket/detectors`` and user rules YAML; analysis plugins listed in
-``config.toml`` ``analysis.plugins``; model fields filled from traces.
+``action_*``, ``on_*``, ``BINDINGS``, …); model fields filled from traces.
 
 ---
 
@@ -528,7 +517,7 @@ After filling a primary list: ``focus_primary_list``. Use ``check_action`` +
 
 | Layer | Example | Keys |
 |-------|---------|------|
-| Browser panes | Timeline … Report | ``[`` ``]`` ``1``–``5`` |
+| Browser panes | Timeline … Report | ``[`` ``]`` ``1``–``4`` |
 | Persona / runner panes | Identity … / Recipe … | ``[`` ``]`` + digits |
 | Timeline filter | All / Tools / … | ``v`` → Select |
 | Multi-select | Sessions, configs, pickers | ``s`` / ``space`` → green ``*`` col 0 |
@@ -560,7 +549,7 @@ First press arms; second with the **same** target set commits. Shared helper:
 
 Operators must be able to copy text from any **body** surface that is useful
 to paste elsewhere (prompts, assistant replies, tool input and output,
-detail, summary, diff, findings, notes, report sections). This is how
+detail, summary, diff, notes, report sections). This is how
 evaluators quote evidence. OS drag-to-copy does not work while Textual
 owns the mouse — the product path is Textual selection + OSC 52 yank.
 The HUD uses icedtea selectable / highlighted_code buffers (``y`` and
@@ -581,18 +570,12 @@ drag-select) for the same bodies.
    prompts, replies, and tool I/O use ``select_bound`` / ``code_inset``,
    never iced ``markdown::view`` or dead ``text()``.
 2. **``y`` / Ctrl+Shift+C** (browser ``action_copy_detail``) order:
-   mouse selection → **Findings tab selected finding** (prefer MF
-   **Issue box** text What/Where/Why/Should/Pattern when ``Finding.extras``
-   has those fields; else export-style markdown) → focused
-   ``SelectableStatic`` body only → tab primary body when there is no
-   focused extractable (Timeline detail, Summary, Diff hunk, Findings
-   header). **Report** with no focused pane yields nothing to copy — never
-   a silent join of every visible Report sub-pane. Report mounts **one
-   extractable pane per logical unit**: overview, flags, notes, plugin
-   header/findings, each markdown ``##`` chunk, and MF **Form fields** /
-   **Issue box** fence bodies (paste-ready). Tab focuses a pane; ``y``
-   yanks that pane only. Findings-tab ``y`` is still the one-key Issue-box
-   path without opening Report.
+   mouse selection → focused ``SelectableStatic`` body only → tab
+   primary body when there is no focused extractable (Timeline detail,
+   Summary, Diff hunk). **Report** with no focused pane yields nothing
+   to copy — never a silent join of every visible Report sibling pane.
+   Report mounts **one extractable pane per logical unit**: overview,
+   flags, notes. Tab focuses a pane; ``y`` yanks that pane only.
 3. **Live refresh** must not clear a widget that has an active text
    selection (``_widget_has_text_selection`` / ``set_static_renderable``).
 4. **Tests** for new extractable surfaces: plain-text cache + yank path
@@ -654,7 +637,7 @@ when awaiting; ``x`` delete (double-press); ``f`` flag; ``N``/``O`` notes;
 ``E`` export; ``H`` show/hide host sessions (sessions home).
 
 Sessions home also: ``n``/``e`` follow-up/Done when awaiting; ``x`` delete
-(double-press); ``a`` analyze; ``d`` rules; ``r``/``C``/``P`` runner/configs/personas;
+(double-press); ``r``/``C``/``P`` runner/configs/personas;
 ``H`` show or hide native ``~/.grok/sessions`` next to Docker work traces.
 
 ### 6.10 TUI and HUD: same action, same key
@@ -695,7 +678,7 @@ against the catalog.
 
 
 **TUI only** — the HUD is a session palette (follow-up, Done, notes). It
-does not launch evals, open Jobs, run analysis, export, flag, or delete.
+does not launch evals, open Jobs, export, flag, or delete.
 
 | Key | Action |
 |-----|--------|
@@ -703,8 +686,7 @@ does not launch evals, open Jobs, run analysis, export, flag, or delete.
 | ``J`` | Jobs / logs |
 | ``Ctrl+P`` | Command palette |
 | ``F5`` / ``Ctrl+R`` | Refresh |
-| ``[`` / ``]`` + ``1``…``N`` | App panes (HUD panes are **Tab** / **Shift+Tab** / **Ctrl+1–6**) |
-| ``a`` | Analyze |
+| ``[`` / ``]`` + ``1``…``N`` | App panes (HUD panes are **Tab** / **Shift+Tab** / **Ctrl+1–5**) |
 | ``E`` | Export bundle |
 | ``f`` | Flag (browser) / fork (sessions home) |
 | ``O`` | Edit note |
@@ -714,12 +696,12 @@ does not launch evals, open Jobs, run analysis, export, flag, or delete.
 | ``s`` / ``space`` | Multi-select |
 
 **HUD only** — ``[`` / ``]`` are Timeline turn scope, so they cannot be
-panes. Digits type into search, so pane jump is **Ctrl+1–6**.
+panes. Digits type into search, so pane jump is **Ctrl+1–5**.
 
 | Key | Action |
 |-----|--------|
 | ``Tab`` / ``Shift+Tab`` | Next / previous browse pane (on Notes: next / previous note field; ``Ctrl+Tab`` still changes panes) |
-| ``Ctrl+1``…``Ctrl+6`` | Jump Overview … Notes (Diff is pane 4) |
+| ``Ctrl+1``…``Ctrl+5`` | Jump Overview … Notes (Diff is pane 4) |
 | ``[`` | Timeline: all turns (Filter stays) |
 | ``]`` | Timeline: next matching turn while All turns is selected (same as ``l``) |
 | ``g`` | Turns → Timeline for the focused turn |
@@ -803,37 +785,20 @@ Extend without editing package source: ``~/.groket/`` + ``groket gen …``.
 
 | Path | Purpose |
 |------|---------|
-| ``~/.groket/detectors/*.py`` | ``@detector`` modules |
-| ``~/.groket/rules/*.yaml`` | Rule YAML (same schema as ``assets/config`` stubs / published schema) |
-| ``~/.groket/plugins/*.py`` | Analysis ``Analyzer`` classes (+ optional detectors) |
 | ``~/.groket/tasks/*.yaml`` | Optional task lists (never auto-loaded) |
-| ``~/.groket/config.toml`` | Prefs + ``analysis.plugins`` |
+| ``~/.groket/config.toml`` | Prefs |
 
 ```bash
-uv run groket gen detector my_check
-uv run groket gen rule my-rule --detector my_check
-uv run groket gen plugin my_stats --register
 uv run groket gen tasks
-uv run groket rules validate
 ```
 
-Package ``assets/config/rules.yaml`` and ``composites.yaml`` are **empty stubs**.
-Copy packs from ``examples/detection/`` (``minimal/``, ``starters/``,
-``catalog/``) into ``~/.groket`` to enable. Findings type:
-:class:`~groket.analysis.base.Finding`.
+**``examples/`` is a hard contract** (``just examples-check`` / CI):
+task YAML schemas, sample configs, personas, pack READMEs.
 
-**``examples/`` is a hard contract** (``just examples-check`` / CI): rule and
-task YAML schemas, detector registration vs rule ``detector:`` fields, analysis
-plugin import/instantiate, sample configs, personas, pack READMEs. Prefer those
-packs as the implementation reference when adding detectors, plugins, or tasks.
+### Plugin concept
 
-### Three “plugin” concepts
-
-| Kind | Config | Notes |
-|------|--------|--------|
-| Analysis plugins | ``analysis.plugins`` | ``module:Class``; ``~/.groket/plugins/`` |
-| Detectors + rules | ``@detector`` + YAML | Engine findings; user detectors/rules |
-| Grok Build plugins | persona / run ``plugins`` | Marketplace names → ``plugins-manifest.json`` at launch |
+Grok Build plugins are persona / run ``plugins`` (marketplace names →
+``plugins-manifest.json`` at launch).
 
 **MCP** and **skills** are separate persona fields. MCP may create a hidden
 companion skill (``use-<server>-mcp``, ``x-groket: groket-mcp-companion``).
@@ -852,7 +817,7 @@ tests/
   test_models.py, test_parser.py, test_paths.py, test_flags.py, test_utils.py
   test_event_types.py, test_fs_watch.py, test_job_pools.py, test_session_inflight.py
   test_assets_loader.py
-  analysis/  capabilities/  cli/  diagnostics/  docker/  engine/
+  capabilities/  cli/  diagnostics/  docker/
   runs/  session/  ui/  fixtures/
 ```
 

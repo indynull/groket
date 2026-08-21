@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from groket.assets_loader import asset_path, assets_root, read_asset_text
+from groket.assets_loader import asset_path, assets_root
 from groket.docker.resources import entrypoint_sh, share_once_py
 
 
@@ -32,11 +32,6 @@ def test_assets_root_and_docker_entrypoint():
     share = share_once_py()
     assert "grok" in share.lower()
     assert "share" in share.lower()
-
-
-def test_config_assets_readable():
-    rules = read_asset_text("config", "rules.yaml")
-    assert "rules" in rules.lower() or "rule" in rules.lower() or len(rules) > 20
 
 
 def test_assets_root_fallback_to_embedded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

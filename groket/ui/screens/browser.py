@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import suppress
-from datetime import datetime
 from pathlib import Path
 
 from textual import on, work
@@ -25,7 +24,6 @@ from textual.widgets import (
     Checkbox,
     DataTable,
     Input,
-    LoadingIndicator,
     Select,
     Static,
     Switch,
@@ -34,8 +32,6 @@ from textual.widgets import (
 )
 
 from ... import event_types as et
-from ...analysis.base import AnalysisResult, Finding
-from ...analysis.order import order_report_markdown_by_turn, sort_findings_by_turn
 from ...flags import load_flags, save_flags
 from ...integrations.control import ControlError
 from ...models import Flag, JsonObject, SessionMeta, ToolInputBag, TraceEvent, as_json_object
@@ -83,17 +79,14 @@ from ..control_notice import control_operator_text
 from ..panel_render import (
     EmptyState,
     bullet,
-    content_block,
     dim_rule,
     kv_line,
     panel_group,
     section_header,
     status_chip,
 )
-from ..report_panes import split_report_markdown_panes
 from ..selectable_static import SelectableStatic, is_extractable_static
 from ..session_summary import render_session_summary
-from ..styles import SEVERITY_LABEL, severity_style
 from ..tab_panes import TabPaneNavigation
 from ..threads import call_ui, resolve_ui_app
 from ..widgets.controls import FILTER_BAR_CLASS, FILTER_LABEL_CLASS
@@ -115,7 +108,7 @@ def _clip_chrome_label(text: str) -> str:
 
 
 class BrowserScreen(TabPaneNavigation, ChromeActions):
-    """Interactive trace browser with timeline, detail view, and findings."""
+    """Interactive trace browser with timeline, detail view, flags, and notes."""
 
     BINDINGS = list(BROWSER)
     TAB_CONTENT_ID = "browser-tabs"
@@ -123,7 +116,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         ("tab-timeline", "#timeline-list"),
         ("tab-summary", "#summary-session-scroll"),
         ("tab-diff", "#diff-file-list"),
-        ("tab-findings", "#findings-table"),
         ("tab-reports", "#reports-scroll"),
     )
     _diff_doc: WorkspaceDiff
@@ -188,16 +180,12 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
     def action_tab_diff(self) -> None:
         self.activate_tab_pane("tab-diff")
 
-    def action_tab_findings(self) -> None:
-        self.activate_tab_pane("tab-findings")
-
     def action_tab_report(self) -> None:
         self.activate_tab_pane("tab-reports")
 
     def __init__(
         self,
         session_dir: Path,
-        plugin_results: dict[str, AnalysisResult] | None = None,
         *,
         prompt_index: int | None = None,
         **kwargs,
@@ -206,15 +194,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self.session_dir = session_dir
         self.meta: SessionMeta | None = None
         self.timeline: list[TraceEvent] = []
-        self.plugin_results: dict[str, AnalysisResult] = plugin_results or {}
-        self._analysis_stale_hints: list[str] = []
-        self._analysis_pending: bool = False
-        self._findings: list[Finding] = []
-        self._findings_by_call: dict[str, Finding] = {}
         self._errors_only = False
         self._current_event: TraceEvent | None = None
-        self._findings_table_entries: list[Finding] = []
-        self._selected_finding: Finding | None = None
         self._flags: dict[int, Flag] = {}
         self._notes_doc: NotesDoc = NotesDoc()
         self._notes_loaded: bool = False
@@ -231,7 +212,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._live_heartbeat_timer: Timer | None = None
         # Slow probe while the session looks idle so a resumed agent re-arms hot live.
         self._live_recheck_timer: Timer | None = None
-        self._analysis_spinner_timer: Timer | None = None
         self._trace_watch: object | None = None  # fs_watch stop handle
         self._last_light_fp: tuple[str | int | float | bool | None, ...] | None = None
         # session_timeline_stamp() when set (mtime + sizes); not signals.json.
@@ -267,28 +247,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
         self._event_reader: bool = False
 
-    def _analysis_svc(self):
-        """Use the app's analysis service (work_dir / config), not a bare default."""
-        app = getattr(self, "_app", None)
-        if app is None:
-            try:
-                app = self.app
-            except Exception:
-                app = None
-        getter = getattr(app, "_analysis_svc", None) if app is not None else None
-        if callable(getter):
-            return getter()
-        from ...analysis.service import get_analysis_service
-
-        return get_analysis_service()
-
     def compose(self) -> ComposeResult:
         from ..brand_mark import AppChrome, AppFooter
 
         yield AppChrome()
-        analysis_wait = LoadingIndicator(id="browser-analysis-loading")
-        analysis_wait.display = False
-        yield analysis_wait
         with Vertical(id="session-pending-bar"):
             yield Static("", id="session-pending-status")
             yield Static("", id="session-pending-queue")
@@ -388,13 +350,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                                 yield DataTable(id="stats-phases-table")
             with TabPane(U.tab_diff(), id="tab-diff"):
                 yield DiffView(id="diff-view")
-            with TabPane(U.tab_findings(), id="tab-findings"):
-                with Vertical(id="findings-panel"):
-                    with Vertical(classes="panel-card"):
-                        yield SelectableStatic("", id="findings-header")
-                        # Row→timeline focus is on ``?`` / footer — no permanent tip box.
-                    with Vertical(classes=t("ui-panel-card-panel-card-grow")):
-                        yield DataTable(id="findings-table")
             with TabPane(U.tab_report(), id="tab-reports"):
                 with Vertical(id="reports-panel"):
                     with Horizontal(id="report-filter-bar", classes=FILTER_BAR_CLASS):
@@ -413,8 +368,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                     with VerticalScroll(id="reports-scroll"):
                         with Vertical(classes="panel-card", id="report-section-overview"):
                             yield SelectableStatic(id="report-overview-content")
-                            # Filter usage is on the filter bar itself — no tip box.
-                            yield EmptyState("", id="report-analysis-empty")
                         with Vertical(
                             classes=t("ui-panel-card-report-section"), id="report-section-flags"
                         ):
@@ -425,7 +378,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                         ):
                             yield SelectableStatic(id="report-notes-content")
                             yield EmptyState(U.tip_no_notes(), id="report-notes-empty")
-                        yield Vertical(id="report-sections-host")
         yield AppFooter()
 
     def on_mount(self) -> None:
@@ -433,7 +385,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return
         self._load_started = True
         try:
-            style_data_table(self.query_one("#findings-table", DataTable))
             for tid in (
                 "#stats-subagents-table",
                 "#stats-jobs-table",
@@ -448,7 +399,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._load_data()
 
     def on_unmount(self) -> None:
-        self._stop_analysis_spinner_timer()
         self._stop_live_refresh()
         if self._detail_debounce is not None:
             try:
@@ -1278,7 +1228,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         app = resolve_ui_app(self)
         call_ui(app, self._populate_ui)
         call_ui(app, self._schedule_live_refresh)
-        call_ui(app, self._schedule_analysis)
 
     def _on_control_browser_error(self, exc: BaseException, *, notify: bool) -> None:
         """Log a failed control hydrate; toast only on the full browser load."""
@@ -1499,7 +1448,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                     timeline_table = self.query_one("#timeline-list", TimelineTable)
                     timeline_table.load_events(
                         self.timeline,
-                        self._findings,
                         list(self._flags.values()),
                         follow_tail=self._timeline_follow_tail(),
                     )
@@ -1579,280 +1527,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 self._light_refresh_heartbeat = False
                 end(KIND_REFRESH, self.session_dir)
 
-    def _should_auto_analyze(self) -> bool:
-        """Whether policy says to run analyzers for this session now."""
-        svc = self._analysis_svc()
-        when = (svc.config.auto_analyze_when or "session_complete").strip().lower()
-        if when == "never":
-            return False
-        is_live = bool(self.meta and self.meta.turn_in_progress)
-        if is_live:
-            return False
-        large = len(self.timeline or []) > 2_500
-        if large:
-            # Explicit palette analyze still works; auto skips mega timelines.
-            return False
-        # session_complete: settled turn outcome (not running / awaiting).
-        if self.meta and (self.meta.turn_outcome or "").strip():
-            oc = (self.meta.turn_outcome or "").lower().replace(" ", "_")
-            if oc in (
-                "running",
-                "in_progress",
-                "pending",
-                "awaiting_follow_up",
-                "ending",
-                "finishing",
-            ):
-                return False
-            return True
-        return True
-
-    def _auto_needs_background_job(self) -> bool:
-        """True when auto-open should enqueue *non-deferred* analyzers only.
-
-        Deferred plugins are never started from open — they are
-        cache-only until the operator force-analyzes.
-        """
-        try:
-            svc = self._analysis_svc()
-            plugins = [p for p in svc.list_plugins() if p.id != "noop"]
-        except Exception:
-            return False
-        have: set[str] = set()
-        for key, result in self.plugin_results.items():
-            aid = getattr(result, "analyzer_id", None) or key
-            have.add(str(aid))
-            have.add(str(key))
-        for info in plugins:
-            if info.defer:
-                continue
-            if info.id not in have:
-                return True
-        return False
-
-    def _schedule_analysis(self, *, force: bool = False) -> None:
-        """Queue analysis on the serial analysis pool (UI thread).
-
-        Non-force (open / auto): paint disk cache immediately (including stale
-        deferred results), show the stale banner when versions diverge, and
-        **do not** re-run multi-minute deferred plugins unless cache is missing.
-        Force (palette Analyze): always re-run on the background pool.
-        """
-        from ...analysis.inflight import (
-            analysis_session_key,
-            end_session_analysis,
-            session_analysis_inflight,
-            try_begin_session_analysis,
-        )
-
-        if self._analysis_pending or session_analysis_inflight(self.session_dir):
-            # Already queued/running for this session — keep spinner, no second job.
-            self._analysis_pending = True
-            self._show_analysis_pending()
-            return
-
-        if not force:
-            # Instant paint from disk so opening a session never waits on deferred work.
-            try:
-                cached = self._analysis_svc().load_cached_all(self.session_dir, allow_stale=True)
-            except Exception:
-                cached = {}
-            if cached:
-                self.plugin_results = cached
-                self._collect_findings()
-                self._rebuild_indices()
-                try:
-                    self._populate_analysis_ui()
-                except Exception:
-                    pass
-                self._apply_stale_analysis_hints()
-            elif not self._should_auto_analyze():
-                self._show_analysis_idle()
-                self._apply_stale_analysis_hints(repaint=False)
-                return
-
-            if not self._should_auto_analyze():
-                if not cached:
-                    self._show_analysis_idle()
-                    self._apply_stale_analysis_hints(repaint=False)
-                return
-
-            # Auto-open never queues deferred work. Cheap analyzers may
-            # still run if cache is incomplete; deferred is cache-only until
-            # the operator explicitly Analyze (force=True).
-            if not self._auto_needs_background_job():
-                return
-
-        if not try_begin_session_analysis(self.session_dir):
-            self._analysis_pending = True
-            self._show_analysis_pending()
-            return
-
-        self._analysis_pending = True
-        self._show_analysis_pending()
-        # Drop stale hints while a fresh run is queued; show progress instead.
-        self._note_stale_analysis([])
-        from ...job_pools import get_activity_log, get_analysis_pool
-        from ..threads import call_ui
-
-        label = self.session_dir.name
-        app = self.app
-        session_dir = self.session_dir
-        force_run = force
-        result_key = analysis_session_key(session_dir)
-        use_control = bool(getattr(app, "is_control_client", lambda: False)())
-
-        # Bump activity-bar counter on the UI thread so spinner shows immediately.
-        try:
-            app._analysis_jobs_active = (  # type: ignore[attr-defined]
-                int(getattr(app, "_analysis_jobs_active", 0) or 0) + 1
-            )
-        except Exception:
-            pass
-        try:
-            host_results = getattr(app, "_plugin_results", None)
-            if isinstance(host_results, dict):
-                host_results.pop(result_key, None)
-        except Exception:
-            pass
-
-        def _finish_with(results: dict) -> None:
-            try:
-                if self.is_mounted:
-                    self.apply_analysis_results(results)
-                try:
-                    host_results = getattr(app, "_plugin_results", None)
-                    if isinstance(host_results, dict):
-                        host_results[result_key] = results
-                except Exception:
-                    pass
-            finally:
-                end_session_analysis(session_dir)
-                try:
-                    n = int(getattr(app, "_analysis_jobs_active", 0) or 0)
-                    app._analysis_jobs_active = max(0, n - 1)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
-        def _job() -> None:
-            results: dict = {}
-            try:
-                if use_control:
-                    results = self._analyze_via_control(session_dir, force=force_run)
-                else:
-                    svc = self._analysis_svc()
-                    results = svc.analyze_all(session_dir, force=force_run)
-            except Exception as exc:
-                get_activity_log().log("analysis", f"failed {label}: {exc}")
-                results = {}
-            try:
-                call_ui(app, lambda: _finish_with(results))
-            except Exception:
-                end_session_analysis(session_dir)
-                try:
-                    n = int(getattr(app, "_analysis_jobs_active", 0) or 0)
-                    app._analysis_jobs_active = max(0, n - 1)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
-        get_analysis_pool().submit(f"session {label}", _job)
-
-    def _analyze_via_control(self, session_dir: Path, *, force: bool) -> dict:
-        """Run analysis on the control owner; load results from the shared cache."""
-        import asyncio
-        import time as time_mod
-
-        app = self.app
-        access = getattr(app, "session_access", lambda: None)()
-        if access is None:
-            return self._analysis_svc().analyze_all(session_dir, force=force)
-
-        async def _run() -> dict:
-            # One long-lived client for run + status polls (not a connect per tick).
-            client = getattr(access, "_client", None)
-            if client is not None and hasattr(client, "connect"):
-                await client.connect()
-            try:
-                await access.analysis_run(session_dir.name, force=force)
-                deadline = time_mod.monotonic() + 600.0
-                delay = 0.4
-                while time_mod.monotonic() < deadline:
-                    status = await access.analysis_status(session_dir.name)
-                    state = str(status.get("state") or "")
-                    if state in {"done", "error", "idle"}:
-                        if state == "error":
-                            logger.warning(
-                                "control analysis error for %s: %s",
-                                session_dir.name,
-                                status.get("error"),
-                            )
-                        break
-                    await asyncio.sleep(delay)
-                    delay = min(1.0, delay * 1.25)
-            finally:
-                if client is not None and hasattr(client, "close"):
-                    await client.close()
-            return self._analysis_svc().load_cached_all(session_dir, allow_stale=True)
-
-        return asyncio.run(_run())
-
-    def _apply_stale_analysis_hints(self, *, repaint: bool = True) -> None:
-        """Load stale hints, toast once, optionally repaint findings/report."""
-        try:
-            hints = self._analysis_svc().stale_analyzer_hints(self.session_dir)
-        except Exception:
-            hints = []
-        self._note_stale_analysis(hints)
-        if repaint and self.is_mounted and not getattr(self, "_analysis_pending", False):
-            try:
-                self._populate_analysis_ui()
-            except Exception:
-                pass
-
-    def _stale_detail(self, hints: list[str]) -> str:
-        detail = "; ".join(hints[:6])
-        if len(hints) > 6:
-            detail += "…"
-        return detail
-
-    def _note_stale_analysis(self, hints: list[str]) -> None:
-        """Remember stale hints and toast the first time they appear."""
-        prev = list(self._analysis_stale_hints)
-        self._analysis_stale_hints = list(hints)
-        if not hints or hints == prev or not self.is_mounted:
-            return
-        self.notify(
-            t("analysis-stale-toast", detail=self._stale_detail(hints)),
-            severity="warning",
-            timeout=6,
-        )
-
-    def _show_analysis_idle(self) -> None:
-        """Findings/report idle when auto-analyze is off or deferred."""
-        try:
-            findings_table = self.query_one("#findings-table", DataTable)
-            findings_table.clear(columns=True)
-            findings_table.add_columns("", "")
-            findings_table.add_row("", t("ui-analysis-idle"))
-        except Exception:
-            pass
-        try:
-            self.query_one("#report-overview-content", Static).update(t("ui-analysis-idle-report"))
-        except Exception:
-            pass
-
-    def _run_analysis(self) -> None:
-        """Force analysis for this session (palette / full refresh)."""
-        self.action_analyze()
-
-    def action_analyze(self) -> None:
-        """Command palette: re-run analysis for **this session only** (force)."""
-        # Drop in-memory results so force actually re-runs plugins.
-        self.plugin_results = {}
-        self._findings = []
-        self._schedule_analysis(force=True)
-        self.notify(t("notify-analyzing-this-session"), severity="information", timeout=4)
-
     def _load_flags(self) -> None:
         """Load user flags from disk into a dict keyed by event_index."""
         self._flags = {fl.event_index: fl for fl in load_flags(self.session_dir)}
@@ -1864,44 +1538,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._notes_doc = load_notes(self.session_dir)
         self._notes_loaded = True
 
-    def _enabled_analyzer_ids(self) -> set[str] | None:
-        """Ids enabled in the process analysis service (None if unavailable)."""
-        try:
-            return set(self._analysis_svc().enabled_ids)
-        except Exception:
-            return None
-
-    def _active_plugin_results(self) -> dict[str, AnalysisResult]:
-        """Results for analyzers enabled under the current config only."""
-        enabled = self._enabled_analyzer_ids()
-        if not enabled:
-            return dict(self.plugin_results)
-        out: dict[str, AnalysisResult] = {}
-        for key, result in self.plugin_results.items():
-            aid = key
-            if result is not None and getattr(result, "analyzer_id", None):
-                aid = result.analyzer_id
-            if aid in enabled or key in enabled:
-                out[key] = result
-        return out
-
-    def _collect_findings(self) -> None:
-        """Collect findings from **enabled** plugin results only.
-
-        Order is turn → earliest evidence → severity (Findings + Report lists).
-        """
-        all_findings: list[Finding] = []
-        for result in self._active_plugin_results().values():
-            if result is not None and result.ok:
-                all_findings.extend(result.findings)
-        self._findings = sort_findings_by_turn(all_findings, self.timeline)
-
     def _rebuild_indices(self) -> None:
-        self._findings_by_call = {}
-        for finding in self._findings:
-            for cid in finding.all_tool_call_ids:
-                if cid not in self._findings_by_call:
-                    self._findings_by_call[cid] = finding
         self._rebuild_subagent_runs()
         self._rebuild_session_jobs()
 
@@ -2440,7 +2077,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         timeline_table = self.query_one("#timeline-list", TimelineTable)
         timeline_table.load_events(
             self.timeline,
-            self._findings,
             list(self._flags.values()),
             follow_tail=self._timeline_follow_tail(),
         )
@@ -2452,7 +2088,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         if self._requested_prompt_index is not None:
             self.select_prompt_index(self._requested_prompt_index)
         self._update_diff_tab()
-        self._show_analysis_pending()
         self._paint_visible_secondary_panes()
         timeline_table.focus()
         if self.meta and self.meta.turn_failed:
@@ -2514,7 +2149,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             timeline_table = self.query_one("#timeline-list", TimelineTable)
             timeline_table.load_events(
                 self.timeline,
-                self._findings,
                 list(self._flags.values()),
                 follow_tail=self._timeline_follow_tail(),
             )
@@ -2526,173 +2160,12 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self._update_diff_tab()
         self._paint_visible_secondary_panes()
 
-    def _show_analysis_pending(self) -> None:
-        """Show toolkit loading readouts while analysis is in flight."""
-        if not self._analysis_pending:
-            return
-        self._paint_analysis_pending_spinner(full=True)
-
-    def _paint_analysis_pending_spinner(self, *, full: bool = False) -> None:
-        """Show the chrome LoadingIndicator and pane loading overlays."""
-        self._set_analysis_loading(True)
-        if not full:
-            return
-        try:
-            findings_table = self.query_one("#findings-table", DataTable)
-            findings_table.clear(columns=True)
-            style_data_table(findings_table)
-            findings_table.add_columns(
-                U.col_severity(), U.col_plugin(), U.col_category(), U.col_title(), U.col_events()
-            )
-        except Exception:
-            pass
-
-    def _set_analysis_loading(self, on: bool) -> None:
-        """Toggle the visible loading control (chrome + Findings + Report)."""
-        with suppress(Exception):
-            self.query_one("#browser-analysis-loading", LoadingIndicator).display = on
-        with suppress(Exception):
-            self.query_one("#findings-table").loading = on
-        if on:
-            self._apply_report_loading_overlays()
-            return
-        with suppress(Exception):
-            self.query_one("#reports-scroll").loading = False
-        for aid in list(getattr(self, "_report_section_keys", ()) or ()):
-            if aid in ("flags", "notes"):
-                continue
-            with suppress(Exception):
-                self.query_one(f"#{self._report_section_dom_id(aid)}", Vertical).loading = False
-
-    def _apply_report_loading_overlays(self) -> None:
-        """Mark Report scroll and plugin cards loading while analysis is in flight."""
-        if not self._analysis_pending:
-            return
-        with suppress(Exception):
-            self.query_one("#reports-scroll").loading = True
-        self._paint_report_plugin_pending_spinners()
-
-    def _paint_report_plugin_pending_spinners(self, *, full: bool = False) -> None:
-        """One loading overlay per plugin report card."""
-        _ = full
-        for aid in list(getattr(self, "_report_section_keys", ()) or ()):
-            if aid in ("flags", "notes"):
-                continue
-            with suppress(Exception):
-                section = self.query_one(f"#{self._report_section_dom_id(aid)}", Vertical)
-                section.loading = True
-
-    def _tick_analysis_pending(self) -> None:
-        if not self._analysis_pending or not self.is_mounted:
-            self._stop_analysis_spinner_timer()
-            return
-        self._paint_analysis_pending_spinner(full=False)
-
-    def _stop_analysis_spinner_timer(self) -> None:
-        timer = self._analysis_spinner_timer
-        self._analysis_spinner_timer = None
-        if timer is not None:
-            timer.stop()
-        self._set_analysis_loading(False)
-
-    def apply_analysis_results(self, results: dict[str, AnalysisResult]) -> None:
-        """Apply finished plugin results on the UI thread.
-
-        Used by the browser analysis job, control ``analysis/changed``, and
-        home-batch completion while this session is open. Always clears the
-        in-flight spinner so Report is not left covered by loading overlays
-        after results land.
-        """
-        if not self.is_mounted:
-            return
-        self.plugin_results = dict(results or {})
-        self._analysis_pending = False
-        self._stop_analysis_spinner_timer()
-        self._collect_findings()
-        self._rebuild_indices()
-        self._apply_stale_analysis_hints(repaint=False)
-        try:
-            self._populate_analysis_ui()
-        except Exception:
-            logger.exception("analysis results UI update failed")
-
-    def _populate_analysis_ui(self) -> None:
-        """Phase 2 UI: findings + reports — after analysis plugins finish."""
-        if not self._analysis_pending:
-            # Results path: never leave Report under a stale loading overlay.
-            self._set_analysis_loading(False)
-        timeline_table = self.query_one("#timeline-list", TimelineTable)
-        timeline_table.load_events(
-            self.timeline,
-            self._findings,
-            list(self._flags.values()),
-            follow_tail=self._timeline_follow_tail(),
-        )
-        if self._timeline_filters_active():
-            self._reapply_timeline_view_filter()
-        self._rebuild_turn_select()
-        findings_table = self.query_one("#findings-table", DataTable)
-        findings_table.clear(columns=True)
-        style_data_table(findings_table)
-        findings_table.add_columns(
-            U.col_severity(), U.col_plugin(), U.col_category(), U.col_title(), U.col_events()
-        )
-        self._findings_table_entries = []
-        try:
-            self._update_findings_header()
-        except Exception:
-            pass
-        # First row: re-analyze needed (stale plugin cache) — not a Finding entry.
-        stale_hints = getattr(self, "_analysis_stale_hints", None) or []
-        if stale_hints:
-            findings_table.add_row(
-                "!",
-                "stale",
-                "",
-                Text(
-                    t("analysis-stale-findings-row", detail=self._stale_detail(stale_hints)),
-                    style="yellow",
-                ),
-                "",
-                key="__analysis_stale__",
-            )
-        for row_idx, finding in enumerate(self._findings):
-            sev_display = SEVERITY_LABEL.get(finding.severity.value, finding.severity.value)
-            n_events = len(
-                {
-                    *finding.all_tool_call_ids,
-                    *(f"u{i}" for i in finding.all_update_indices),
-                    *(f"e{i}" for i in finding.all_event_indices),
-                }
-            )
-            title = finding.title[:60]
-            if finding.children:
-                title = f"{title} (+)"
-            findings_table.add_row(
-                sev_display,
-                finding.plugin_id,
-                finding.category,
-                title,
-                str(n_events),
-                key=str(row_idx),
-            )
-            self._findings_table_entries.append(finding)
-        self._maybe_refresh_reports()
-
     @staticmethod
     def _fmt_dur(seconds: float) -> str:
         return fmt_duration(seconds)
 
     def _sync_report_empty_states(self) -> None:
         """Sync Report empty-states from session data."""
-        try:
-            analysis_empty = self.query_one("#report-analysis-empty", EmptyState)
-            if not self._report_plugin_ids() and (not self._active_plugin_results()):
-                analysis_empty.set_message(U.tip_no_analysis())
-            else:
-                analysis_empty.clear_message()
-        except Exception:
-            pass
         try:
             flags_empty = self.query_one("#report-flags-empty", EmptyState)
             if self._flags:
@@ -2709,24 +2182,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 notes_empty.set_message(U.tip_no_notes())
         except Exception:
             pass
-
-    def _update_findings_header(self) -> None:
-        """Findings tab counts only (keyboard focus is footer / ``?``)."""
-        fh = Text()
-        fh.append(U.findings_heading() + "\n", style="bold")
-        n = len(self._findings)
-        high = sum(1 for f in self._findings if f.severity.value == "high")
-        fh.append("\n  ")
-        if high:
-            fh.append_text(status_chip(t("browser-high-chip", n=high), kind="bad"))
-        elif n:
-            fh.append_text(status_chip(t("browser-findings-chip", n=n), kind="unknown"))
-        else:
-            fh.append_text(status_chip(t("browser-status-none"), kind="ok"))
-        fh.append(t("browser-findings-dim", n=n), style="dim")
-        header = self.query_one("#findings-header", Static)
-        if not self._widget_has_text_selection(header):
-            header.update(fh)
 
     def _widget_has_text_selection(self, widget: object) -> bool:
         """True when the operator has a mouse/text selection on *widget*.
@@ -2763,64 +2218,11 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return self.meta.session_id
         return self.session_dir.name
 
-    def _reports_dir(self) -> Path:
-        """Export dir for finding reports (``~/.groket/reports``)."""
-        from ...paths import reports_dir
-
-        return reports_dir()
-
-    _PLUGIN_TITLES: dict[str, str] = {
-        "engine": t("ui-detectors"),
-        "basic": t("ui-basic"),
-        "feedback": t("ui-feedback"),
-        "noop": t("ui-noop"),
-    }
-
-    @classmethod
-    def _plugin_title(cls, aid: str) -> str:
-        return cls._PLUGIN_TITLES.get(aid, aid.replace("_", " ").title())
-
-    def _plugin_has_report_content(self, aid: str, result: AnalysisResult | None) -> bool:
-        """True if the Report filter / section is worth listing (not an empty ok run)."""
-        if aid == "noop":
-            return False
-        if any((f.plugin_id or "") == aid for f in self._findings):
-            return True
-        if result is None:
-            return False
-        if (result.error or "").strip():
-            return True
-        for val in (result.artifacts or {}).values():
-            if str(val).strip():
-                return True
-        return False
-
-    def _report_plugin_ids(self) -> list[str]:
-        """Analyzer ids with real report content (enabled only; skips empty runs)."""
-        ids: set[str] = set()
-        for aid, result in self._active_plugin_results().items():
-            if self._plugin_has_report_content(aid, result):
-                ids.add(aid)
-        for f in self._findings:
-            pid = (f.plugin_id or "").strip()
-            if pid and pid != "noop":
-                ids.add(pid)
-        return sorted(ids)
-
-    @staticmethod
-    def _report_plugin_slug(aid: str) -> str:
-        """DOM-safe fragment for section / widget ids."""
-        return "".join(c if c.isalnum() or c in "-_" else "_" for c in aid) or "plugin"
-
     def _report_section_dom_id(self, key: str) -> str:
-        if key == "flags":
-            return "report-section-flags"
-        if key == "notes":
-            return "report-section-notes"
-        return f"report-section-plugin-{self._report_plugin_slug(key)}"
+        return f"report-section-{key}"
 
     def _report_filter_options(self) -> list[tuple[str, str]]:
-        """Select options: All, Flags/Notes (if any), then plugins that have content."""
+        """Select options: All, Flags, Notes."""
         opts: list[tuple[str, str]] = [(U.all_sections(), "all")]
         n_flags = len(self._flags)
         if n_flags:
@@ -2828,18 +2230,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         n_notes = len(self._notes_doc.notes)
         if n_notes:
             opts.append((t("browser-notes-count", n=n_notes), "notes"))
-        for aid in self._report_plugin_ids():
-            n = sum(1 for f in self._findings if (f.plugin_id or "") == aid)
-            label = self._plugin_title(aid)
-            if n:
-                label = f"{label} ({n})"
-            else:
-                label = join_ui(label, t("ui-report"))
-            opts.append((label, f"plugin:{aid}"))
         return opts
 
     def _sync_report_view_select(self) -> None:
-        """Refresh Report Filter dropdown options when plugins/findings change."""
+        """Refresh Report Filter dropdown options when flags or notes change."""
         options = self._report_filter_options()
         key = tuple((f"{lab}\x00{val}" for lab, val in options))
         if key == self._report_select_options_key:
@@ -2866,41 +2260,16 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             self._report_updating = prev
 
     def _ensure_report_sections(self) -> None:
-        """Mount inline panel-cards per plugin (idempotent); no checkbox row."""
-        try:
-            host = self.query_one("#report-sections-host", Vertical)
-        except Exception:
-            return
+        """Flags and notes only."""
         self._report_section_keys.add("flags")
         self._report_section_keys.add("notes")
-        for aid in self._report_plugin_ids():
-            if aid in self._report_section_keys:
-                continue
-            section_id = self._report_section_dom_id(aid)
-            # Empty card; panes mount as direct SelectableStatic children.
-            card = Vertical(classes=t("ui-panel-card-report-section"), id=section_id)
-            if self._analysis_pending:
-                card.loading = True
-            try:
-                host.mount(card)
-                self._report_section_keys.add(aid)
-            except Exception:
-                logger.debug(t("ui-failed-to-mount-report-section-s"), aid, exc_info=True)
         self._sync_report_view_select()
         self._apply_report_visibility()
 
     def _section_visible(self, key: str) -> bool:
-        """Whether section *key* (flags | notes | plugin id) is shown for current filter."""
+        """Whether section *key* (flags | notes) is shown for the current filter."""
         mode = self._report_filter or "all"
-        if mode == "all":
-            return True
-        if mode == "flags":
-            return key == "flags"
-        if mode == "notes":
-            return key == "notes"
-        if mode.startswith("plugin:"):
-            return key == mode[7:]
-        return True
+        return mode == "all" or key == mode
 
     def _apply_report_visibility(self) -> None:
         """Show/hide inline sections from exclusive ``_report_filter`` (display only)."""
@@ -2933,7 +2302,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
         Report has many sibling panes — without focus there is no single
         primary body (operator Tabs to a pane, then ``y``). Timeline,
-        Summary, Diff, and Findings each have one obvious body.
+        Summary, and Diff each have one obvious body.
 
         :returns: ``(text, kind)`` where *kind* is ``detail`` / ``content`` /
             ``none``.
@@ -2950,9 +2319,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 text = self.query_one("#diff-view", DiffView).selected_plain()
                 return (text, "content" if text else "none")
             return ("", "none")
-        if tab == "tab-findings":
-            text = self._plain_from_widget_id("findings-header")
-            return (text, "content" if text else "none")
         # Timeline (default): full detail pane.
         with suppress(Exception):
             detail = self.query_one("#detail-panel", DetailView)
@@ -2970,50 +2336,20 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             self._render_report_overview()
             self._render_report_flags()
             self._render_report_notes()
-            for aid in self._report_plugin_ids():
-                if aid in self._report_section_keys:
-                    self._render_report_plugin(aid)
         finally:
             self._report_updating = False
-        self._apply_report_loading_overlays()
 
     def _render_report_overview(self) -> None:
         sid = self._session_id()
         model = self.meta.model_display if self.meta else "unknown"
         flags = self._flags
-        total = len(self._findings)
-        high = sum(1 for f in self._findings if f.severity.value == "high")
-        med = sum(1 for f in self._findings if f.severity.value == "medium")
         blocks: list = []
         head = Text()
         head.append(t("ui-session-report"), style="bold")
         head.append("\n")
-        stale_hints = getattr(self, "_analysis_stale_hints", None) or []
-        if stale_hints:
-            head.append(
-                t("analysis-stale-report", detail=self._stale_detail(stale_hints)),
-                style="bold yellow",
-            )
-            head.append("\n\n")
-        # Severity chips use the same Rich styles as Findings tab (not status_chip).
-        if high:
-            head.append(t("browser-high-chip", n=high), style=severity_style("high"))
-            head.append("  ")
-        if med:
-            head.append(t("browser-medium-chip", n=med), style=severity_style("medium"))
-            head.append("  ")
-        if total and not high and not med:
-            head.append(t("browser-findings-chip", n=total), style="dim")
-            head.append("  ")
-        if not total:
-            head.append_text(status_chip(t("browser-status-clean"), kind="ok"))
-            head.append("  ")
         head.append(t("browser-flags-dim", n=len(flags)), style="dim")
         head.append(" │ ", style="dim")
-        head.append(
-            t("browser-report-counts", total=total, high=high, med=med),
-            style="dim",
-        )
+        head.append(t("browser-notes-count", n=len(self._notes_doc.notes)), style="dim")
         head.append("\n")
         blocks.append(head)
         blocks.append(dim_rule())
@@ -3035,8 +2371,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             mode = self._report_filter
             if mode == "flags":
                 focus = t("ui-flags-2")
-            elif mode.startswith("plugin:"):
-                focus = self._plugin_title(mode[7:])
             else:
                 focus = mode
             blocks.append(Text(t("browser-viewing-focus", focus=focus) + "\n", style="dim"))
@@ -3106,159 +2440,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             self._sync_report_empty_states()
         except Exception:
             pass
-
-    def _render_report_plugin(self, aid: str) -> None:
-        """Fill one plugin card as multiple focusable/copyable panes."""
-        plugin_findings = [f for f in self._findings if (f.plugin_id or "") == aid]
-        result = self._active_plugin_results().get(aid)
-        if result is None and aid not in self._active_plugin_results():
-            return
-        header_blocks: list = []
-        title = self._plugin_title(aid)
-        if result is not None and result.summary:
-            title = f"{title}  ({result.summary})"
-        header_blocks.append(section_header(title))
-        report_artifact = None
-        if result is not None and result.ok:
-            report_artifact = (result.artifacts or {}).get("report")
-        if plugin_findings:
-            header_blocks.append(self._findings_report_block(plugin_findings))
-
-        renderables: list = [panel_group(*header_blocks)]
-        if report_artifact and str(report_artifact).strip():
-            # Reorder issue blocks by Turn because source reports may use another order.
-            report_md = order_report_markdown_by_turn(str(report_artifact).strip())
-            for chunk in split_report_markdown_panes(report_md):
-                renderables.append(content_block(chunk, max_chars=12000))
-        elif not plugin_findings and result is not None:
-            if result.summary:
-                renderables.append(Text(f"  {result.summary}\n", style="dim"))
-            elif not result.ok and result.error:
-                renderables.append(
-                    Text(
-                        t("browser-report-error", msg=result.error) + "\n",
-                        style="red",
-                    )
-                )
-            else:
-                renderables.append(Text(t("ui-no-findings"), style="dim"))
-        elif not plugin_findings:
-            renderables.append(Text(t("ui-no-findings"), style="dim"))
-
-        try:
-            self._sync_report_plugin_panes(aid, renderables)
-        except Exception:
-            logger.debug(t("ui-report-static-s-missing"), aid, exc_info=True)
-
-    def _sync_report_plugin_panes(self, aid: str, renderables: list) -> None:
-        """Update/mount SelectableStatic panes under a plugin section card.
-
-        Reuses widgets by index when possible so active text selection on a
-        pane is not cleared mid-drag. Drops extras only when they have no
-        selection. Panes are direct children of the section (same pattern as
-        flags/notes), not a nested host that races on deferred mount.
-        """
-        section_id = self._report_section_dom_id(aid)
-        try:
-            section = self.query_one(f"#{section_id}", Vertical)
-        except Exception:
-            return
-
-        existing = list(section.query(SelectableStatic))
-        slug = self._report_plugin_slug(aid)
-        n = len(renderables)
-        for i, renderable in enumerate(renderables):
-            if i < len(existing):
-                widget = existing[i]
-                if not self._widget_has_text_selection(widget):
-                    widget.update(renderable)
-                continue
-            widget = SelectableStatic(
-                renderable,
-                id=f"report-pane-{slug}-{i}",
-                classes="report-pane",
-            )
-            section.mount(widget)
-        for j in range(len(existing) - 1, n - 1, -1):
-            widget = existing[j]
-            if self._widget_has_text_selection(widget):
-                continue
-            with suppress(Exception):
-                widget.remove()
-
-    @on(Select.Changed, "#report-view-select")
-    def _on_report_view_changed(self, event: Select.Changed) -> None:
-        """Exclusive section filter — same pattern as Timeline View Select."""
-        if self._report_updating:
-            return
-        val = event.value
-        if val is Select.BLANK or val is None:
-            return
-        mode = str(val)
-        if mode == self._report_filter:
-            return
-        self._report_filter = mode
-        self._apply_report_visibility()
-        try:
-            self._render_report_overview()
-        except Exception:
-            pass
-
-    @staticmethod
-    def _findings_report_block(findings: list) -> Text:
-        """Structured finding list (severity + title + detail) — not raw markdown dump.
-
-        Severity colors use :func:`~groket.ui.styles.severity_style` — same as
-        Findings tab / timeline marks (high=red, medium=dark_orange, low=yellow).
-        """
-        out = Text()
-        # Caller passes turn-ordered findings (see _collect_findings); keep order.
-        for f in findings:
-            sev_key = (f.severity.value if f.severity else "low").lower()
-            sev = sev_key.upper()
-            sev_style = severity_style(sev_key)
-            out.append("  ")
-            out.append(f"{sev:<7}", style=sev_style)
-            out.append("  ")
-            out.append(f.title or f.id or "(untitled)")
-            cat = getattr(f, "category", None) or ""
-            if cat:
-                out.append(f"  ·  {cat}", style="dim")
-            n_ev = len(
-                {
-                    *(getattr(f, "all_tool_call_ids", None) or []),
-                    *(f"u{i}" for i in (getattr(f, "all_update_indices", None) or [])),
-                    *(f"e{i}" for i in (getattr(f, "all_event_indices", None) or [])),
-                }
-            )
-            if n_ev:
-                out.append("  ·  " + t("browser-finding-events", n=n_ev), style="dim")
-            out.append("\n")
-            detail = (getattr(f, "detail", None) or "").strip()
-            if detail:
-                # Preserve structure for multi-line reviews; only collapse tiny blurbs.
-                if "\n" in detail or len(detail) > 280:
-                    for i, dl in enumerate(detail.splitlines()[:24]):
-                        out.append(f"           {dl}\n", style="dim")
-                    if detail.count("\n") >= 24:
-                        out.append("           …\n", style="dim")
-                else:
-                    one_line = " ".join(detail.split())
-                    if len(one_line) > 220:
-                        one_line = one_line[:217] + "…"
-                    out.append(f"           {one_line}\n", style="dim")
-            children = getattr(f, "children", None) or []
-            for ch in children[:8]:
-                ch_title = getattr(ch, "title", None) or getattr(ch, "id", "") or ""
-                out.append(f"           - {ch_title}\n", style="dim")
-            if len(children) > 8:
-                out.append(
-                    t("browser-more-children", n=len(children) - 8),
-                    style="dim",
-                )
-        if not findings:
-            out.append(t("ui-none"), style="dim")
-        return out
 
     def _update_stats(self) -> None:
         """Fill Summary-pane tables (turns, event mix, tool timing, phases)."""
@@ -3420,12 +2601,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         except Exception:
             return None
         detail.session_dir = Path(self.session_dir)
-        finding = self._findings_by_call.get(ev.tool_call_id)
         duration = timeline_table.durations.get(ev.index)
         flag = self._flags.get(ev.index)
         detail.show_event(
             ev,
-            finding,
             flag,
             duration=duration,
             paired_call=timeline_table.get_paired_call(ev),
@@ -3515,7 +2694,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self.refresh_bindings()
 
     def action_refresh_context(self) -> None:
-        """Reload timeline/meta for this session and re-run analysis."""
+        """Reload timeline/meta for this session."""
         self.notify(U.refreshing_session_view(), severity="information", timeout=3)
         self._load_data()
 
@@ -3611,67 +2790,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             return
         self._timeline_filter = mode
         self._apply_timeline_filters()
-
-    def _finding_row_index(
-        self, event: DataTable.RowHighlighted | DataTable.RowSelected
-    ) -> int | None:
-        """Map findings-table row event → index in _findings_table_entries.
-
-        Row keys are normally ``"0"``, ``"1"``, … (index into ``_findings_table_entries``).
-        Older/in-flight TUI builds briefly used ``i-{rule_id}-{n}`` / ``c-{id}-{n}``; never
-        ``int()`` those blindly — fall back to cursor row or suffix digit.
-        """
-        if event.row_key is not None:
-            raw = str(event.row_key.value).strip()
-            if raw.isdigit():
-                idx = int(raw)
-                if 0 <= idx < len(self._findings_table_entries):
-                    return idx
-            if "-" in raw:
-                tail = raw.rsplit("-", 1)[-1]
-                if tail.isdigit():
-                    idx = int(tail)
-                    if 0 <= idx < len(self._findings_table_entries):
-                        return idx
-        try:
-            table = self.query_one("#findings-table", DataTable)
-            cr = getattr(table, "cursor_row", None)
-            if cr is not None and 0 <= int(cr) < len(self._findings_table_entries):
-                return int(cr)
-        except Exception:
-            pass
-        return None
-
-    @on(DataTable.RowHighlighted, "#findings-table")
-    def _on_finding_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        try:
-            idx = self._finding_row_index(event)
-            if idx is not None and idx < len(self._findings_table_entries):
-                self._selected_finding = self._findings_table_entries[idx]
-        except Exception:
-            pass
-
-    @on(DataTable.RowSelected, "#findings-table")
-    def _on_finding_selected(self, event: DataTable.RowSelected) -> None:
-        try:
-            idx = self._finding_row_index(event)
-        except Exception:
-            return
-        if idx is None or idx >= len(self._findings_table_entries):
-            return
-        finding = self._findings_table_entries[idx]
-        self._selected_finding = finding
-        call_ids = set(finding.all_tool_call_ids)
-        update_indices = set(finding.all_update_indices)
-        event_indices = set(finding.all_event_indices)
-        timeline_table = self.query_one("#timeline-list", TimelineTable)
-        timeline_table.apply_filter(
-            call_ids=call_ids or None,
-            update_indices=update_indices or None,
-            event_indices=event_indices or None,
-        )
-        tabbed = self.query_one(TabbedContent)
-        tabbed.active = "tab-timeline"
 
     @on(Switch.Changed, "#timeline-tail")
     def _on_timeline_tail_changed(self, event: Switch.Changed) -> None:
@@ -4048,10 +3166,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             pass
         self._apply_timeline_mode("all")
 
-    def action_show_findings(self) -> None:
-        """Jump to Findings (same as tab 4 / ``i``)."""
-        self.activate_tab_pane("tab-findings")
-
     def _timeline_event_actionable(self) -> bool:
         """True when Flag (etc.) should be enabled: Timeline pane + focused list + event."""
         if self._current_event is None:
@@ -4171,12 +3285,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         selection). Priority:
 
         1. **Live selection** — exact selected plain (not stripped)
-        2. **Findings tab** + highlighted finding → Issue box when extras
-           support it, else export-style markdown for that finding
-        3. focused :class:`SelectableStatic` body only (detail, one Report
+        2. focused :class:`SelectableStatic` body only (detail, one Report
            sub-pane, summary, …)
-        4. tab primary body (Timeline detail, Summary, Diff hunk, Findings
-           header) — never a silent join of every Report sibling pane
+        3. tab primary body (Timeline detail, Summary, Diff hunk) — never
+           a silent join of every Report sibling pane
 
         On Report, Tab to a sub-pane then ``y`` yanks that body only.
         """
@@ -4189,13 +3301,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 text = selected
                 kind = "selection"
                 selection_payload = True
-        # One finding: Findings table selection → Issue box (MF form) when present.
-        if not selection_payload and self._active_browser_tab() == "tab-findings":
-            finding = getattr(self, "_selected_finding", None)
-            if isinstance(finding, Finding):
-                text = self._finding_clipboard_text(finding).strip()
-                if text:
-                    kind = "finding"
         if not text and not selection_payload:
             with suppress(Exception):
                 focused = self.focused
@@ -4220,8 +3325,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         self.app.copy_to_clipboard(text)
         if kind == "selection":
             msg = t("ui-copied-selection")
-        elif kind == "finding":
-            msg = t("ui-copied-finding")
         elif kind == "report":
             msg = t("ui-copied-report")
         elif kind == "detail":
@@ -4488,7 +3591,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             tl = self.query_one("#timeline-list", TimelineTable)
             tl.load_events(
                 self.timeline,
-                self._findings,
                 list(self._flags.values()),
                 follow_tail=self._timeline_follow_tail(),
             )
@@ -4503,11 +3605,9 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
             detail = self.query_one("#detail-panel", DetailView)
             timeline_table = self.query_one("#timeline-list", TimelineTable)
             detail.session_dir = Path(self.session_dir)
-            finding = self._findings_by_call.get(ev.tool_call_id)
             duration = timeline_table.durations.get(ev.index)
             detail.show_event(
                 ev,
-                finding,
                 self._flags.get(ev.index),
                 duration=duration,
                 paired_call=timeline_table.get_paired_call(ev),
@@ -4541,88 +3641,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         save_flags(self.session_dir, list(self._flags.values()))
         self._refresh_event_chrome()
         self._maybe_refresh_reports()
-
-    def _format_finding_issue_box(self, finding: Finding) -> str | None:
-        """MF form \"Issue (copy into the Issue box)\" when extras support it.
-
-        Prefers a pre-rendered ``extras[\"issue_box\"]`` from the analyzer
-        (full question layout). Falls back to structured What / Where / Why /
-        Should have / Pattern fields. Returns None when those are absent.
-        """
-        extras = finding.extras or {}
-        pre = str(extras.get("issue_box") or "").strip()
-        if pre:
-            return pre if pre.endswith("\n") else pre + "\n"
-        what = str(extras.get("what_model_did") or "").strip()
-        should = str(extras.get("what_should_have_done") or extras.get("should_have") or "").strip()
-        why = str(extras.get("why_mistake") or "").strip()
-        where = str(extras.get("where") or "").strip()
-        pattern = str(extras.get("pattern") or "").strip()
-        if not (what or should or why or pattern):
-            return None
-        if not where and finding.event_indices:
-            where = "Timeline events " + ", ".join(f"#{i}" for i in finding.event_indices[:8])
-            if finding.tool_call_ids:
-                where += " · tools " + ", ".join(f"`{t}`" for t in finding.tool_call_ids[:4])
-        return (
-            f"What: {what or finding.title or '(see title)'}\n"
-            f"Where: {where or '(see evidence)'}\n"
-            f"Why: {why or '(not specified)'}\n"
-            f"Should have: {should or '(not specified)'}\n"
-            f"Pattern: {pattern or '(none)'}\n"
-        )
-
-    def _finding_clipboard_text(self, finding: Finding) -> str:
-        """Best plain text for ``y``: Issue box when available, else export markdown."""
-        box = self._format_finding_issue_box(finding)
-        if box:
-            return box
-        return self._finding_plain_text(finding)
-
-    def _finding_plain_text(self, finding: Finding) -> str:
-        """Markdown-ish plain text for one finding (export file + generic clipboard)."""
-        model = self.meta.model_display if self.meta else "unknown"
-        session_id = self.meta.session_id if self.meta else "unknown"
-        lines = [
-            t("report-md-model", model=model),
-            t("report-md-session", id=session_id),
-            t("report-md-plugin", id=finding.plugin_id),
-            t("report-md-finding", id=finding.id),
-            t("report-md-severity", sev=finding.severity.value.upper()),
-            t("report-md-category", cat=finding.category),
-            "",
-            f"**{finding.title}**",
-        ]
-        if finding.detail:
-            lines.append("")
-            for dl in finding.detail.strip().splitlines():
-                lines.append(f"> {dl}")
-        if finding.children:
-            lines.append("")
-            lines.append(t("report-md-sub-findings", n=len(finding.children)))
-            for child in finding.children:
-                lines.append(f"> [{child.severity.value.upper()}] `{child.id}`: {child.title[:80]}")
-        should = finding.extras.get("what_should_have_done") or finding.extras.get("should_have")
-        if should:
-            lines.append("")
-            lines.append(t("ui-what-the-model-should-have-done"))
-            lines.append(f"> {should}")
-        return "\n".join(lines).rstrip() + "\n"
-
-    def _report_finding(self, finding: Finding) -> None:
-        """Write a markdown report file for *finding* under ``~/.groket/reports``."""
-        filename = f"finding-{finding.plugin_id}-{finding.id}"
-        report_text = self._finding_plain_text(finding)
-        try:
-            reports_dir = self._reports_dir()
-            reports_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            report_file = reports_dir / f"{filename}-{ts}.md"
-            with open(report_file, "w") as f:
-                f.write(report_text)
-            self.notify(U.report_saved(str(report_file)), severity="information")
-        except Exception as exc:
-            self.notify(U.report_failed(str(exc)), severity="error")
 
     def action_delete_session(self) -> None:
         """Double-press ``x`` deletes this session from disk and leaves the browser."""
@@ -4659,11 +3677,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         selected = getattr(app, "_selected", None)
         if isinstance(selected, set):
             selected -= gone
-        plugin_results = getattr(app, "_plugin_results", None)
-        if isinstance(plugin_results, dict):
-            for k in list(plugin_results):
-                if k in gone:
-                    del plugin_results[k]
         err_n = 0
         errors_raw = stats.get("errors")
         if isinstance(errors_raw, list):
@@ -4684,14 +3697,6 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         if callable(populate):
             with suppress(Exception):
                 populate()
-
-    def action_export_finding(self) -> None:
-        """Export the selected finding to a markdown file (command palette)."""
-        tabbed = self.query_one(TabbedContent)
-        if tabbed.active != "tab-findings" or self._selected_finding is None:
-            self.notify(U.select_finding_first(), severity="warning")
-            return
-        self._report_finding(self._selected_finding)
 
     def action_export_bundle(self) -> None:
         """Export this session: configured profile, or ask if none is set."""

@@ -1,29 +1,8 @@
 {
   "$defs": {
     "AnalysisPrefs": {
-      "description": "``[analysis]``: plugins and worker pools.",
+      "description": "``[analysis]``: worker pools.",
       "properties": {
-        "plugins": {
-          "description": "``module:Class`` analyzers under ~/.groket/plugins/.",
-          "items": {
-            "type": "string"
-          },
-          "title": "Plugins",
-          "type": "array"
-        },
-        "auto_analyze_when": {
-          "default": "session_complete",
-          "description": "When to run analyzers: session_complete or never.",
-          "title": "Auto Analyze When",
-          "type": "string"
-        },
-        "analysis_workers": {
-          "default": 1,
-          "description": "Serial analysis pool size.",
-          "minimum": 1,
-          "title": "Analysis Workers",
-          "type": "integer"
-        },
         "live_refresh_workers": {
           "default": 1,
           "description": "Live timeline refresh pool size.",

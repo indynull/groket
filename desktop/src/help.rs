@@ -516,7 +516,7 @@ mod tests {
         assert!(table.get("list.up").is_some());
         assert!(table.get("pane.1").is_some());
         assert!(table.get("pane.5").is_some());
-        assert!(table.get("pane.6").is_some());
+        assert!(table.get("pane.6").is_none());
         assert!(table.get("session.done").is_none());
         assert!(table.get("edit.copy").is_some());
         assert!(table.get("search.focus").is_some());
@@ -638,7 +638,7 @@ mod tests {
             turn_pick: true,
             turn_locked: false,
             diff_pick: false,
-            tab: Tab::Findings,
+            tab: Tab::Notes,
             leader_armed: false,
         });
         let fblob = findings.footer_hints().join("  ·  ");
@@ -836,7 +836,7 @@ mod tests {
             turn_pick: true,
             turn_locked: false,
             diff_pick: false,
-            tab: Tab::Findings,
+            tab: Tab::Notes,
             leader_armed: false,
         });
         assert!(findings.get("session.open").is_none());

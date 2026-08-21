@@ -9,9 +9,6 @@ show_host_sessions = false
 auto_serve = true
 
 [analysis]
-plugins = []
-auto_analyze_when = "session_complete"
-analysis_workers = 1
 live_refresh_workers = 1
 
 [hud]

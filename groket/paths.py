@@ -1,9 +1,8 @@
 """Application paths: config under ``~/.groket``, runs under a work dir.
 
 **Config home** (``APP_HOME`` / ``~/.groket``) holds identity and extensions —
-config.toml, personas, rules, detectors, analysis plugins, tasks scaffolds, analysis
-cache, exported reports, flag fallbacks, notes schema / notes fallbacks,
-optional ``models.yaml``, optional ``keys.toml``.
+config.toml, personas, tasks scaffolds, exported reports, flag fallbacks,
+notes schema / notes fallbacks, optional ``models.yaml``, optional ``keys.toml``.
 
 **Work dir** holds only session / run data — traces, run configs, feedback
 cache, Docker build contexts for launches, batch result log. Default work dir
@@ -32,7 +31,7 @@ def app_home() -> Path:
 
 
 def analysis_cache_dir() -> Path:
-    """``~/.groket/cache`` — analysis result cache root."""
+    """``~/.groket/cache`` — host catalog snapshot and other local cache."""
     d = APP_HOME / "cache"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -93,27 +92,6 @@ def notes_fallback_dir(session_id: str) -> Path:
     return d
 
 
-def user_rules_dir() -> Path:
-    """``~/.groket/rules`` — user rule YAML."""
-    d = APP_HOME / "rules"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def user_detectors_dir() -> Path:
-    """``~/.groket/detectors`` — user detector modules (``@detector``)."""
-    d = APP_HOME / "detectors"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def user_analysis_plugins_dir() -> Path:
-    """``~/.groket/plugins`` — analysis plugin modules on ``sys.path``."""
-    d = APP_HOME / "plugins"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def user_tasks_dir() -> Path:
     """``~/.groket/tasks`` — optional task YAML (pass explicitly to ``batch --tasks``)."""
     d = APP_HOME / "tasks"
@@ -131,9 +109,6 @@ def user_export_profiles_dir() -> Path:
 def ensure_user_extension_dirs() -> dict[str, Path]:
     """Create standard user extension directories; return a name → path map."""
     return {
-        "rules": user_rules_dir(),
-        "detectors": user_detectors_dir(),
-        "plugins": user_analysis_plugins_dir(),
         "tasks": user_tasks_dir(),
         "export_profiles": user_export_profiles_dir(),
     }

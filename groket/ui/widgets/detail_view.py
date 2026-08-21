@@ -10,7 +10,6 @@ from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widgets import DataTable
 
-from ...analysis.base import Finding
 from ...models import Flag, TraceEvent
 from ...session.jobs import ScheduleTask
 from ...session.subagents import SubagentRun
@@ -45,7 +44,6 @@ class DetailView(VerticalScroll):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._current_event: TraceEvent | None = None
-        self._current_finding: Finding | None = None
         self._current_flag: Flag | None = None
         self._current_duration: float | None = None
         self._paired_call: TraceEvent | None = None
@@ -64,7 +62,6 @@ class DetailView(VerticalScroll):
     def show_event(
         self,
         event: TraceEvent,
-        finding: Finding | None = None,
         flag: Flag | None = None,
         duration: float | None = None,
         *,
@@ -80,7 +77,6 @@ class DetailView(VerticalScroll):
             event.index
         )
         self._current_event = event
-        self._current_finding = finding
         self._current_flag = flag
         self._current_duration = duration
         self._paired_call = paired_call
@@ -96,7 +92,6 @@ class DetailView(VerticalScroll):
     def show_workflow(self, run: WorkflowRun) -> None:
         """Inspect a Summary row when no Timeline bookend can be paired."""
         self._current_event = None
-        self._current_finding = None
         self._current_flag = None
         self._current_duration = None
         self._paired_call = None
@@ -124,7 +119,6 @@ class DetailView(VerticalScroll):
             return
         renderable = render_event_detail(
             ev,
-            finding=self._current_finding,
             flag=self._current_flag,
             duration=self._current_duration,
             paired_call=self._paired_call,
@@ -193,7 +187,6 @@ class DetailView(VerticalScroll):
 
     def clear_detail(self) -> None:
         self._current_event = None
-        self._current_finding = None
         self._current_flag = None
         self._current_duration = None
         self._paired_call = None
@@ -219,7 +212,6 @@ class DetailView(VerticalScroll):
         if ev is not None:
             renderable = render_event_detail(
                 ev,
-                finding=self._current_finding,
                 flag=self._current_flag,
                 duration=self._current_duration,
                 paired_call=self._paired_call,

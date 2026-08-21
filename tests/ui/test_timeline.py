@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import make_trace_event
-from groket.analysis.base import Finding
-from groket.models import Flag, FlagVerdict, Severity, TraceEvent
+from groket.models import Flag, FlagVerdict, TraceEvent
 from groket.ui.widgets.timeline import TimelineTable
 from textual.app import App, ComposeResult
 
@@ -474,22 +473,14 @@ async def test_timeline_tool_pairs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeline_with_findings_and_flags() -> None:
+async def test_timeline_with_flags() -> None:
     app = _TimelineApp()
     async with app.run_test():
         tl = app.query_one("#timeline-list", TimelineTable)
         events = _basic_events()
-        finding = Finding(
-            id="f1",
-            title="test",
-            severity=Severity.HIGH,
-            plugin_id="engine",
-            detail="x",
-            tool_call_ids=["c1"],
-        )
         flag = Flag(event_index=0, verdict=FlagVerdict.BAD, description="bad")
-        tl.load_events(events, findings=[finding], flags=[flag])
-        assert tl.findings_by_call.get("c1") is finding
+        tl.load_events(events, flags=[flag])
+        assert not hasattr(tl, "findings_by_call")
         assert tl.flags_by_index.get(0) is flag
 
 
@@ -894,7 +885,7 @@ def _summary_cell(tl: TimelineTable, key: str) -> str:
 
 @pytest.mark.asyncio
 async def test_timeline_same_length_reload_paints_new_flag() -> None:
-    """Flag/finding chrome must update Summary when the list length is unchanged."""
+    """Flag chrome must update Summary when the list length is unchanged."""
     app = _TimelineApp()
     async with app.run_test():
         tl = app.query_one("#timeline-list", TimelineTable)
@@ -903,19 +894,9 @@ async def test_timeline_same_length_reload_paints_new_flag() -> None:
         assert "⚑" not in _summary_cell(tl, "1")
         flag = Flag(event_index=1, verdict=FlagVerdict.BAD, description="bad")
         tl.load_events(events, flags=[flag])
-        assert "⚑" in _summary_cell(tl, "1")
-        finding = Finding(
-            id="f1",
-            title="test",
-            severity=Severity.HIGH,
-            plugin_id="engine",
-            detail="x",
-            tool_call_ids=["c1"],
-        )
-        tl.load_events(events, findings=[finding], flags=[flag])
         marked = _summary_cell(tl, "1")
         assert "⚑" in marked
-        assert "⚠" in marked
+        assert "⚠" not in marked
 
 
 @pytest.mark.asyncio

@@ -65,7 +65,6 @@ The owner accepts either and replies in the same frame the client used.
 | `session/timeline` | Paged events (`offset`, `limit`, `type`, `kind`, `query`, `promptIndex`, `aroundIndex`, `atIndex`, `contentChars`). Spawn/finish rows include `childSessionId` and finish stats. |
 | `session/turns` | Turn segments plus `subagentRuns` (turn-scoped child runs; `openable` + `childPath`). |
 | `session/usage` | Tool / MCP / skill usage |
-| `session/findings` | Cached analysis findings |
 | `session/diff` | Rewind snapshots or approximate `search_replace` edits (files + hunks + prompt/assistant text) |
 | `session/open` | Resolve a session and notify `session/selected` |
 | `session/render` | Project a document (`format`: below) |
@@ -74,8 +73,6 @@ The owner accepts either and replies in the same frame the client used.
 | `notes/list` | Notes snapshot (`revision`, schema, notes) |
 | `notes/upsert` | Write a note (`expectedRevision`) |
 | `notes/delete` | Delete a note (`expectedRevision`) |
-| `analysis/run` | Start analysis on the owner (`force` optional) |
-| `analysis/status` | Job state: `idle` / `running` / `done` / `error` |
 
 ### `session/list`
 
@@ -111,6 +108,5 @@ Canonical store is `operator_notes.toml` (host sessions under
 | `session/selected` | After `session/open` |
 | `session/changed` | Session files or status changed. `listChanged` is false when only the trace grew. |
 | `notes/changed` | Notes written or deleted |
-| `analysis/changed` | Analysis job progressed |
 
 No `id` on these messages (JSON-RPC notifications).

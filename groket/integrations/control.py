@@ -9,12 +9,9 @@ import json
 import logging
 import os
 import re
-import threading
 import time
-import uuid
 from collections.abc import Awaitable, Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import JsonObject, JsonValue, as_json_object, json_as_int, json_as_str
@@ -30,7 +27,6 @@ from ..session.access import LocalSessionAccess, notes_snapshot_mapping
 from ..session.access import filter_session_catalog as filter_session_catalog
 from .control_contract import (
     MIN_PROTOCOL_VERSION,
-    NOTIFY_ANALYSIS_CHANGED,
     NOTIFY_NOTES_CHANGED,
     NOTIFY_SESSION_CHANGED,
     NOTIFY_SESSION_SELECTED,
@@ -105,25 +101,6 @@ _HEADER_LINE_RE = re.compile(rb"^[A-Za-z][A-Za-z0-9-]*:")
 # or newlines there corrupt the round trip, so reject them at the boundary.
 _NOTE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _TIMESTAMP_RE = re.compile(r"^[0-9][0-9T:+.Z-]{0,63}$")
-CAPABILITIES = (
-    "session/list",
-    "session/get",
-    "session/overview",
-    "session/timeline",
-    "session/turns",
-    "session/usage",
-    "session/findings",
-    "session/diff",
-    "session/open",
-    "session/render",
-    "notes/list",
-    "notes/upsert",
-    "notes/delete",
-    "analysis/run",
-    "analysis/status",
-    "session/follow_up",
-    "session/done",
-)
 # Concurrent disk-heavy RPCs (parse/catalog) share this bound so multi-client
 # opens cannot stampede the owner beyond single-flight per session.
 HEAVY_IO_CONCURRENCY = 4
@@ -267,41 +244,6 @@ def _rpc_result_summary(result: JsonValue) -> str:
     return type(result).__name__
 
 
-@dataclass
-class AnalysisJobState:
-    """In-flight or completed analysis job for one session (serve owner)."""
-
-    session_id: str
-    session_path: str
-    state: str = "idle"
-    force: bool = False
-    job_id: str = ""
-    error: str = ""
-    started_at: float | None = None
-    finished_at: float | None = None
-    analyzer_ids: list[str] = field(default_factory=list)
-    ok_count: int = 0
-    error_count: int = 0
-    finding_count: int = 0
-
-    def as_mapping(self) -> JsonObject:
-        """Wire mapping for ``analysis/status`` / ``analysis/run``."""
-        return {
-            "sessionId": self.session_id,
-            "path": self.session_path,
-            "state": self.state,
-            "force": self.force,
-            "jobId": self.job_id,
-            "error": self.error,
-            "startedAt": self.started_at,
-            "finishedAt": self.finished_at,
-            "analyzerIds": list(self.analyzer_ids),
-            "okCount": self.ok_count,
-            "errorCount": self.error_count,
-            "findingCount": self.finding_count,
-        }
-
-
 def _note_from_params(data: JsonObject) -> NoteEntry:
     note_id = json_as_str(data.get("id")).strip()
     if not note_id:
@@ -348,8 +290,6 @@ class ControlServer:
         open_session: OpenSession | None = None,
         notes_changed: NotesChanged | None = None,
         work_dir: Path | None = None,
-        analysis_service: object | None = None,
-        analysis_traces: Path | None = None,
     ) -> None:
         self.socket_path = Path(socket_path or default_socket_path()).expanduser()
         self._resolve_session = resolve_session or _default_resolve_session
@@ -357,10 +297,6 @@ class ControlServer:
         self._open_session = open_session
         self._notes_changed = notes_changed
         self._work_dir = Path(work_dir).expanduser() if work_dir is not None else None
-        self._analysis_service = analysis_service
-        self._analysis_traces = (
-            Path(analysis_traces).expanduser() if analysis_traces is not None else None
-        )
         self._access = LocalSessionAccess(
             resolve_session=self._resolve_session,
             list_sessions=list_sessions,
@@ -370,13 +306,6 @@ class ControlServer:
         self._lock_fd: int | None = None
         self._writers: set[asyncio.StreamWriter] = set()
         self._writer_framing: dict[asyncio.StreamWriter, str] = {}
-        self._analysis_jobs: dict[str, AnalysisJobState] = {}
-        self._analysis_lock = threading.Lock()
-        self._analysis_pool = ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="groket-analysis",
-        )
-        self._analysis_futures: dict[str, Future[None]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         # Cap concurrent disk-heavy access work so many open clients cannot
         # stampede multi‑MB parses (single-flight still joins per session).
@@ -509,139 +438,12 @@ class ControlServer:
                 await writer.wait_closed()
             except OSError:
                 pass
-        self._analysis_pool.shutdown(wait=False, cancel_futures=True)
         # Unlink only while holding the ownership lock; another instance may
         # have bound a fresh socket at this path since we lost or never had it.
         if self._lock_fd is not None:
             self.socket_path.unlink(missing_ok=True)
         self._release_lock()
         self._loop = None
-
-    def _analysis_status_unlocked(self, session_id: str, session_path: str) -> AnalysisJobState:
-        job = self._analysis_jobs.get(session_id)
-        if job is not None:
-            return job
-        return AnalysisJobState(session_id=session_id, session_path=session_path, state="idle")
-
-    def _enqueue_analysis(self, session: Path, *, force: bool) -> AnalysisJobState:
-        """Start or return the in-flight job for *session* (thread-safe)."""
-        sid = session.name
-        path_str = str(session)
-        with self._analysis_lock:
-            existing = self._analysis_jobs.get(sid)
-            if existing is not None and existing.state == "running":
-                return existing
-            job = AnalysisJobState(
-                session_id=sid,
-                session_path=path_str,
-                state="running",
-                force=bool(force),
-                job_id=uuid.uuid4().hex[:12],
-                started_at=time.time(),
-            )
-            self._analysis_jobs[sid] = job
-            future = self._analysis_pool.submit(self._run_analysis_job, sid, path_str, bool(force))
-            self._analysis_futures[sid] = future
-            return job
-
-    def _run_analysis_job(self, session_id: str, path_str: str, force: bool) -> None:
-        """Worker: run analyzers and publish ``analysis/changed``."""
-        access = self._access
-        service = self._analysis_service
-        try:
-            summary = access.analysis_run(path_str, force=force, service=service)
-        except FileNotFoundError as exc:
-            summary = {
-                "sessionId": session_id,
-                "path": path_str,
-                "state": "error",
-                "force": force,
-                "error": str(exc)[:500],
-                "analyzerIds": [],
-                "okCount": 0,
-                "errorCount": 0,
-                "findingCount": 0,
-            }
-        except Exception as exc:
-            logger.exception("analysis job failed for %s", session_id)
-            summary = {
-                "sessionId": session_id,
-                "path": path_str,
-                "state": "error",
-                "force": force,
-                "error": str(exc)[:500],
-                "analyzerIds": [],
-                "okCount": 0,
-                "errorCount": 0,
-                "findingCount": 0,
-            }
-        finished = time.time()
-        with self._analysis_lock:
-            job = self._analysis_jobs.get(session_id)
-            if job is None:
-                job = AnalysisJobState(session_id=session_id, session_path=path_str)
-                self._analysis_jobs[session_id] = job
-            job.state = json_as_str(summary.get("state")) or "done"
-            job.force = bool(summary.get("force", force))
-            job.error = json_as_str(summary.get("error"))
-            job.finished_at = finished
-            if job.started_at is None:
-                job.started_at = finished
-            raw_ids = summary.get("analyzerIds")
-            if isinstance(raw_ids, list):
-                job.analyzer_ids = [str(x) for x in raw_ids]
-            job.ok_count = json_as_int(summary.get("okCount"))
-            job.error_count = json_as_int(summary.get("errorCount"))
-            job.finding_count = json_as_int(summary.get("findingCount"))
-            payload = job.as_mapping()
-            self._analysis_futures.pop(session_id, None)
-        loop = self._loop
-        if loop is not None and loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self.notify(NOTIFY_ANALYSIS_CHANGED, payload),
-                loop,
-            )
-
-    def _ensure_analysis_service(self) -> object | None:
-        """Construct the analysis facade on first ``analysis/run``, not at serve start."""
-        if self._analysis_service is not None:
-            return self._analysis_service
-        if self._work_dir is None:
-            return None
-        from ..analysis.service import AnalysisService
-        from ..paths import analysis_cache_dir
-
-        self._analysis_service = AnalysisService(
-            self._work_dir,
-            traces=self._analysis_traces,
-            cache_root=analysis_cache_dir(),
-        )
-        return self._analysis_service
-
-    async def _analysis_run(self, params: JsonObject) -> JsonObject:
-        if self._ensure_analysis_service() is None:
-            raise ControlError(501, "analysis is unavailable")
-        session = self._session(params)
-        force = bool(params.get("force"))
-        job = await asyncio.to_thread(self._enqueue_analysis, session, force=force)
-        return job.as_mapping()
-
-    async def _analysis_status(self, params: JsonObject) -> JsonObject:
-        """In-memory job table only — do not resolve/catalog-scan on the poll path.
-
-        Status is polled while analysis holds the GIL on multi‑MB parses; any
-        disk walk here (``resolve_session`` → ``collect_session_dirs``) turns a
-        dict lookup into hundreds of milliseconds.
-        """
-        ref = self._session_ref(params)
-        # Job keys are directory names; accept id or path basename.
-        try:
-            sid = Path(ref).name if ref else ""
-        except (TypeError, ValueError):
-            sid = ref
-        sid = (sid or ref).strip()
-        with self._analysis_lock:
-            return self._analysis_status_unlocked(sid, ref).as_mapping()
 
     async def _handle_client(
         self,
@@ -816,7 +618,7 @@ class ControlServer:
         ms = (time.perf_counter() - t0) * 1000
         # All successful access RPCs at the same level (debug). INFO is for
         # conflicts / errors and operator-visible state changes elsewhere.
-        # Polls (analysis/status, list, timeline) must not fill the serve log.
+        # Polls (list, timeline) must not fill the serve log.
         logger.debug(
             "control rpc → id=%s method=%s status=ok %.1fms %s result=%s",
             request_id,
@@ -968,14 +770,6 @@ class ControlServer:
         ref = self._session_ref(params)
         return await self._access_call(ref, self._access.session_usage, ref)
 
-    @_rpc("session/findings")
-    async def _rpc_session_findings(
-        self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
-    ) -> JsonValue:
-        ref = self._session_ref(params)
-        raw_lim = _optional_int_param(params.get("limit"), name="limit")
-        return await self._access_call(ref, self._access.session_findings, ref, limit=raw_lim)
-
     @_rpc("session/diff")
     async def _rpc_session_diff(
         self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
@@ -1098,18 +892,6 @@ class ControlServer:
             )
         )
         return result
-
-    @_rpc("analysis/run")
-    async def _rpc_analysis_run(
-        self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
-    ) -> JsonValue:
-        return await self._analysis_run(params)
-
-    @_rpc("analysis/status")
-    async def _rpc_analysis_status(
-        self, params: JsonObject, _after_send: list[tuple[str, JsonObject]]
-    ) -> JsonValue:
-        return await self._analysis_status(params)
 
     @_rpc("session/follow_up")
     async def _rpc_session_follow_up(

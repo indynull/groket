@@ -7,11 +7,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..analysis.base import Finding
 from ..models import (
     JsonObject,
     JsonValue,
-    Severity,
     ToolInputBag,
     TraceEvent,
     as_json_object,
@@ -364,73 +362,6 @@ class WorkflowRun:
             "eventIndex": ev_i,
             "children": children,
         }
-
-    def matches_name(self, event: TraceEvent) -> bool:
-        """True when *event* has this run's name or a script-stem prefix."""
-        name = self.name_from_raw(event.raw_input)
-        return bool(name) and (self.name == name or self.name.startswith(f"{name}-"))
-
-    def evidence(self, events: list[TraceEvent]) -> tuple[list[int], list[str]]:
-        """Timeline indexes and tool-call ids for this run."""
-        by_id: list[TraceEvent] = []
-        by_name: list[TraceEvent] = []
-        for ev in events:
-            if (ev.tool_name or "") != "workflow":
-                continue
-            rid = self.id_from_raw(ev.raw_input) or self.id_from_raw(ev.content)
-            if rid == self.run_id:
-                by_id.append(ev)
-                continue
-            if rid:
-                continue
-            if self.matches_name(ev):
-                by_name.append(ev)
-        chosen = by_id or by_name
-        return [int(ev.index) for ev in chosen], [
-            ev.tool_call_id for ev in chosen if ev.tool_call_id
-        ]
-
-    def finding(self, events: list[TraceEvent]) -> Finding:
-        """Paste-ready Finding for a failed or interrupted run."""
-        name = self.name or self.run_id
-        indices, calls = self.evidence(events)
-        fail = (self.pause_message or "").strip()
-        asked = (self.objective or "").strip() or name
-        bits = [p for p in ((self.status or "").strip(), (self.phase or "").strip()) if p]
-        happened = " · ".join(bits)
-        why = fail or f"Workflow {name} ended {self.status}."
-        where = (
-            f"Timeline {', '.join(f'#{i}' for i in indices[:8])}" if indices else f"workflow {name}"
-        )
-        issue = (
-            f"What: Ran workflow {name}.\n"
-            f"Where: {where}\n"
-            f"Why: {why}\n"
-            f"Should have: Complete the workflow without a failed or interrupted status.\n"
-            f"Pattern: failed session run\n"
-        )
-        extras: JsonObject = {
-            "what_model_did": f"Ran workflow {name}.",
-            "where": where,
-            "why_mistake": why,
-            "what_should_have_done": "Complete the workflow without a failed or interrupted status.",
-            "issue_box": issue,
-            "asked": asked,
-            "happened": happened,
-            "failed": fail,
-        }
-        cancelled = (self.status or "").strip().lower() in {"cancelled", "interrupted"}
-        return Finding(
-            id=f"workflow:{self.run_id}",
-            plugin_id="basic",
-            severity=Severity.MEDIUM if cancelled else Severity.HIGH,
-            title=f"Workflow {name} failed",
-            detail=fail or why,
-            category="workflow",
-            tool_call_ids=calls,
-            event_indices=indices,
-            extras=extras,
-        )
 
 
 def load_session_workflows(session_dir: Path) -> list[WorkflowRun]:

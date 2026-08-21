@@ -22,12 +22,12 @@ def help_markup() -> str:
     return _help_markup()
 
 
-def notify_help(screen: Screen) -> None:
+def notify_help(screen: Screen, markup: str | None = None) -> None:
     """Open the centered help modal (not a toast — full text must fit)."""
     if isinstance(screen.app.screen, HelpModal):
         screen.app.screen.dismiss(None)
         return
-    screen.app.push_screen(HelpModal())
+    screen.app.push_screen(HelpModal(markup=markup))
 
 
 class HelpModal(QuitActions, ModalScreen[None]):
@@ -35,6 +35,10 @@ class HelpModal(QuitActions, ModalScreen[None]):
 
     Sized with % / 1fr so the panel tracks terminal resize fluidly.
     """
+
+    def __init__(self, markup: str | None = None) -> None:
+        super().__init__()
+        self._markup = markup if markup is not None else help_markup()
 
     DEFAULT_CSS = """
     /* Backdrop translucency comes from app.tcss ModalScreen; keep panel solid. */
@@ -93,7 +97,7 @@ class HelpModal(QuitActions, ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="help-modal"):
             with VerticalScroll(id="help-modal-body"):
-                yield SelectableStatic(help_markup(), id="help-modal-text")
+                yield SelectableStatic(self._markup, id="help-modal-text")
             with Horizontal(id="help-modal-actions"):
                 yield Button(U.close(), variant="primary", id="help-close")
 

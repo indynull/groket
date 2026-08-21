@@ -48,6 +48,8 @@ def test_help_lists_main_commands() -> None:
     assert runner.invoke(app, ["serve", "--help"]).exit_code == 0
     assert runner.invoke(app, ["editor", "--help"]).exit_code == 0
     assert runner.invoke(app, ["keys", "--help"]).exit_code == 0
+    analyzer_help = runner.invoke(app, ["analyzer", "--help"])
+    assert analyzer_help.exit_code != 0
 
 
 def test_tool_commands() -> None:
@@ -55,7 +57,6 @@ def test_tool_commands() -> None:
         {
             "gen",
             "batch",
-            "rules",
             "serve",
             "hud",
             "tui",
@@ -407,14 +408,11 @@ class TestBatchCommands:
         assert "show_host_sessions" in out
 
     def test_config_validate_default(self) -> None:
-        from groket.config import AppConfig
-
         result = runner.invoke(app, ["config", "validate"])
         assert result.exit_code == 0
         out = result.stdout or result.output or ""
         assert "OK" in out
-        n = len(AppConfig().analysis.plugins)
-        assert f"analysis.plugins={n}" in out
+        assert "theme=" in out
 
     def test_config_validate_example(self) -> None:
         example = Path("examples/config/config.toml")
@@ -440,8 +438,10 @@ class TestBatchCommands:
 
 
 class TestGenCommands:
-    def test_gen_detector(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        result = runner.invoke(app, ["gen", "detector", "my_check", "-f"])
+    def test_gen_tasks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dest = tmp_path / "example_tasks.yaml"
+        result = runner.invoke(app, ["gen", "tasks", str(dest), "-f"])
         assert result.exit_code == 0
         out = result.stdout or result.output or ""
-        assert "Wrote detector" in out
+        assert "Wrote tasks file" in out
+        assert dest.is_file()

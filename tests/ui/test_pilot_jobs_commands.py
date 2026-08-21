@@ -245,34 +245,19 @@ async def test_jobs_modal_clear_btn(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_jobs_status_shows_analysis_cache_not_dead_analyzed(tmp_path: Path) -> None:
-    """Jobs banner uses _plugin_results / inflight — not the removed _analyzed map."""
-    from groket.analysis.base import AnalysisResult
-    from groket.analysis.inflight import analysis_session_key
-
+async def test_jobs_status_has_no_plugin_cache(tmp_path: Path) -> None:
+    """Jobs banner has no session-eval plugin-cache count."""
     work, traces = _make_work(tmp_path)
     app = _host_app(work, traces)
-    sess = traces / "s1"
-    sess.mkdir(parents=True)
-    key = analysis_session_key(sess)
-    app._plugin_results[key] = {
-        "engine": AnalysisResult(
-            session_id="s1",
-            session_dir=str(sess),
-            analyzer_id="engine",
-            ok=True,
-            summary="ok",
-            findings=[],
-        )
-    }
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         modal = await _open_jobs(app, pilot, work)
         modal._refresh_app_jobs()
         await pilot.pause()
         status = static_plain(modal.query_one("#jobs-app-status", Static))
-        assert "1 session" in status or "cached" in status.lower()
         assert "Detector analysis" not in status
+        assert "Analysis" not in status
+        assert not hasattr(app, "_plugin_results")
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,8 @@
 """Pilot-driven tests for :mod:`groket.ui.app`.
 
 Exercises compose, mount, session loading, table population, filter cycling,
-multi-select, delete, analyze, rerun, save config, theme cycling, screen pushes,
-analysis settings modal, session search modal, and action methods.
+multi-select, delete, rerun, save config, theme cycling, screen pushes,
+session search modal, and action methods.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from pathlib import Path
 import pytest
 from groket.parser import load_session_meta
 from groket.ui.app import (
-    AnalysisSettingsModal,
     TraceEvalApp,
     _coerce_select_value,
     _session_search_haystack,
 )
+from groket.ui.commands import yield_app_commands
 from textual.widgets import DataTable, Input, Select
 
 from .pilot_helpers import wait_until
@@ -365,58 +365,6 @@ async def test_model_filter_select_changed(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_analyze_runs_analysis(tmp_path: Path) -> None:
-    """Analysis populates plugin_results for loaded sessions."""
-    app, _, _ = _make_app(tmp_path, n_sessions=2)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await wait_until(pilot, lambda: len(app._meta_only) >= 2, description="sessions loaded")
-        table = app.query_one("#session-table", DataTable)
-        await wait_until(pilot, lambda: table.row_count >= 2, description="table populated")
-
-        # Analyze each session directly (exercises _analyze_one)
-        for meta, label in list(app._meta_only):
-            app._analyze_one(meta, label)
-        assert len(app._plugin_results) >= 2
-        app._populate_session_table()
-        await pilot.pause()
-
-
-@pytest.mark.asyncio
-async def test_analyze_selected_only(tmp_path: Path) -> None:
-    """action_analyze with selection filters targets to selected sessions."""
-    app, _, _ = _make_app(tmp_path, n_sessions=3)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await wait_until(pilot, lambda: len(app._meta_only) >= 3, description="sessions loaded")
-        table = app.query_one("#session-table", DataTable)
-        await wait_until(pilot, lambda: table.row_count >= 3, description="table populated")
-
-        # Select first session only
-        first_key = str(app._meta_only[0][0].session_dir)
-        app._selected.add(first_key)
-
-        # Exercise action_analyze target selection logic (no thread needed for filter code)
-        targets = [
-            (meta, label)
-            for meta, label in app._meta_only
-            if str(meta.session_dir) in app._selected
-        ]
-        assert len(targets) == 1
-        assert str(targets[0][0].session_dir) == first_key
-
-
-@pytest.mark.asyncio
-async def test_analyze_no_sessions_notifies(tmp_path: Path) -> None:
-    """action_analyze with no loaded sessions warns (no crash)."""
-    app, _, _ = _make_app(tmp_path, n_sessions=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        # action_analyze guards on empty _meta_only before call_from_thread
-        app.action_analyze()
-        await pilot.pause()
-        assert len(app._meta_only) == 0
-
-
-@pytest.mark.asyncio
 async def test_theme_change_via_reactive_persists(tmp_path: Path) -> None:
     """Setting ``App.theme`` (e.g. Ctrl+P Change theme) writes config.toml."""
     import tomlkit
@@ -572,24 +520,6 @@ async def test_push_run_configs_screen(tmp_path: Path) -> None:
             pilot,
             lambda: any(isinstance(s, RunConfigsScreen) for s in app.screen_stack),
             description="RunConfigsScreen pushed",
-        )
-        await pilot.press("escape")
-        await pilot.pause()
-
-
-@pytest.mark.asyncio
-async def test_push_rules_screen(tmp_path: Path) -> None:
-    """``d`` opens the RulesScreen."""
-    from groket.ui.screens.rules import RulesScreen
-
-    app, _, _ = _make_app(tmp_path, n_sessions=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        app.action_open_rules()
-        await wait_until(
-            pilot,
-            lambda: any(isinstance(s, RulesScreen) for s in app.screen_stack),
-            description="RulesScreen pushed",
         )
         await pilot.press("escape")
         await pilot.pause()
@@ -885,104 +815,17 @@ async def test_session_search_filters_as_you_type(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_analysis_settings_modal(tmp_path: Path) -> None:
-    """Analysis settings modal opens, then cancels."""
+async def test_session_app_has_no_analysis_settings(tmp_path: Path) -> None:
+    """Session eval has no analysis-settings action or modal."""
+    from groket.ui import app as app_mod
+
     app, _, _ = _make_app(tmp_path, n_sessions=0)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        app.action_analysis_settings()
-        await wait_until(
-            pilot,
-            lambda: any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="AnalysisSettingsModal pushed",
-        )
-        modal = next(s for s in app.screen_stack if isinstance(s, AnalysisSettingsModal))
-        # Cancel
-        modal.action_cancel()
-        await wait_until(
-            pilot,
-            lambda: not any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="modal dismissed on cancel",
-        )
-
-
-@pytest.mark.asyncio
-async def test_analysis_settings_modal_save(tmp_path: Path) -> None:
-    """Analysis settings modal saves when action_save is called."""
-    app, _, _ = _make_app(tmp_path, n_sessions=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        app.action_analysis_settings()
-        await wait_until(
-            pilot,
-            lambda: any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="AnalysisSettingsModal pushed",
-        )
-        modal = next(s for s in app.screen_stack if isinstance(s, AnalysisSettingsModal))
-        # Wait for modal children to compose
-        await wait_until(
-            pilot,
-            lambda: bool(modal.query("#as-auto-analyze")),
-            description="modal children composed",
-        )
-        modal.action_save()
-        await wait_until(
-            pilot,
-            lambda: not any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="modal dismissed on save",
-        )
-
-
-@pytest.mark.asyncio
-async def test_analysis_settings_cancel_button(tmp_path: Path) -> None:
-    """Cancel button on the analysis settings modal dismisses it."""
-    app, _, _ = _make_app(tmp_path, n_sessions=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        app.action_analysis_settings()
-        await wait_until(
-            pilot,
-            lambda: any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="AnalysisSettingsModal pushed",
-        )
-        modal = next(s for s in app.screen_stack if isinstance(s, AnalysisSettingsModal))
-        await wait_until(
-            pilot,
-            lambda: bool(modal.query("#as-cancel")),
-            description="cancel button composed",
-        )
-        await pilot.click("#as-cancel")
-        await wait_until(
-            pilot,
-            lambda: not any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="modal dismissed via cancel button",
-        )
-
-
-@pytest.mark.asyncio
-async def test_analysis_settings_save_button(tmp_path: Path) -> None:
-    """Save button on the analysis settings modal persists and dismisses."""
-    app, _, _ = _make_app(tmp_path, n_sessions=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        app.action_analysis_settings()
-        await wait_until(
-            pilot,
-            lambda: any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="AnalysisSettingsModal pushed",
-        )
-        modal = next(s for s in app.screen_stack if isinstance(s, AnalysisSettingsModal))
-        await wait_until(
-            pilot,
-            lambda: bool(modal.query("#as-save")),
-            description="save button composed",
-        )
-        await pilot.click("#as-save")
-        await wait_until(
-            pilot,
-            lambda: not any(isinstance(s, AnalysisSettingsModal) for s in app.screen_stack),
-            description="modal dismissed via save button",
-        )
+        assert not hasattr(app, "action_analysis_settings")
+        assert not hasattr(app_mod, "AnalysisSettingsModal")
+        titles = [c[0] for c in yield_app_commands(app, app.screen)]
+        assert not any("analysis" in t.lower() for t in titles)
 
 
 @pytest.mark.asyncio
@@ -1040,25 +883,18 @@ def test_derive_label(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_populate_with_analyzed_sessions(tmp_path: Path) -> None:
-    """Analyzed sessions show real finding counts (not ``--``)."""
-    from groket.analysis.base import AnalysisResult
-
+    """Home table still paints after a populate with no plugin cache."""
     app, _, _ = _make_app(tmp_path, n_sessions=1)
     async with app.run_test(size=(120, 40)) as pilot:
         await wait_until(pilot, lambda: len(app._meta_only) >= 1, description="sessions loaded")
         table = app.query_one("#session-table", DataTable)
         await wait_until(pilot, lambda: table.row_count >= 1, description="table populated")
 
-        # Inject fake analysis results
-        meta = app._meta_only[0][0]
-        sd_key = str(meta.session_dir)
-        app._plugin_results[sd_key] = {
-            "basic": AnalysisResult(analyzer_id="basic", ok=True, findings=[])
-        }
         app._populate_session_table()
         await pilot.pause()
         # Table should still show the session
         assert table.row_count >= 1
+        assert not hasattr(app, "_plugin_results")
 
 
 @pytest.mark.asyncio
@@ -1155,26 +991,11 @@ def test_merge_session_dirs_empty(tmp_path: Path) -> None:
 
 
 def test_findings_for_session(tmp_path: Path) -> None:
-    """_findings_for_session collects findings across plugins."""
-    from groket.analysis.base import AnalysisResult, Finding
-
+    """Session eval no longer caches or lists plugin findings."""
     app, _, traces = _make_app(tmp_path, n_sessions=1)
     _prime_catalog(app, traces)
-    meta = app._meta_only[0][0]
-    sd_key = str(meta.session_dir)
-    assert app._findings_for_session(sd_key) == []
-    finding = Finding(
-        id="test-rule",
-        plugin_id="basic",
-        severity="high",
-        title="Test finding",
-    )
-    app._plugin_results[sd_key] = {
-        "basic": AnalysisResult(analyzer_id="basic", ok=True, findings=[finding])
-    }
-    result = app._findings_for_session(sd_key)
-    assert len(result) == 1
-    assert result[0].id == "test-rule"
+    assert not hasattr(app, "_findings_for_session")
+    assert not hasattr(app, "_plugin_results")
 
 
 @pytest.mark.asyncio
@@ -1882,72 +1703,6 @@ def test_session_search_haystack_includes_metadata(tmp_path: Path) -> None:
     assert "task-fix" in hay
     assert "repo" in hay
     assert "important fix" in hay
-
-
-def test_analyze_targets_already_analyzed(tmp_path: Path) -> None:
-    """Analyze with all-analyzed sessions skips reanalysis."""
-    from groket.analysis.inflight import clear_session_analysis_inflight
-
-    clear_session_analysis_inflight()
-    app, _, traces = _make_app(tmp_path, n_sessions=1)
-    _prime_catalog(app, traces)
-    for meta, label in list(app._meta_only):
-        app._analyze_one(meta, label)
-    assert len(app._plugin_results) >= 1
-    before = dict(app._plugin_results)
-    for meta, label in list(app._meta_only):
-        app._analyze_one(meta, label)
-    assert app._plugin_results == before
-    clear_session_analysis_inflight()
-
-
-@pytest.mark.asyncio
-async def test_analyze_targets_skips_inflight_sessions(tmp_path: Path) -> None:
-    """A session already in the analysis pipeline is not enqueued again."""
-    from groket.analysis.inflight import (
-        clear_session_analysis_inflight,
-        session_analysis_inflight_count,
-        try_begin_session_analysis,
-    )
-    from groket.job_pools import get_analysis_pool
-
-    clear_session_analysis_inflight()
-    app, _, traces = _make_app(tmp_path, n_sessions=1)
-    submitted: list[str] = []
-    real_submit = get_analysis_pool().submit
-
-    def _track(label: str, fn):  # type: ignore[no-untyped-def]
-        submitted.append(label)
-        return real_submit(label, fn)
-
-    async with app.run_test(size=(120, 40)) as pilot:
-        await wait_until(pilot, lambda: len(app._meta_only) >= 1, description="sessions loaded")
-        meta, label = app._meta_only[0]
-        assert try_begin_session_analysis(meta.session_dir) is True
-        app._plugin_results.clear()
-        get_analysis_pool().submit = _track  # type: ignore[method-assign]
-        try:
-            app._analyze_targets([(meta, label)])
-            await pilot.pause()
-        finally:
-            get_analysis_pool().submit = real_submit  # type: ignore[method-assign]
-        assert submitted == []
-        assert session_analysis_inflight_count() == 1
-    clear_session_analysis_inflight()
-
-
-@pytest.mark.asyncio
-async def test_analyze_targets_guard_bad_input(tmp_path: Path) -> None:
-    """_analyze_targets early-return guards for invalid input types."""
-    work = tmp_path / "w"
-    (work / "runs" / "traces").mkdir(parents=True)
-    app = TraceEvalApp(work_dir=work, traces_path=work / "runs" / "traces")
-    async with app.run_test(size=(80, 24)) as pilot:
-        await pilot.pause()
-        app._analyze_targets(None)  # type: ignore[arg-type]
-        app._analyze_targets([])
-        app._analyze_targets("bad")  # type: ignore[arg-type]
-        await pilot.pause()
 
 
 @pytest.mark.asyncio

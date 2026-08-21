@@ -33,7 +33,7 @@ def test_defaults_when_missing() -> None:
     assert cfg.follow_os is False
     assert cfg.show_host_sessions is False
     assert cfg.auto_serve is True
-    assert cfg.analysis.plugins == []
+    assert cfg.analysis.live_refresh_workers == 1
     assert cfg.hud.window_mode is False
     assert cfg.hud.global_shortcut == ""
     assert cfg.hud.desktop_notifications is True
@@ -54,7 +54,7 @@ def test_save_writes_toml_tables(tmp_path: Path) -> None:
 def test_update_keeps_comment(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
-        '# keep me\ntheme = "nord"\n[analysis]\nplugins = ["a:b"]\n',
+        '# keep me\ntheme = "nord"\n[analysis]\nnote = "keep"\n',
         encoding="utf-8",
     )
     invalidate_config_cache()
@@ -63,7 +63,7 @@ def test_update_keeps_comment(tmp_path: Path) -> None:
     assert "keep me" in text
     data = tomlkit.parse(text)
     assert data["theme"] == "gruvbox"
-    assert list(data["analysis"]["plugins"]) == ["a:b"]
+    assert data["analysis"]["note"] == "keep"
 
 
 def test_invalid_toml_returns_defaults(tmp_path: Path) -> None:
@@ -84,7 +84,7 @@ def test_imports_json_when_toml_missing(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_text(
         '{"theme": "nord", "show_host_sessions": true, '
         '"hud_global_shortcut": "Ctrl+K", '
-        '"analysis": {"plugins": ["a:b"]}}\n',
+        '"analysis": {"live_refresh_workers": 1}}\n',
         encoding="utf-8",
     )
     invalidate_config_cache()
@@ -92,7 +92,7 @@ def test_imports_json_when_toml_missing(tmp_path: Path) -> None:
     assert cfg.theme == "nord"
     assert cfg.show_host_sessions is True
     assert cfg.hud.global_shortcut == "Ctrl+K"
-    assert cfg.analysis.plugins == ["a:b"]
+    assert cfg.analysis.live_refresh_workers == 1
     text = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "nord" in text
     assert not (tmp_path / "config.json").exists()
@@ -139,7 +139,7 @@ def test_validate_example_file() -> None:
     assert cfg.follow_os is False
     assert cfg.show_host_sessions is False
     assert cfg.auto_serve is True
-    assert cfg.analysis.auto_analyze_when == "session_complete"
+    assert cfg.analysis.live_refresh_workers == 1
     assert cfg.hud.desktop_notifications is True
     assert cfg.export.default_profile == ""
 

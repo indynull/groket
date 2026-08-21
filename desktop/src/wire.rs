@@ -375,50 +375,6 @@ pub struct TimelinePage {
     pub events: Vec<TimelineEvent>,
 }
 
-/// Cached analysis finding (overview ``findings.findings[]``).
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FindingRow {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default)]
-    pub plugin_id: String,
-    #[serde(default)]
-    pub severity: String,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub detail: String,
-    #[serde(default)]
-    pub category: String,
-    #[serde(default)]
-    pub event_indices: Vec<i64>,
-    #[serde(default)]
-    pub turn_indices: Vec<i64>,
-    #[serde(default)]
-    pub primary_event_index: Option<i64>,
-    #[serde(default)]
-    pub primary_turn_index: Option<i64>,
-}
-
-/// Overview ``findings`` block.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FindingsBlock {
-    #[serde(default)]
-    pub session_id: String,
-    #[serde(default)]
-    pub total: i64,
-    #[serde(default)]
-    pub count: i64,
-    #[serde(default)]
-    pub truncated: bool,
-    #[serde(default)]
-    pub plugins: Vec<String>,
-    #[serde(default)]
-    pub findings: Vec<FindingRow>,
-}
-
 /// One file in ``session/diff`` ``points[].files[]``.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -670,8 +626,6 @@ pub struct Overview {
     pub turns: TurnsBlock,
     #[serde(default)]
     pub notes: NotesBlock,
-    #[serde(default)]
-    pub findings: FindingsBlock,
     #[serde(default)]
     pub stats: OverviewStats,
 }

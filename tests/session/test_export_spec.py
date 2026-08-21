@@ -28,14 +28,11 @@ def test_builtin_archive_full_and_trace_only() -> None:
     assert full.renderer == "markdown"
     assert IncludeUnit.GROK_TRACE in full.include
     assert IncludeUnit.SUMMARY in full.include
-    assert IncludeUnit.ANALYSIS in full.include
     org = profiles["archive-org"]
     assert org.renderer == "org"
     assert IncludeUnit.SUMMARY in org.include
-    assert IncludeUnit.ANALYSIS_REPORTS in org.include
     trace = profiles["trace-only"]
     assert IncludeUnit.GROK_TRACE in trace.include
-    assert IncludeUnit.ANALYSIS not in trace.include
 
 
 def test_user_profile_overrides_builtin(tmp_path: Path) -> None:

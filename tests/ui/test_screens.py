@@ -12,24 +12,6 @@ from .pilot_helpers import static_plain
 
 
 @pytest.mark.asyncio
-async def test_rules_screen_mount(tmp_path: Path):
-    from groket.ui.screens.rules import RulesScreen
-
-    class H(App[None]):
-        async def on_mount(self) -> None:
-            self.push_screen(RulesScreen(tmp_path))
-
-    async with H().run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        from groket.ui.screens.rules import RulesScreen as RS
-
-        assert isinstance(pilot.app.screen, RS)
-        # Rules list table is present (empty when no user rules).
-        table = pilot.app.screen.query_one(DataTable)
-        assert table.row_count >= 0
-
-
-@pytest.mark.asyncio
 async def test_run_configs_screen_mount(tmp_path: Path):
     from groket.runs.run_manager import RunManager
     from groket.ui.screens.run_configs import RunConfigsScreen

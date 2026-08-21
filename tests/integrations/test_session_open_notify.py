@@ -9,6 +9,7 @@ from importlib import import_module
 from pathlib import Path
 
 import pytest
+from groket.integrations.control import PROTOCOL_VERSION
 
 
 def _short_sock(name: str) -> Path:
@@ -48,15 +49,13 @@ async def test_session_open_notifies_without_open_callback(tmp_path: Path) -> No
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "initialize",
-                    "params": {"protocolVersion": "1.0.0"},
+                    "params": {"protocolVersion": PROTOCOL_VERSION},
                 }
             ).encode()
             + b"\n"
         )
         await writer.drain()
         init = json.loads(await asyncio.wait_for(reader.readline(), timeout=3))
-        from groket.integrations.control import PROTOCOL_VERSION
-
         assert init["result"]["protocolVersion"] == PROTOCOL_VERSION
 
         writer.write(

@@ -6,10 +6,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
-import pytest
 from groket.session.control_views import (
     build_session_diff,
-    build_session_findings,
     build_session_get,
     build_session_overview,
     build_session_timeline,
@@ -195,8 +193,7 @@ def test_build_session_overview_one_shot(tmp_path: Path) -> None:
     assert "schema" in ov["notes"]
     assert ov["notes"]["schema"]["fields"]
     assert {f["id"] for f in ov["notes"]["schema"]["fields"]} >= {"summary", "detail"}
-    assert "findings" in ov
-    assert ov["findings"]["total"] == 0
+    assert "findings" not in ov
     page = build_session_timeline(sd, offset=0, limit=50)
     assert page["events"]
     kinds = {e.get("kind") for e in page["events"]}
@@ -487,95 +484,6 @@ def test_overview_caps_assistant_preview_for_list(tmp_path: Path) -> None:
     segs = segment_timeline_turns(parse_timeline(sd))
     short = turn_segment_mapping(segs[0], include_event_indexes=False, assistant_max_chars=400)
     assert len(str(short.get("assistantSummary") or "")) <= 401
-
-
-def test_build_session_findings_maps_events_to_turns(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Findings from analysis cache get sequential turnIndices via eventIndices."""
-    sd = _write_session(tmp_path, "sess-find")
-    page = build_session_timeline(sd, offset=0, limit=50)
-    assert page["events"]
-    # Pick a real event index from the parsed timeline.
-    ev_idx = int(page["events"][0]["index"])
-
-    cache_root = tmp_path / "cache"
-    plugin_dir = cache_root / "analysis" / sd.name
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "engine.json").write_text(
-        json.dumps(
-            {
-                "_schema": 1,
-                "_plugin_version": "0",
-                "_trace_mtime": 0,
-                "result": {
-                    "analyzer_id": "engine",
-                    "findings": [
-                        {
-                            "id": "f1",
-                            "plugin_id": "engine",
-                            "severity": "high",
-                            "title": "Linked finding",
-                            "detail": "points at an event",
-                            "category": "test",
-                            "event_indices": [ev_idx],
-                            "update_indices": [],
-                            "tool_call_ids": [],
-                        }
-                    ],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "groket.paths.analysis_cache_dir",
-        lambda: cache_root,
-    )
-    found = build_session_findings(sd)
-    assert found["total"] == 1
-    row = found["findings"][0]
-    assert row["title"] == "Linked finding"
-    assert row["eventIndices"] == [ev_idx]
-    assert row["primaryEventIndex"] == ev_idx
-    assert isinstance(row["turnIndices"], list)
-    assert row["turnIndices"]  # resolved into at least one turn
-    assert row["primaryTurnIndex"] == row["turnIndices"][0]
-
-    ov = build_session_overview(sd)
-    assert ov["findings"]["total"] == 1
-    assert ov["findings"]["findings"][0]["primaryTurnIndex"] is not None
-
-
-def test_finding_mapping_uses_typed_finding_fields() -> None:
-    from groket.analysis.base import Finding
-    from groket.models import Severity, TraceEvent
-    from groket.session.control_views import finding_mapping
-    from groket.session.turns import segment_timeline_turns
-
-    ev = TraceEvent(
-        index=3,
-        event_type="user_message_chunk",
-        content="<user_query>x</user_query>",
-    )
-    segs = segment_timeline_turns([ev])
-    finding = Finding(
-        id="f-issue",
-        plugin_id="basic",
-        severity=Severity.HIGH,
-        title="Broke it",
-        detail="missed a check",
-        category="workflow",
-        event_indices=[3],
-        extras={"what_model_did": "ran", "where": "t0", "why": "missed", "pattern": "x"},
-    )
-    row = finding_mapping(finding, segs=segs)
-    assert row["id"] == "f-issue"
-    assert row["severity"] == "high"
-    assert row["pluginId"] == "basic"
-    assert row["extras"]["what_model_did"] == "ran"
-    assert row["turnIndices"]
 
 
 def test_timeline_event_kind_and_tool_family() -> None:

@@ -184,7 +184,7 @@ pub struct OverviewField {
 /// Operator-facing Overview rows (TUI Summary-shaped glance, not chrome counts).
 ///
 /// Title, status, model/duration, context meter, summary prose, and banners
-/// are painted above this stack. Findings/notes totals live on those banners.
+/// are painted above this stack. Notes totals live on those banners.
 pub fn overview_fields(
     meta: &crate::wire::SessionMeta,
     turns: &crate::wire::TurnsBlock,

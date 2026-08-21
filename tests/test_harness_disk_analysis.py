@@ -43,7 +43,6 @@ FEATURE_FAMILIES = (
     "Usage and context meter",
     "Notes and flags",
     "Export",
-    "Analysis / detectors",
     "Control plane",
     "Docker / batch eval traces",
     "Host `~/.grok/sessions`",

@@ -140,7 +140,7 @@ select = [
 # Thresholds under [tool.ruff.lint.pylint] match AGENTS.md §4.6.
 ignore = [
     "E501",  # line length — formatter / line-length setting
-    "UP042", # str Enum pattern used for Severity / FlagVerdict
+    "UP042", # str Enum pattern used for FlagVerdict
 ]
 
 
@@ -151,7 +151,6 @@ ignore = [
 "assets/**" = ["T20", "UP031", "E402"]
 "groket/_embedded_assets/**" = ["T20", "UP031", "E402"]
 "groket/docker/orchestrator.py" = ["E402"]
-"groket/engine/detectors/__init__.py" = ["E402"]
 "groket/runs/run_configs.py" = ["E402"]
 # Textual widgets often need late imports (E402); single-letter loop vars (E741).
 "groket/ui/**" = ["E402", "E741"]
@@ -182,7 +181,7 @@ addopts = "--tb=short -rfE"
 [tool.coverage.run]
 source = ["groket"]
 branch = false
-# Non-library asset mirrors (text templates for image build / rules YAML copies).
+# Non-library asset mirrors (text templates for image build).
 # Product gate is 100% of importable library code.
 omit = [
     "groket/_embedded_assets/*",

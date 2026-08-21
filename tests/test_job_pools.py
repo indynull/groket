@@ -1,4 +1,4 @@
-"""Tests for fixed analysis / live-refresh pools."""
+"""Tests for the live-refresh pool."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from groket.job_pools import (
     JobPool,
     configure_job_pools,
     get_activity_log,
-    get_analysis_pool,
+    get_live_refresh_pool,
 )
 
 
@@ -45,6 +45,6 @@ def test_pool_serial_submit() -> None:
 
 
 def test_configure_pools() -> None:
-    configure_job_pools(analysis_workers=1, live_refresh_workers=1)
-    assert get_analysis_pool().max_workers == 1
+    configure_job_pools(live_refresh_workers=1)
+    assert get_live_refresh_pool().max_workers == 1
     assert get_activity_log().seq >= 0

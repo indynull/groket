@@ -32,7 +32,6 @@ def test_build_activity_line_lifecycle_and_spinner():
         running=2,
         extracting=1,
         awaiting=1,
-        analyze_active=1,
         sessions_loaded=10,
         spinner="⠋",
     )
@@ -41,7 +40,7 @@ def test_build_activity_line_lifecycle_and_spinner():
     assert "Running 2" in plain
     assert "Extracting 1" in plain
     assert "Awaiting 1" in plain
-    assert "Analysis 1" in plain
+    assert "Analysis" not in plain
     assert "Sessions 10" in plain
     assert "│" in plain
     assert "⠋" in plain
@@ -63,7 +62,7 @@ def test_activity_is_busy():
     # Live "running" alone must not enable the fast spinner timer (UI thrash).
     assert not activity_is_busy({"running": 2})
     assert not activity_is_busy({"ending": 1})
-    assert activity_is_busy({"analyze": 1})
+    assert not activity_is_busy({"analyze": 1})
     assert activity_is_busy({"extracting": 1})
 
 
@@ -81,7 +80,6 @@ def test_activity_counters_meta_ending():
     meta_ending = SimpleNamespace(list_status_label=lambda: "ending")
     app = SimpleNamespace(
         run_manager=SimpleNamespace(active_status_counts=lambda: {"running": 1}),
-        _analysis_jobs_active=0,
         _meta_only=[(meta_ending, "x")],
     )
     counts = activity_counters_from_app(app)
@@ -105,7 +103,6 @@ def test_activity_counters_from_app_status_counts():
     meta_done = SimpleNamespace(list_status_label=lambda: "complete")
     app = SimpleNamespace(
         run_manager=rm,
-        _analysis_jobs_active=1,
         _meta_only=[(meta_await, "x"), (meta_done, "y")],
     )
     counts = activity_counters_from_app(app)
@@ -113,7 +110,7 @@ def test_activity_counters_from_app_status_counts():
     # List is awaiting-only → suppress ghost Running from launch statuses.
     assert counts["running"] == 0
     assert counts["awaiting"] == 1
-    assert counts["analyze"] == 1
+    assert "analyze" not in counts
     assert counts["sessions"] == 2
     assert counts["refresh"] == 0
 
@@ -122,7 +119,6 @@ def test_activity_counters_meta_running_when_no_docker():
     meta_running = SimpleNamespace(list_status_label=lambda: "running")
     app = SimpleNamespace(
         run_manager=SimpleNamespace(active_status_counts=lambda: {}),
-        _analysis_jobs_active=0,
         _meta_only=[(meta_running, "x")],
     )
     counts = activity_counters_from_app(app)
@@ -137,7 +133,7 @@ def test_activity_counters_fallback_walk_statuses():
         configs=[],
     )
     rm = SimpleNamespace(list_active=lambda: [bg])
-    app = SimpleNamespace(run_manager=rm, _analysis_jobs_active=0, _meta_only=[])
+    app = SimpleNamespace(run_manager=rm, _meta_only=[])
     counts = activity_counters_from_app(app)
     assert counts["extracting"] == 1
 
@@ -148,7 +144,6 @@ def test_activity_counters_suppress_ghost_running_when_only_awaiting():
     meta_await = SimpleNamespace(list_status_label=lambda: "awaiting")
     app = SimpleNamespace(
         run_manager=rm,
-        _analysis_jobs_active=0,
         _meta_only=[(meta_await, "a"), (meta_await, "b")],
     )
     counts = activity_counters_from_app(app)
@@ -159,7 +154,7 @@ def test_activity_counters_suppress_ghost_running_when_only_awaiting():
 
 def test_activity_counters_unknown_status_is_pending_not_running():
     rm = SimpleNamespace(active_status_counts=lambda: {"weird_phase": 1})
-    app = SimpleNamespace(run_manager=rm, _analysis_jobs_active=0, _meta_only=[])
+    app = SimpleNamespace(run_manager=rm, _meta_only=[])
     counts = activity_counters_from_app(app)
     assert counts["pending"] == 1
     assert counts["running"] == 0

@@ -6,7 +6,6 @@ Pure domain loaders → JSON-RPC payloads. No Textual. Used by
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections import Counter
@@ -15,7 +14,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from .. import event_types as et
-from ..analysis.base import AnalysisResult, Finding
 from ..bounded_cache import BoundedCache
 from ..constants import OVERVIEW_CACHE_MAXSIZE, TURN_VIEW_CACHE_MAXSIZE
 from ..models import JsonObject, JsonValue, SessionMeta, ToolInputBag, TraceEvent, as_json_object
@@ -62,17 +60,14 @@ from .subagents import (
 )
 from .workflows import workflow_list_preview
 
-DEFAULT_FINDINGS_LIMIT = 80
-
 # Concurrent HUD open + live poll + notifies were double-building the same
 # multi‑MB session overview (~12–30s each). Join one flight per path and cache
-# by timeline/notes/findings inputs so warm re-polls stay cheap.
+# by timeline/notes inputs so warm re-polls stay cheap.
 _JobFilesStamp = tuple[tuple[str, int, int], ...]
 _MonitorStatusStamp = tuple[tuple[str, str], ...]
 _OverviewStamp = tuple[
     TimelineStamp,
     str,
-    tuple[tuple[str, int, int], ...],
     _JobFilesStamp,
     _MonitorStatusStamp,
 ]
@@ -431,111 +426,6 @@ def build_session_get(
     return out
 
 
-def finding_mapping(
-    finding: Finding,
-    *,
-    segs: list[TurnSegment],
-    plugin_id: str = "",
-) -> JsonObject:
-    """Serialize one analysis :class:`~groket.analysis.base.Finding` for palette clients."""
-    plug = finding.plugin_id or plugin_id or ""
-    detail = finding.detail or ""
-    if len(detail) > 2000:
-        detail = detail[:1997] + "…"
-    event_indices = [int(x) for x in finding.event_indices]
-    update_indices = [int(x) for x in finding.update_indices]
-    turn_indices = TurnSegment.turn_indices_for(segs, event_indices)
-    extras: JsonObject = {}
-    for key in (
-        "what_model_did",
-        "what_should_have_happened",
-        "where",
-        "why",
-        "pattern",
-    ):
-        val = finding.extras.get(key)
-        if val not in (None, ""):
-            text = str(val)
-            extras[key] = text[:1200] + ("…" if len(text) > 1200 else "")
-    return {
-        "id": finding.id or "",
-        "pluginId": plug,
-        "severity": finding.severity.value,
-        "title": finding.title or "",
-        "detail": detail,
-        "category": finding.category or "",
-        "eventIndices": list(event_indices[:40]),
-        "updateIndices": list(update_indices[:40]),
-        "turnIndices": list(turn_indices),
-        "primaryEventIndex": event_indices[0] if event_indices else None,
-        "primaryTurnIndex": turn_indices[0] if turn_indices else None,
-        "extras": extras,
-    }
-
-
-def build_session_findings(
-    session_dir: Path,
-    *,
-    segs: list[TurnSegment] | None = None,
-    limit: int = DEFAULT_FINDINGS_LIMIT,
-) -> JsonObject:
-    """Load cached analysis findings and attach turn/event references.
-
-    Reads ``~/.groket/cache/analysis/<session_id>/*.json`` (same layout as the
-    TUI analysis cache). Does not re-run analyzers. Stale/mismatched plugin
-    versions are still served so palette clients can show last known findings.
-    """
-    from ..paths import analysis_cache_dir
-
-    sd = Path(session_dir)
-    sid = (sd.name or "").strip()
-    cap = max(0, min(int(limit), 200))
-    if segs is None:
-        segs = segment_timeline_turns(parse_timeline(sd))
-
-    cache_dir = analysis_cache_dir() / "analysis" / sid
-    collected: list[JsonObject] = []
-    plugins: list[str] = []
-    if cache_dir.is_dir():
-        # Stable order: plugin file name, then finding order within the file.
-        for path in sorted(cache_dir.glob("*.json")):
-            try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                logger.debug("skip findings cache %s", path, exc_info=True)
-                continue
-            if not isinstance(raw, dict):
-                continue
-            result_raw = raw.get("result")
-            if not isinstance(result_raw, dict):
-                if "findings" in raw or "analyzer_id" in raw:
-                    result_raw = raw
-                else:
-                    continue
-            try:
-                result = AnalysisResult.from_dict(as_json_object(result_raw))
-            except (TypeError, ValueError, KeyError):
-                logger.debug("skip findings parse %s", path, exc_info=True)
-                continue
-            plug = (result.analyzer_id or path.stem or "").strip()
-            if plug and plug not in plugins:
-                plugins.append(plug)
-            findings: list[Finding] = list(result.findings or [])
-            for f in findings:
-                collected.append(finding_mapping(f, segs=segs, plugin_id=plug))
-
-    rows: list[JsonValue] = list(collected[:cap])
-    plugins_out: list[JsonValue] = list(plugins)
-    return {
-        "sessionId": sid,
-        "total": len(collected),
-        "count": len(rows),
-        "truncated": len(collected) > len(rows),
-        "plugins": plugins_out,
-        "findings": rows,
-    }
-
-
 class SessionOverview:
     """Cached ``session/overview`` payload and stamp-keyed turn view."""
 
@@ -555,30 +445,6 @@ class SessionOverview:
             return str(sd.expanduser().resolve())
         except OSError:
             return str(sd.expanduser())
-
-    @staticmethod
-    def findings_stamp(session_dir: Path) -> tuple[tuple[str, int, int], ...]:
-        """Fingerprint analysis-cache JSON files (name, mtime_ns, size)."""
-        from ..paths import analysis_cache_dir
-
-        sid = (Path(session_dir).name or "").strip()
-        if not sid:
-            return ()
-        cache_dir = analysis_cache_dir() / "analysis" / sid
-        if not cache_dir.is_dir():
-            return ()
-        out: list[tuple[str, int, int]] = []
-        try:
-            paths = sorted(cache_dir.glob("*.json"))
-        except OSError:
-            return ()
-        for path in paths:
-            try:
-                st = path.stat()
-            except OSError:
-                continue
-            out.append((path.name, int(st.st_mtime_ns), int(st.st_size)))
-        return tuple(out)
 
     @staticmethod
     def origin(session_dir: Path, work_dir: Path | None) -> str:
@@ -620,7 +486,6 @@ class SessionOverview:
         return (
             session_timeline_stamp(sd),
             notes_rev,
-            cls.findings_stamp(sd),
             job_files,
             monitor_status,
         )
@@ -681,7 +546,6 @@ class SessionOverview:
         except Exception:
             logger.debug("notes for session/overview %s", sd, exc_info=True)
 
-        findings_block = build_session_findings(sd, segs=segs)
         jobs, schedules, workflows = SessionJobs.overview_rows(sd, events, cls.cache_key(sd))
         summary = (meta.summary_text or "").strip()
         if len(summary) > 1200:
@@ -723,13 +587,12 @@ class SessionOverview:
                 "notes": notes_rows,
                 "schema": cls.notes_schema(),
             },
-            "findings": findings_block,
             "stats": stats,
         }
 
     @classmethod
     def build(cls, session_dir: Path, *, work_dir: Path | None = None) -> JsonObject:
-        """Meta + turns + notes + findings (timeline lazy); one in-flight per path."""
+        """Meta + turns + notes (timeline lazy); one in-flight per path."""
         sd = Path(session_dir)
         cache_key = cls.cache_key(sd)
 
@@ -779,7 +642,7 @@ def build_session_overview(
     *,
     work_dir: Path | None = None,
 ) -> JsonObject:
-    """Meta + turns + notes + findings for palette clients (timeline lazy).
+    """Meta + turns + notes for palette clients (timeline lazy).
 
     Parses the timeline once for turn segmentation and ``numEvents``. Does
     **not** embed event rows — clients call ``session/timeline`` with
@@ -997,12 +860,10 @@ def build_session_usage(session_dir: Path) -> JsonObject:
 
 __all__ = [
     "DEFAULT_CONTENT_CHARS",
-    "DEFAULT_FINDINGS_LIMIT",
     "DEFAULT_TIMELINE_LIMIT",
     "MAX_CONTENT_CHARS",
     "MAX_TIMELINE_LIMIT",
     "build_session_diff",
-    "build_session_findings",
     "build_session_get",
     "build_session_overview",
     "build_session_timeline",
@@ -1010,7 +871,6 @@ __all__ = [
     "build_session_usage",
     "SessionOverview",
     "timeline_query_hit",
-    "finding_mapping",
     "session_meta_mapping",
     "timeline_event_mapping",
     "turn_segment_mapping",

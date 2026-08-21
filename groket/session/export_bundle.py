@@ -7,7 +7,6 @@ Selected units (only written when the data exists)::
 
     grok-trace.tar.gz   # exact ``grok trace --local`` (CLI only; no fallback)
     run/                # eval volume (recipe, launch, prompt, turn gate, …)
-    analysis/           # cached analysis JSON (+ optional markdown reports)
     flags.json          # operator flags (session or config-home fallback)
     notes/              # operator_notes.toml from the notes store
     README.txt
@@ -31,13 +30,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from shutil import which
 
-from ..models import JsonObject, JsonValue, as_json_object, json_as_object
+from ..models import JsonObject, as_json_object
 from ..notes import collect_notes_for_export
 from ..parser import parse_timeline
-from ..paths import analysis_cache_dir, is_run_dir_name, reports_dir
+from ..paths import is_run_dir_name, reports_dir
 from .export_render import (
     SessionSummaryData,
-    analysis_report_from_result,
     report_file_extension,
     session_summary_body,
 )
@@ -310,88 +308,6 @@ def _collect_run_volume_files(run_vol: Path, staging: Path) -> None:
             pass
 
 
-def _safe_report_stem(name: str) -> str:
-    """Filesystem-safe stem for an analysis plugin cache filename."""
-    stem = Path(name).stem.strip() or "analysis"
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in stem)[:120]
-
-
-def _analysis_result_payload(raw: JsonValue) -> JsonObject | None:
-    """Return the analysis result object from a cache file payload."""
-    if not isinstance(raw, dict):
-        return None
-    result = raw.get("result")
-    if isinstance(result, dict):
-        return json_as_object(result)
-    # Older / bare result files.
-    if "analyzer_id" in raw or "findings" in raw or "summary" in raw:
-        return json_as_object(raw)
-    return None
-
-
-def _markdown_from_analysis_result(result: JsonObject, *, plugin_stem: str) -> str:
-    """Build a markdown analysis report (tests and markdown renderer path)."""
-    return analysis_report_from_result(result, plugin_stem=plugin_stem, renderer="markdown")
-
-
-def _load_analysis_cache_json(path: Path) -> JsonValue | None:
-    """Parse an analysis cache JSON file as :data:`JsonValue`."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        logger.debug("skip analysis markdown for %s", path, exc_info=True)
-        return None
-    try:
-        data: JsonValue = json.loads(text)
-    except json.JSONDecodeError:
-        logger.debug("skip analysis markdown for %s", path, exc_info=True)
-        return None
-    return data
-
-
-def _write_analysis_reports(
-    analysis_dir: Path,
-    *,
-    renderer: str,
-) -> None:
-    """Write human reports next to each analysis ``*.json`` (dialect from *renderer*)."""
-    if not analysis_dir.is_dir():
-        return
-    ext = report_file_extension(renderer)
-    for path in sorted(analysis_dir.glob("*.json")):
-        raw = _load_analysis_cache_json(path)
-        if raw is None:
-            continue
-        result = _analysis_result_payload(raw)
-        if result is None:
-            continue
-        stem = _safe_report_stem(path.name)
-        out_path = analysis_dir / f"{stem}{ext}"
-        body = analysis_report_from_result(result, plugin_stem=stem, renderer=renderer)
-        try:
-            out_path.write_text(body, encoding="utf-8")
-        except OSError:
-            logger.debug("failed to write analysis report %s", out_path, exc_info=True)
-
-
-def _collect_analysis(
-    session_id: str,
-    staging: Path,
-    cache_root: Path | None,
-    *,
-    write_reports: bool,
-    renderer: str,
-) -> None:
-    root = Path(cache_root) if cache_root is not None else analysis_cache_dir()
-    src = root / "analysis" / session_id
-    if not src.is_dir():
-        return
-    dest = staging / "analysis"
-    shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True)
-    if write_reports:
-        _write_analysis_reports(dest, renderer=renderer)
-
-
 def _collect_flags(session_dir: Path, staging: Path) -> None:
     """Write operator flags to outer ``flags.json`` when any exist.
 
@@ -495,12 +411,10 @@ def _write_readme(staging: Path, *, sid: str, spec: ExportSpec) -> None:
         f"{GROK_TRACE_ARCHIVE_NAME}\n"
         f"                 Nested archive from: grok trace --local {sid}\n"
         f"                 (exact CLI bytes). Grok session files only — not\n"
-        f"                 groket flags/notes/analysis/run extras.\n\n"
+        f"                 groket flags/notes/run extras.\n\n"
         f"run/             Eval launch artifacts under a work volume.\n"
         f"human/summary.*  Session overview (meta, counts, usage) in the\n"
         f"                 profile renderer dialect (.md / .org / .txt).\n"
-        f"analysis/        Cached analysis results (*.json) + optional human\n"
-        f"                 reports (*.md / *.org / *.txt per profile renderer).\n"
         f"flags.json       Operator flags (session or ~/.groket/flags fallback).\n"
         f"notes/           operator_notes.toml when notes exist.\n"
         f"                 Schema: ~/.groket/notes_schema.toml (not bundled).\n"
@@ -608,7 +522,6 @@ def export_session_bundle(
     session_dir: Path,
     *,
     dest: Path | None = None,
-    analysis_cache_root: Path | None = None,
     spec: ExportSpec | None = None,
     profile: str | None = None,
 ) -> ExportBundleResult:
@@ -622,7 +535,6 @@ def export_session_bundle(
     :param session_dir: Grok session directory (…/%2Fworkspace/<session_id>/).
     :param dest: Output path (``.tar.gz`` file or directory); default under
         :func:`~groket.paths.reports_dir` according to packaging.
-    :param analysis_cache_root: Override analysis cache root (tests).
     :param spec: Explicit export recipe (wins over *profile*).
     :param profile: Profile id from built-ins / ``~/.groket/export_profiles/``.
     :returns: :class:`ExportBundleResult` with the path written.
@@ -672,18 +584,6 @@ def export_session_bundle(
                 logger.debug("session summary collect failed", exc_info=True)
             except Exception:
                 logger.warning("session summary collect failed", exc_info=True)
-
-        if resolved.includes(IncludeUnit.ANALYSIS):
-            try:
-                _collect_analysis(
-                    sid,
-                    staging,
-                    analysis_cache_root,
-                    write_reports=resolved.includes(IncludeUnit.ANALYSIS_REPORTS),
-                    renderer=resolved.renderer,
-                )
-            except OSError:
-                logger.debug("analysis cache collect failed", exc_info=True)
 
         if resolved.includes(IncludeUnit.FLAGS):
             try:

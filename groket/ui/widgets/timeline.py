@@ -10,7 +10,6 @@ from textual.message import Message
 from textual.widgets import DataTable
 
 from ... import event_types as et
-from ...analysis.base import Finding
 from ...constants import LIVE_TIMELINE_TAIL_CHECK
 from ...models import Flag, ToolInputBag, TraceEvent
 from ...session.jobs import event_job_kind, event_task_id
@@ -37,7 +36,6 @@ from ..styles import (
     EVENT_TYPE_STYLE_LIGHT,
     active_theme_is_light,
     event_type_markup,
-    finding_mark,
 )
 from ..styles import tool_label as tool_markup
 
@@ -83,7 +81,6 @@ class TimelineTable(DataTable):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self.events: list[TraceEvent] = []
-        self.findings_by_call: dict[str, Finding] = {}
         self.flags_by_index: dict[int, Flag] = {}
         self._durations: dict[int, float] = {}
         self._call_by_id: dict[str, TraceEvent] = {}
@@ -115,7 +112,6 @@ class TimelineTable(DataTable):
     def load_events(
         self,
         events: list[TraceEvent],
-        findings: list[Finding] | None = None,
         flags: list[Flag] | None = None,
         *,
         follow_tail: bool = False,
@@ -125,7 +121,7 @@ class TimelineTable(DataTable):
         Live refresh paths (cheapest first):
 
         1. **Same-length** — structure unchanged. Rebind tool pairs. Patch
-           flag/finding chrome when those maps change. Streaming body text
+           flag chrome when those maps change. Streaming body text
            is not rewritten (that froze the TUI).
         2. **Append** — previous events are a structural prefix. Add only
            new rows that pass the current View/Turn/search filter.
@@ -141,10 +137,9 @@ class TimelineTable(DataTable):
         painted_n = len(self._paint_list())
         row_ok = self.row_count == painted_n and painted_n > 0
         old_flags = set(self.flags_by_index)
-        old_finds = set(self.findings_by_call)
 
         self.events = new_events
-        self._set_chrome(findings, flags)
+        self._set_chrome(flags)
         new_visible = self._compute_visible(new_events)
 
         if not row_ok or not prev:
@@ -160,8 +155,8 @@ class TimelineTable(DataTable):
         if new_n >= prev_n and self._live_tail_struct_ok(prev, new_events):
             if new_n == prev_n:
                 self._build_tool_pairs()
-                if old_flags != set(self.flags_by_index) or old_finds != set(self.findings_by_call):
-                    self._patch_chrome_rows(old_flags, old_finds)
+                if old_flags != set(self.flags_by_index):
+                    self._patch_chrome_rows(old_flags)
                 self._visible = new_visible
                 return
             self._index_new_events(new_events[prev_n:])
@@ -177,8 +172,8 @@ class TimelineTable(DataTable):
                 self._visible = None
                 self._append_live_rows(added, follow_tail=follow_tail)
                 self._patch_paired_call_durations(added)
-            if old_flags != set(self.flags_by_index) or old_finds != set(self.findings_by_call):
-                self._patch_chrome_rows(old_flags, old_finds)
+            if old_flags != set(self.flags_by_index):
+                self._patch_chrome_rows(old_flags)
             return
 
         self._build_tool_pairs()
@@ -205,12 +200,7 @@ class TimelineTable(DataTable):
                 return False
         return True
 
-    def _set_chrome(self, findings: list[Finding] | None, flags: list[Flag] | None) -> None:
-        self.findings_by_call = {}
-        if findings:
-            for f in findings:
-                for cid in f.all_tool_call_ids:
-                    self.findings_by_call[cid] = f
+    def _set_chrome(self, flags: list[Flag] | None) -> None:
         self.flags_by_index = {}
         if flags:
             for fl in flags:
@@ -225,13 +215,8 @@ class TimelineTable(DataTable):
         """Events currently painted (the filtered set, or the full list)."""
         return list(self._paint_list())
 
-    def _patch_chrome_rows(self, old_flags: set[int], old_finds: set[str]) -> None:
+    def _patch_chrome_rows(self, old_flags: set[int]) -> None:
         idxs = set(old_flags) | set(self.flags_by_index)
-        call_ids = old_finds | set(self.findings_by_call)
-        if call_ids:
-            for row in self.events:
-                if row.tool_call_id and row.tool_call_id in call_ids:
-                    idxs.add(int(row.index))
         by_idx = {int(e.index): e for e in self.events}
         for i in idxs:
             hit = by_idx.get(i)
@@ -610,10 +595,6 @@ class TimelineTable(DataTable):
         prefix = ""
         if ev.index in self.flags_by_index:
             prefix += "[magenta bold]⚑[/] "
-        if ev.tool_call_id and ev.tool_call_id in self.findings_by_call:
-            finding = self.findings_by_call[ev.tool_call_id]
-            sev = getattr(finding.severity, "value", None) or "low"
-            prefix += finding_mark(sev) + " "
         if ev.event_type in et.TASK_TYPES or ev.event_type.startswith("scheduled_task_"):
             bag = ev.raw_input.raw() if isinstance(ev.raw_input, ToolInputBag) else {}
             raw_sum = job_list_preview(ev.event_type, bag, ev.content)

@@ -3,11 +3,11 @@
 * Root: ``models``, ``config``, ``parser``, ``paths``, ``constants``, ``utils``, ``flags``, ``cli``
 * ``runs/`` — personas, run configs, batch, background manager, shares, log services
 * ``session/`` — usage stats and workspace diffs
-* ``analysis/``, ``engine/``, ``capabilities/``, ``docker/``
+* ``capabilities/``, ``docker/``
 * ``extensions/`` — ``groket gen`` scaffolding
 * ``ui/`` — Textual presentation
 
-Data flow: models/parser → runs|session|analysis|engine → ui.
+Data flow: models/parser → runs|session → ui.
 """
 
 from __future__ import annotations

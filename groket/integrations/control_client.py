@@ -404,19 +404,6 @@ class ControlClient:
         result = await self.request("session/turns", {"session": session})
         return as_json_object(result) if isinstance(result, dict) else {}
 
-    async def session_findings(
-        self,
-        session: str,
-        *,
-        limit: int | None = None,
-    ) -> JsonObject:
-        """Call ``session/findings`` (cached analysis findings with turn links)."""
-        params: JsonObject = {"session": session}
-        if limit is not None:
-            params["limit"] = limit
-        result = await self.request("session/findings", params)
-        return as_json_object(result) if isinstance(result, dict) else {}
-
     async def session_diff(self, session: str) -> JsonObject:
         """Call ``session/diff`` for rewind snapshots or approximate edits."""
         result = await self.request("session/diff", {"session": session})
@@ -466,19 +453,6 @@ class ControlClient:
                 "expectedRevision": expected_revision,
             },
         )
-        return as_json_object(result) if isinstance(result, dict) else {}
-
-    async def analysis_run(self, session: str, *, force: bool = False) -> JsonObject:
-        """Call ``analysis/run`` (background on the control owner)."""
-        result = await self.request(
-            "analysis/run",
-            {"session": session, "force": bool(force)},
-        )
-        return as_json_object(result) if isinstance(result, dict) else {}
-
-    async def analysis_status(self, session: str) -> JsonObject:
-        """Call ``analysis/status`` for *session*."""
-        result = await self.request("analysis/status", {"session": session})
         return as_json_object(result) if isinstance(result, dict) else {}
 
     async def session_follow_up(

@@ -38,6 +38,6 @@ unrelated hotspots (browser, orchestrator, parser) “because large.”
 
 ## Out of scope here
 
-New product features, detector catalogs, and operator-facing polish live
+New product features and operator-facing polish live
 in issues or design docs. Follow-ups for work already in CHANGELOG
 Unreleased belong in the section above.

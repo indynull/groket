@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from async_wait import wait_until
+from groket.integrations.control import PROTOCOL_VERSION
 
 
 def _short_sock(name: str) -> Path:
@@ -115,7 +116,7 @@ async def test_control_server_initializes_renders_and_opens_session(tmp_path: Pa
             writer,
             1,
             "initialize",
-            {"protocolVersion": "1.0.0", "clientInfo": {"name": "test-editor"}},
+            {"protocolVersion": PROTOCOL_VERSION, "clientInfo": {"name": "test-editor"}},
         )
         assert initialized["result"]["protocolVersion"] == control.PROTOCOL_VERSION
         assert "session/render" in initialized["result"]["capabilities"]
@@ -164,7 +165,7 @@ async def test_control_server_supports_emacs_jsonrpc_framing(tmp_path: Path) -> 
             writer,
             1,
             "initialize",
-            {"protocolVersion": "1.0.0", "clientInfo": {"name": "Emacs"}},
+            {"protocolVersion": PROTOCOL_VERSION, "clientInfo": {"name": "Emacs"}},
         )
         assert initialized["result"]["protocolVersion"] == control.PROTOCOL_VERSION
         writer.close()
@@ -254,7 +255,7 @@ async def test_control_server_publishes_tui_changes(tmp_path: Path) -> None:
             writer,
             1,
             "initialize",
-            {"protocolVersion": "1.0.0", "clientInfo": {"name": "test-editor"}},
+            {"protocolVersion": PROTOCOL_VERSION, "clientInfo": {"name": "test-editor"}},
         )
         await server.publish_session_changed(session_dir)
         session_message = json.loads(await asyncio.wait_for(reader.readline(), timeout=2))
@@ -465,7 +466,7 @@ async def test_control_server_accepts_content_type_first_framing(tmp_path: Path)
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "initialize",
-                "params": {"protocolVersion": "1.0.0"},
+                "params": {"protocolVersion": PROTOCOL_VERSION},
             }
         ).encode("utf-8")
         writer.write(
@@ -516,7 +517,7 @@ async def test_control_server_defers_broadcasts_until_first_frame(tmp_path: Path
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(reader.read(1), timeout=0.2)
         initialized = await _header_request(
-            reader, writer, 1, "initialize", {"protocolVersion": "1.0.0"}
+            reader, writer, 1, "initialize", {"protocolVersion": PROTOCOL_VERSION}
         )
         assert initialized["result"]["protocolVersion"] == control.PROTOCOL_VERSION
         # After the first frame, the peer is eligible for later notifies.
@@ -543,9 +544,11 @@ async def test_control_server_drops_stalled_clients_from_broadcasts(
     await server.start()
     try:
         reader_a, writer_a = await asyncio.open_unix_connection(server.socket_path)
-        await _request(reader_a, writer_a, 1, "initialize", {"protocolVersion": "1.0.0"})
+        await _request(reader_a, writer_a, 1, "initialize", {"protocolVersion": PROTOCOL_VERSION})
         reader_b, writer_b = await asyncio.open_unix_connection(server.socket_path)
-        await _header_request(reader_b, writer_b, 1, "initialize", {"protocolVersion": "1.0.0"})
+        await _header_request(
+            reader_b, writer_b, 1, "initialize", {"protocolVersion": PROTOCOL_VERSION}
+        )
 
         stalled = next(
             peer for peer, framing in server._writer_framing.items() if framing == "headers"

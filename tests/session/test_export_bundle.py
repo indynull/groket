@@ -183,50 +183,6 @@ def test_export_session_bundle_embeds_nested_grok_trace(
     expected = _fake_cli_archive_bytes()
     _patch_cli(monkeypatch, expected)
 
-    cache = tmp_path / "cache"
-    analysis = cache / "analysis" / SID
-    analysis.mkdir(parents=True)
-    (analysis / "demo.json").write_text(
-        json.dumps(
-            {
-                "result": {
-                    "analyzer_id": "demo",
-                    "ok": True,
-                    "summary": "demo summary",
-                    "findings": [
-                        {
-                            "id": "f1",
-                            "plugin_id": "demo",
-                            "severity": "medium",
-                            "title": "Demo issue",
-                            "detail": "Something happened",
-                            "category": "Test",
-                            "event_indices": [2, 4],
-                        }
-                    ],
-                    "artifacts": {},
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (analysis / "report_plugin.json").write_text(
-        json.dumps(
-            {
-                "result": {
-                    "analyzer_id": "report_plugin",
-                    "ok": True,
-                    "summary": "ignored when report present",
-                    "findings": [],
-                    "artifacts": {"report": "# Plugin report\n\nFull markdown from plugin.\n"},
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
     from groket.notes import NoteEntry, NotesDoc, save_notes
 
     notes_doc = NotesDoc(schema_id="default", session_id=SID)
@@ -244,7 +200,6 @@ def test_export_session_bundle_embeds_nested_grok_trace(
     result = export_session_bundle(
         sess,
         dest=dest,
-        analysis_cache_root=cache,
     )
     assert result.path == dest.resolve()
     assert result.session_id == SID
@@ -256,12 +211,6 @@ def test_export_session_bundle_embeds_nested_grok_trace(
         nested_f = tf.extractfile(GROK_TRACE_ARCHIVE_NAME)
         assert nested_f is not None
         nested_bytes = nested_f.read()
-        demo_md = tf.extractfile("analysis/demo.md")
-        assert demo_md is not None
-        demo_text = demo_md.read().decode()
-        report_md = tf.extractfile("analysis/report_plugin.md")
-        assert report_md is not None
-        report_text = report_md.read().decode()
         notes_f = tf.extractfile("notes/operator_notes.toml")
         assert notes_f is not None
         notes_text = notes_f.read().decode()
@@ -285,18 +234,11 @@ def test_export_session_bundle_embeds_nested_grok_trace(
     assert "run/prompt_history.jsonl" in names
     assert "run/.groket-turn/scripted-turns.json" in names
     assert "human/summary.md" in names
-    assert "analysis/demo.json" in names
-    assert "analysis/demo.md" in names
-    assert "analysis/report_plugin.json" in names
-    assert "analysis/report_plugin.md" in names
+    assert not any(n == "analysis" or n.startswith("analysis/") for n in names)
     assert "notes/operator_notes.toml" in names
     assert "notes/schema.toml" not in names
     assert "export me" in notes_text
     assert "n-export" in notes_text
-    assert "Demo issue" in demo_text
-    assert "Something happened" in demo_text
-    assert "Full markdown from plugin" in report_text
-    assert "# Plugin report" in report_text
     assert manifest["session_id"] == SID
     assert manifest["grok_trace"] == GROK_TRACE_ARCHIVE_NAME
     assert manifest["schema"] == 8
@@ -307,7 +249,6 @@ def test_export_session_bundle_embeds_nested_grok_trace(
     assert "session_dir" not in manifest
     assert "run_volume" not in manifest
     assert GROK_TRACE_ARCHIVE_NAME in manifest["members"]
-    assert "analysis/demo.md" in manifest["members"]
     assert "notes/operator_notes.toml" in manifest["members"]
     assert set(manifest["members"]) == names
     assert set(result.arcnames) == names
@@ -382,16 +323,11 @@ def test_export_trace_only_profile_skips_extras(
 ) -> None:
     sess = _seed_session(tmp_path)
     _patch_cli(monkeypatch)
-    cache = tmp_path / "cache"
-    analysis = cache / "analysis" / SID
-    analysis.mkdir(parents=True)
-    (analysis / "demo.json").write_text('{"result": {"ok": true}}\n', encoding="utf-8")
     dest = tmp_path / "trace-only.tar.gz"
     result = export_session_bundle(
         sess,
         dest=dest,
         profile="trace-only",
-        analysis_cache_root=cache,
     )
     with tarfile.open(result.path, "r:gz") as tf:
         names = set(tf.getnames())
@@ -434,126 +370,20 @@ def test_export_archive_org_writes_org_reports(
 ) -> None:
     sess = _seed_session(tmp_path)
     _patch_cli(monkeypatch)
-    cache = tmp_path / "cache"
-    analysis = cache / "analysis" / SID
-    analysis.mkdir(parents=True)
-    (analysis / "demo.json").write_text(
-        json.dumps(
-            {
-                "result": {
-                    "analyzer_id": "demo",
-                    "ok": True,
-                    "summary": "demo summary",
-                    "findings": [
-                        {
-                            "title": "Org finding",
-                            "severity": "low",
-                            "detail": "detail text",
-                        }
-                    ],
-                    "artifacts": {},
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
     dest = tmp_path / "org-bundle.tar.gz"
     result = export_session_bundle(
         sess,
         dest=dest,
         profile="archive-org",
-        analysis_cache_root=cache,
     )
     assert result.profile_id == "archive-org"
     with tarfile.open(result.path, "r:gz") as tf:
         names = set(tf.getnames())
-        org_f = tf.extractfile("analysis/demo.org")
-        assert org_f is not None
-        text = org_f.read().decode()
-    assert "analysis/demo.org" in names
-    assert "analysis/demo.md" not in names
-    assert "human/summary.org" in names
-    assert "human/summary.md" not in names
-    assert "#+TITLE:" in text
-    assert "Org finding" in text
-    with tarfile.open(result.path, "r:gz") as tf:
         sum_f = tf.extractfile("human/summary.org")
         assert sum_f is not None
         sum_text = sum_f.read().decode()
+    assert not any(n == "analysis" or n.startswith("analysis/") for n in names)
+    assert "human/summary.org" in names
+    assert "human/summary.md" not in names
     assert "#+TITLE:" in sum_text
     assert SID in sum_text
-
-
-def test_export_without_analysis_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from groket.session.export_spec import ExportSpec, IncludeUnit, Packaging
-
-    sess = _seed_session(tmp_path)
-    _patch_cli(monkeypatch)
-    cache = tmp_path / "cache"
-    analysis = cache / "analysis" / SID
-    analysis.mkdir(parents=True)
-    (analysis / "demo.json").write_text(
-        json.dumps({"result": {"analyzer_id": "demo", "ok": True, "summary": "s"}}) + "\n",
-        encoding="utf-8",
-    )
-    spec = ExportSpec(
-        profile_id="json-only",
-        packaging=Packaging.TAR_GZ,
-        include=frozenset(
-            {
-                IncludeUnit.GROK_TRACE,
-                IncludeUnit.ANALYSIS,
-                IncludeUnit.MANIFEST,
-            }
-        ),
-    )
-    dest = tmp_path / "no-md.tar.gz"
-    result = export_session_bundle(sess, dest=dest, spec=spec, analysis_cache_root=cache)
-    with tarfile.open(result.path, "r:gz") as tf:
-        names = set(tf.getnames())
-    assert "analysis/demo.json" in names
-    assert "analysis/demo.md" not in names
-
-
-def test_markdown_from_analysis_result_prefers_report_artifact() -> None:
-    from groket.session.export_bundle import _markdown_from_analysis_result
-
-    md = _markdown_from_analysis_result(
-        {
-            "analyzer_id": "x",
-            "summary": "ignored",
-            "artifacts": {"report": "# From plugin\n\nbody\n"},
-        },
-        plugin_stem="x",
-    )
-    assert md.startswith("# From plugin")
-    assert "ignored" not in md
-
-
-def test_markdown_from_analysis_result_synthesizes_findings() -> None:
-    from groket.session.export_bundle import _markdown_from_analysis_result
-
-    md = _markdown_from_analysis_result(
-        {
-            "analyzer_id": "engine",
-            "ok": True,
-            "summary": "2 findings",
-            "findings": [
-                {
-                    "title": "Bad edit",
-                    "severity": "high",
-                    "detail": "Wrong path",
-                    "category": "Correctness",
-                    "event_indices": [3],
-                }
-            ],
-            "artifacts": {},
-        },
-        plugin_stem="engine",
-    )
-    assert "Analysis report — engine" in md
-    assert "2 findings" in md
-    assert "Bad edit" in md
-    assert "Wrong path" in md
-    assert "#3" in md

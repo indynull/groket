@@ -77,7 +77,7 @@ class _Host(App[None]):
         self._session = session
 
     def compose(self) -> ComposeResult:
-        yield BrowserScreen(self._session, plugin_results={})
+        yield BrowserScreen(self._session)
 
 
 @pytest.mark.asyncio

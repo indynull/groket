@@ -24,15 +24,14 @@ use crate::format::{
 };
 use crate::kit;
 use crate::live::{
-    context_fraction, decode_many_choices, finding_severity_rank, note_field_input_key,
-    ordered_finding_indices, toggle_many_choice, CardMark, AGENT_OVERSCAN, FINDING_OVERSCAN,
-    NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN, TURNS_OVERSCAN,
-    WORKFLOW_INSPECT_H,
+    context_fraction, decode_many_choices, note_field_input_key, toggle_many_choice, CardMark,
+    AGENT_OVERSCAN, NOTE_TURN_INPUT, OVERVIEW_LIST_OVERSCAN, STATS_ROW_H, TIMELINE_OVERSCAN,
+    TURNS_OVERSCAN, WORKFLOW_INSPECT_H,
 };
 use crate::model::{DiffContext, KindFilter, OverviewSection, SchemaField, Tab};
 use crate::motion::PageLayer;
 use crate::typo;
-use crate::wire::{FindingRow, NoteRow, TimelineEvent, TurnRow, WorkflowChildRow};
+use crate::wire::{NoteRow, TimelineEvent, TurnRow, WorkflowChildRow};
 
 fn rule(tea: icedtea::theme::Tokens) -> Element<'static, Message> {
     icedtea::widget::rule_h(tea, A11y::new("rule", Role::Separator))
@@ -155,15 +154,6 @@ fn paint_badge(
         icedtea::widget::BadgeSize::Small,
         a11y,
     )
-}
-
-fn severity_tone(sev: &str) -> &'static str {
-    match finding_severity_rank(sev) {
-        0 => "cancelled",
-        1 => "running",
-        2 => "complete",
-        _ => "",
-    }
 }
 
 /// Status plus identity chips — Overview, Recent cards, and the browse bar.
@@ -677,7 +667,6 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
         match hud.tab() {
             Tab::Overview => overview_tab(hud),
             Tab::Turns | Tab::Timeline | Tab::Diff => column![].into(),
-            Tab::Findings => findings_tab(hud),
             Tab::Notes => notes_tab(hud),
         }
     };
@@ -722,16 +711,6 @@ fn detail_pane(hud: &Hud) -> Element<'_, Message> {
     {
         stack = stack.push(page_body(
             container(overview_tab(hud))
-                .padding([tea.density.gap(), tea.density.inset()])
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            hud,
-            tea,
-        ));
-    } else if hud.tab() == Tab::Findings && hud.overview().is_some() {
-        stack = stack.push(page_body(
-            container(findings_tab(hud))
                 .padding([tea.density.gap(), tea.density.inset()])
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -947,19 +926,6 @@ fn overview_session(hud: &Hud) -> Element<'_, Message> {
     if hud.selected_awaiting() {
         col = col.push(awaiting_banner(hud, tea));
     }
-    if o.findings.count > 0 || o.findings.total > 0 {
-        let n = if o.findings.total > 0 {
-            o.findings.total
-        } else {
-            o.findings.count
-        };
-        col = col.push(icedtea::widget::banner(
-            format!("{n} findings — open the Findings pane"),
-            Some(("Findings".into(), Message::SetTab(Tab::Findings))),
-            tea,
-            A11y::new("findings", Role::Status),
-        ));
-    }
     if o.notes.count > 0 {
         col = col.push(icedtea::widget::banner(
             format!("{} notes — open the Notes pane", o.notes.count),
@@ -1171,6 +1137,7 @@ fn chip_btn(label: String, msg: Message, tea: icedtea::theme::Tokens) -> Element
     )
 }
 
+#[allow(dead_code)]
 fn command_end(child: Element<'static, Message>) -> Element<'static, Message> {
     row![Space::new().width(Length::Fill), child]
         .width(Length::Fill)
@@ -1200,18 +1167,6 @@ fn card_marks_row(hud: &Hud, mark: Option<CardMark>) -> Element<'static, Message
     let tea = hud.tokens();
     let mut marks = row![].spacing(4);
     if let Some(m) = mark {
-        if m.findings > 0 {
-            let ev = m.first_finding_event;
-            marks = marks.push(chip_btn(
-                format!("f{}", m.findings),
-                if let Some(ix) = ev {
-                    Message::JumpTimeline(ix)
-                } else {
-                    Message::SetTab(Tab::Findings)
-                },
-                tea,
-            ));
-        }
         if m.notes > 0 {
             let nid = m.first_note_id;
             marks = marks.push(chip_btn(
@@ -1494,13 +1449,6 @@ fn event_body<'a>(
         Some(event_note(ev))
     };
     col.push(card_chips(hud, mark, note, None)).into()
-}
-
-pub(crate) fn finding_jump(f: &FindingRow) -> Message {
-    f.primary_event_index
-        .or_else(|| f.event_indices.first().copied())
-        .map(Message::JumpTimeline)
-        .unwrap_or(Message::SetTab(Tab::Overview))
 }
 
 fn note_when(n: &NoteRow) -> String {
@@ -2091,124 +2039,6 @@ fn paint_unified<'a>(
     code_inset(hud, "diff.hunk", unified, "diff", false, tea)
 }
 
-/// Title and hint for an empty Findings pane (one-line empty state).
-pub fn findings_empty_copy() -> (&'static str, &'static str) {
-    (
-        "No findings",
-        "Run analysis in the TUI so results land in the analysis cache.",
-    )
-}
-
-fn findings_tab(hud: &Hud) -> Element<'_, Message> {
-    let o = hud.overview().unwrap();
-    let findings: &[FindingRow] = &o.findings.findings;
-    let tea = hud.body_tokens();
-    if findings.is_empty() {
-        let (title, hint) = findings_empty_copy();
-        return kit::status_empty(title, hint, tea);
-    }
-    let order = ordered_finding_indices(findings);
-    let header = status_chip(format!("{} findings", findings.len()), "", tea);
-    let list = icedtea::widget::virtual_column(
-        hud.finding_heights(),
-        hud.finding_window(),
-        FINDING_OVERSCAN,
-        None,
-        Message::FindingScroll,
-        Some(hud.finding_scroll_id()),
-        tea,
-        move |i| {
-            let Some(&src) = order.get(i) else {
-                return Space::new().height(0).into();
-            };
-            let Some(f) = findings.get(src) else {
-                return Space::new().height(0).into();
-            };
-            let id = finding_key(f);
-            let open = hud.finding_expanded(&id);
-            let progress = hud.finding_expand_progress(&id);
-            let title = if f.title.is_empty() {
-                "Finding".into()
-            } else {
-                f.title.clone()
-            };
-            let child = if open || progress > 0.0 {
-                finding_body(hud, f, tea)
-            } else {
-                column![
-                    prompt_face(&f.detail, tea),
-                    command_end(jump_control(finding_jump(f), hud.tokens().muted, tea)),
-                ]
-                .spacing(6)
-                .into()
-            };
-            column![
-                expand_card(
-                    title,
-                    child,
-                    open,
-                    progress,
-                    {
-                        let id = id.clone();
-                        move |next| Message::FindingExpand {
-                            id: id.clone(),
-                            open: next,
-                        }
-                    },
-                    tea,
-                ),
-                Space::new().height(crate::live::LIST_GAP),
-            ]
-            .into()
-        },
-        A11y::new("Findings", Role::List),
-    );
-    column![header, list].spacing(8).height(Length::Fill).into()
-}
-
-fn finding_key(f: &FindingRow) -> String {
-    if !f.id.is_empty() {
-        return f.id.clone();
-    }
-    format!(
-        "{}|{}|{}",
-        f.severity,
-        f.title,
-        f.primary_event_index.unwrap_or(-1)
-    )
-}
-
-fn finding_body<'a>(
-    hud: &'a Hud,
-    f: &'a FindingRow,
-    tea: icedtea::theme::Tokens,
-) -> Element<'a, Message> {
-    let mut chips = row![status_chip(
-        f.severity.clone(),
-        severity_tone(&f.severity),
-        tea,
-    )]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    if !f.plugin_id.is_empty() {
-        chips = chips.push(status_chip(f.plugin_id.clone(), "", tea));
-    }
-    if !f.category.is_empty() {
-        chips = chips.push(status_chip(f.category.clone(), "", tea));
-    }
-    let mut card = column![chips].spacing(8);
-    if !f.detail.is_empty() {
-        let fid = format!("finding.{}", finding_key(f));
-        card = card.push(if hud.markdown(&fid).is_some() {
-            markdown_bound(hud, fid, &f.detail, tea)
-        } else {
-            select_bound(hud, fid, &f.detail, tea, icedtea::typo::FontFace::Ui)
-        });
-    }
-    card.push(command_end(jump_control(finding_jump(f), tea.muted, tea)))
-        .into()
-}
-
 fn note_one_choice<'a>(
     id: String,
     label: String,
@@ -2399,7 +2229,7 @@ fn notes_tab(hud: &Hud) -> Element<'_, Message> {
         let list = icedtea::widget::virtual_column(
             hud.note_heights(),
             hud.note_window(),
-            FINDING_OVERSCAN,
+            OVERVIEW_LIST_OVERSCAN,
             None,
             Message::NoteScroll,
             Some(hud.note_scroll_id()),
@@ -3241,7 +3071,7 @@ mod tests {
             .split("fn event_body")
             .nth(1)
             .expect("event_body")
-            .split("fn finding_jump")
+            .split("fn note_when")
             .next()
             .expect("body");
         assert!(
@@ -3272,14 +3102,12 @@ mod tests {
     fn chip_btn_builds_unsized_chip_buttons() {
         let hud = Hud::default();
         let _ = chip_btn("Add note".into(), Message::ResetDraft, tea());
-        let _ = chip_btn("f2".into(), Message::SetTab(Tab::Findings), tea());
+        let _ = chip_btn("f2".into(), Message::JumpTimeline(3), tea());
         let _ = card_chips(
             &hud,
             Some(CardMark {
-                findings: 2,
                 notes: 1,
                 errors: 0,
-                first_finding_event: Some(3),
                 first_note_id: "n1".into(),
             }),
             Some(Message::ResetDraft),
@@ -3301,6 +3129,18 @@ mod tests {
         assert!(!chip.contains("themed_button"));
         assert!(!chip.contains("Fixed(22"));
         assert!(!chip.contains("mouse_area"));
+        let marks = prod
+            .split("fn card_marks_row")
+            .nth(1)
+            .expect("card_marks_row")
+            .split("fn card_cmds_row")
+            .next()
+            .expect("card_marks body");
+        assert!(
+            !marks.contains("f{}"),
+            "session cards do not paint findings chips"
+        );
+        assert!(!marks.contains("m.findings"));
     }
 
     fn tea() -> icedtea::theme::Tokens {
@@ -3587,7 +3427,7 @@ mod tests {
         assert!(prod.contains("NOTE_TURN_INPUT"));
         // Overview path is selectable; no in-pane Copy path button.
         assert!(!prod.contains("fn overview_commands"));
-        assert!(prod.contains("format!(\"f{}\""));
+        assert!(!prod.contains("format!(\"f{}\""));
         assert!(prod.contains("format!(\"n{}\""));
         assert!(!prod.contains("Tab fields"));
         assert!(!prod.contains("Ctrl+1–5"));
@@ -3630,7 +3470,6 @@ mod tests {
         assert!(prod.contains("fn brand_variant"));
         assert!(!prod.contains("accordion_view"));
         assert!(prod.contains("widget::expander"));
-        assert!(prod.contains("finding_expand_progress"));
         assert!(prod.contains("note_expand_progress"));
         assert!(!prod.contains("if open { 1.0 } else { 0.0 }"));
         assert!(prod.contains("Peek::Lines(2)"));
@@ -3752,29 +3591,7 @@ mod tests {
         assert!(!prod.contains("is_timeline_expanded"));
         assert!(!prod.contains("TurnExpand"));
         assert!(!prod.contains("fn turn_body"));
-        assert!(prod.contains("FindingExpand"));
         assert!(prod.contains("NoteExpand"));
-    }
-
-    #[test]
-    fn empty_findings_copy_is_visible_one_line() {
-        let (title, hint) = findings_empty_copy();
-        assert_eq!(title, "No findings");
-        assert!(!hint.is_empty());
-        let src = include_str!("view.rs");
-        let body = src.split("fn findings_tab").nth(1).unwrap_or("");
-        assert!(
-            body.contains("kit::status_empty(title, hint, tea)"),
-            "empty Findings uses the one-line empty state"
-        );
-        assert!(
-            !body.contains("status_page"),
-            "empty Findings is not a blank status_page"
-        );
-        assert!(
-            body.contains("widget::virtual_column"),
-            "Findings cards scroll on virtual_column"
-        );
     }
 
     #[test]
@@ -3829,7 +3646,7 @@ mod tests {
             .split("fn event_body")
             .nth(1)
             .expect("event_body")
-            .split("fn finding_jump")
+            .split("fn notes_tab")
             .next()
             .expect("event_body slice");
         assert!(body.contains("timeline_query_hit"));
@@ -3857,7 +3674,7 @@ mod tests {
             .split("fn event_body")
             .nth(1)
             .expect("event_body")
-            .split("fn finding_jump")
+            .split("fn notes_tab")
             .next()
             .expect("body");
         assert!(body.contains("timeline_query_hit"));

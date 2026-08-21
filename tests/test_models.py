@@ -10,40 +10,9 @@ from groket.models import (
     Flag,
     FlagVerdict,
     SessionMeta,
-    Severity,
     ToolCall,
     TraceEvent,
 )
-
-# ── Severity ──────────────────────────────────────────────────────────────
-
-
-class TestSeverity:
-    def test_values(self):
-        assert Severity.HIGH.value == "high"
-        assert Severity.MEDIUM.value == "medium"
-        assert Severity.LOW.value == "low"
-
-    def test_icon(self):
-        assert Severity.HIGH.icon == "[!!]"
-        assert Severity.MEDIUM.icon == "[! ]"
-        assert Severity.LOW.icon == "[  ]"
-
-    def test_color(self):
-        assert Severity.HIGH.color == "red"
-        assert Severity.MEDIUM.color == "yellow"
-        assert Severity.LOW.color == "dim"
-
-    def test_ordering(self):
-        assert Severity.HIGH < Severity.MEDIUM
-        assert Severity.MEDIUM < Severity.LOW
-        assert not Severity.LOW < Severity.HIGH
-
-    def test_from_string(self):
-        assert Severity("high") is Severity.HIGH
-        assert Severity("medium") is Severity.MEDIUM
-        assert Severity("low") is Severity.LOW
-
 
 # ── FlagVerdict ───────────────────────────────────────────────────────────
 
@@ -443,10 +412,6 @@ class TestToolCallAndTraceEventEdges:
         assert "hello" in ev2.summary_line
         ev3 = TraceEvent(index=0, event_type="session_error", content="boom")
         assert ev3.type_label
-
-    def test_severity_lt_not_implemented(self):
-        """Severity.__lt__ returns NotImplemented for non-Severity (line 299)."""
-        assert Severity.HIGH.__lt__("not-severity") is NotImplemented
 
     def test_trace_event_summary_file_path(self):
         """Summary line with file_path input key (line 422)."""

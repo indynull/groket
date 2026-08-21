@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tomlkit
 from groket.paths import (
     analysis_cache_dir,
     app_config_path,
@@ -174,7 +173,6 @@ def test_traces_root_for_reload(tmp_path: Path):
 
 
 import pytest
-import yaml
 
 
 def test_paths_more(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -198,8 +196,6 @@ def test_paths_more(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "run_configs_home",
         "user_models_path",
         "package_config_dir",
-        "bundled_rules_path",
-        "bundled_composites_path",
     ):
         fn = getattr(paths, name, None)
         if callable(fn):
@@ -212,145 +208,31 @@ def test_paths_more(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     pass
 
 
-def test_engine_loader_user_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from groket import paths
-    from groket.engine import loader
-
-    home = tmp_path / "gh"
-    rules = home / "rules"
-    rules.mkdir(parents=True)
-    (rules / "extra.yaml").write_text(
-        yaml.dump(
-            {
-                "rules": [
-                    {
-                        "id": "unit-extra-rule",
-                        "detector": "tool_name_is",
-                        "severity": "low",
-                        "params": {"name": "grep"},
-                        "enabled": True,
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(paths, "APP_HOME", home)
-    monkeypatch.setattr(paths, "user_rules_dir", lambda: rules)
-    monkeypatch.setattr(paths, "user_detectors_dir", lambda: home / "detectors")
-    (home / "detectors").mkdir(exist_ok=True)
-
-    # load_rules / load_all if available
-    for fn_name in ("load_rules", "load_all_rules", "load_rule_file", "discover_rules"):
-        fn = getattr(loader, fn_name, None)
-        if callable(fn):
-            try:
-                fn()
-            except TypeError:
-                try:
-                    fn(rules / "extra.yaml")
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-    # load detectors modules
-    for fn_name in ("load_detectors", "ensure_detectors_loaded", "import_detector_modules"):
-        fn = getattr(loader, fn_name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-
-
 def test_extensions_scaffold_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from groket import paths
     from groket.extensions import scaffold
 
     home = tmp_path / ".groket"
-    for sub in ("detectors", "rules", "plugins", "tasks"):
-        (home / sub).mkdir(parents=True)
+    (home / "tasks").mkdir(parents=True)
     monkeypatch.setattr(paths, "APP_HOME", home)
-    monkeypatch.setattr(paths, "user_detectors_dir", lambda: home / "detectors")
-    monkeypatch.setattr(paths, "user_rules_dir", lambda: home / "rules")
-    monkeypatch.setattr(paths, "user_analysis_plugins_dir", lambda: home / "plugins")
     monkeypatch.setattr(paths, "user_tasks_dir", lambda: home / "tasks")
     monkeypatch.setattr(paths, "app_config_path", lambda: home / "config.toml")
-    # Scaffold imports these at module level; patch its own references too
-    monkeypatch.setattr(scaffold, "app_config_path", lambda: home / "config.toml")
-    monkeypatch.setattr(scaffold, "user_detectors_dir", lambda: home / "detectors")
-    monkeypatch.setattr(scaffold, "user_rules_dir", lambda: home / "rules")
-    monkeypatch.setattr(scaffold, "user_analysis_plugins_dir", lambda: home / "plugins")
     monkeypatch.setattr(scaffold, "user_tasks_dir", lambda: home / "tasks")
 
-    d = scaffold.write_detector("dup_det", force=True)
-    assert d.exists()
-    # without force may raise or return existing
-    try:
-        scaffold.write_detector("dup_det", force=False)
-    except Exception:
-        pass
-    scaffold.write_rule("dup-rule", detector="dup_det", force=True)
-    scaffold.write_analysis_plugin("dup_plug", force=True)
     scaffold.write_tasks_file(home / "tasks" / "t2.yaml", force=True)
-    scaffold.append_analysis_plugin_to_config("dup_plug", "DupPlugAnalyzer")
-    # second append should be idempotent-ish
-    scaffold.append_analysis_plugin_to_config("dup_plug", "DupPlugAnalyzer")
-
-    # FileExistsError paths: rule, analysis plugin, tasks (lines 102, 136, 200)
-    with pytest.raises(FileExistsError):
-        scaffold.write_rule("dup-rule", detector="dup_det", force=False)
-    with pytest.raises(FileExistsError):
-        scaffold.write_analysis_plugin("dup_plug", force=False)
     with pytest.raises(FileExistsError):
         scaffold.write_tasks_file(home / "tasks" / "t2.yaml", force=False)
-
-    cfg = home / "config.toml"
-    cfg.write_text("not = [toml", encoding="utf-8")
-    scaffold.append_analysis_plugin_to_config("new_plug", "NewAnalyzer")
-    data = tomlkit.parse(cfg.read_text(encoding="utf-8"))
-    assert "new_plug:NewAnalyzer" in list(data["analysis"]["plugins"])
-
-    cfg.write_text("analysis = 1\n", encoding="utf-8")
-    scaffold.append_analysis_plugin_to_config("p2", "P2")
-    data2 = tomlkit.parse(cfg.read_text(encoding="utf-8"))
-    assert "p2:P2" in list(data2["analysis"]["plugins"])
 
 
 from groket.paths import (
     default_work_dir,
     ensure_user_extension_dirs,
     traces_root_for_reload,
-    user_analysis_plugins_dir,
-    user_detectors_dir,
-    user_rules_dir,
     user_tasks_dir,
 )
 
 
 class TestUserExtensionDirs:
-    def test_user_rules_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        fake = tmp_path / "app"
-        monkeypatch.setattr("groket.paths.APP_HOME", fake)
-        d = user_rules_dir()
-        assert d == fake / "rules"
-        assert d.is_dir()
-
-    def test_user_detectors_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        fake = tmp_path / "app"
-        monkeypatch.setattr("groket.paths.APP_HOME", fake)
-        d = user_detectors_dir()
-        assert d == fake / "detectors"
-        assert d.is_dir()
-
-    def test_user_analysis_plugins_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        fake = tmp_path / "app"
-        monkeypatch.setattr("groket.paths.APP_HOME", fake)
-        d = user_analysis_plugins_dir()
-        assert d == fake / "plugins"
-        assert d.is_dir()
-
     def test_user_tasks_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         fake = tmp_path / "app"
         monkeypatch.setattr("groket.paths.APP_HOME", fake)
@@ -362,10 +244,8 @@ class TestUserExtensionDirs:
         fake = tmp_path / "app"
         monkeypatch.setattr("groket.paths.APP_HOME", fake)
         result = ensure_user_extension_dirs()
-        assert "rules" in result
-        assert "detectors" in result
-        assert "plugins" in result
         assert "tasks" in result
+        assert "export_profiles" in result
         for d in result.values():
             assert d.is_dir()
 
@@ -459,59 +339,6 @@ class TestTracesRootForReloadExtended:
     def test_none_traces_path(self, tmp_path: Path):
         result = traces_root_for_reload(tmp_path, None)
         assert "traces" in str(result)
-
-
-def test_analysis_cache_and_service_edges(tmp_path: Path, session_dir: Path):
-    from groket.analysis import _cache, config, service
-
-    cache_dir = tmp_path / "fb"
-    cache_dir.mkdir()
-    for name in dir(_cache):
-        if name.startswith("_") and not name.startswith("__"):
-            continue
-        obj = getattr(_cache, name)
-        if callable(obj) and name.startswith(
-            ("load", "save", "read", "write", "get", "put", "make", "build", "fingerprint")
-        ):
-            try:
-                obj(session_dir)
-            except TypeError:
-                try:
-                    obj(cache_dir, session_dir)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-    # config module helpers
-    for name in ("load_analysis_config", "default_config", "AnalysisSettings", "get_config"):
-        fn = getattr(config, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-
-    if hasattr(service, "analyze_session"):
-        try:
-            service.analyze_session(session_dir)
-        except Exception:
-            pass
-    for cls_name in ("AnalysisService", "AnalyzerService", "Service"):
-        cls = getattr(service, cls_name, None)
-        if cls is None:
-            continue
-        try:
-            svc = cls()
-        except TypeError:
-            continue
-        for meth in ("analyze", "analyze_session", "run"):
-            fn = getattr(svc, meth, None)
-            if callable(fn):
-                try:
-                    fn(session_dir)
-                except Exception:
-                    pass
 
 
 def test_docker_orchestrator_pure_helpers(tmp_path: Path):

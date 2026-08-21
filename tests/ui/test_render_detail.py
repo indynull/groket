@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 
 from groket.ui.render_detail import (
@@ -135,8 +136,7 @@ class TestTruncateMid:
 # ── Event and tool detail rendering ───────────────────────────────────────
 
 from conftest import make_trace_event
-from groket.analysis.base import Finding
-from groket.models import Flag, FlagVerdict, Severity
+from groket.models import Flag, FlagVerdict
 from groket.ui.render_detail import (
     render_event_detail,
     render_tool_detail,
@@ -330,24 +330,6 @@ class TestRenderEventDetail:
         )
         result = render_event_detail(ev)
         assert_rich_contains(result, "error")
-
-    def test_with_finding(self):
-        ev = make_trace_event(
-            index=0,
-            event_type="tool_call",
-            tool_name="run_terminal_command",
-            raw_input={"command": "make"},
-        )
-        finding = Finding(
-            id="f1",
-            plugin_id="engine",
-            severity=Severity.HIGH,
-            title="Build failed",
-            detail="The build failed with errors",
-            category="Build",
-        )
-        result = render_event_detail(ev, finding=finding)
-        assert_rich_contains(result, "Build failed")
 
     def test_with_flag(self):
         ev = make_trace_event(
@@ -1304,24 +1286,18 @@ class TestRenderEventDetailMore:
         assert "x" in plain
         assert len(plain) < 25000
 
-    def test_finding_banner_with_non_tool_event(self):
-        """Finding and flag banners render on non-tool events."""
+    def test_flag_banner_with_non_tool_event(self):
+        """Flag banner renders on non-tool events; no finding banner."""
         ev = make_trace_event(
             index=0,
             event_type="user_message_chunk",
             content="Do something",
         )
-        finding = Finding(
-            id="f1",
-            plugin_id="engine",
-            severity=Severity.MEDIUM,
-            title="Issue found",
-            detail="Details here",
-            category="Test",
-        )
         flag = Flag(event_index=0, verdict=FlagVerdict.BAD, description="Flagged")
-        result = render_event_detail(ev, finding=finding, flag=flag)
-        assert_rich_contains(result, "Issue found", "Flagged", "Do something")
+        result = render_event_detail(ev, flag=flag)
+        assert_rich_contains(result, "Flagged", "Do something")
+        assert "Issue found" not in rich_plain(result)
+        assert inspect.signature(render_event_detail).parameters.get("finding") is None
 
     def test_session_non_error_event(self):
         """Session event without error renders normally."""

@@ -3,7 +3,7 @@
 Summonable session palette for groket. The idle list is **Recent**
 (latest eight). Scroll down or press `j` at the bottom for the next
 eight. Type `/` to search the whole catalog. Open a session for Overview,
-Turns, Timeline, Findings, and Notes. Follow-up and Done when a session
+Turns, Timeline, Diff, and Notes. Follow-up and Done when a session
 is awaiting. Notes use the same schema as the [terminal
 app](../README.md#terminal-app). The palette does not launch evals,
 recipes, or Docker.
@@ -53,7 +53,7 @@ every **3 seconds** (idle sessions slower). An unfocused pop-out or
 hidden overlay does not poll; control notifies still refresh the
 catalog and fire desktop notifications. Press **?** for the shortcut
 cheatsheet. Shared keys match the terminal app (`?` `Esc` `/` `y` `j`/`k`
-`h`/`l` for Timeline turns and Diff snapshots, `n`/`e` `N`); panes are Tab and Ctrl+1–6 except on Notes, where Tab walks the note fields. `u` or the logo leaves an
+`h`/`l` for Timeline turns and Diff snapshots, `n`/`e` `N`); panes are Tab and Ctrl+1–5 except on Notes, where Tab walks the note fields. `u` or the logo leaves an
 open session for the session list (`Esc` still hides, or steps out of
 Timeline detail / a child first). A `keys.toml` remap applies on both
 surfaces. A configured leader (Colemak example: `;`) then one letter
@@ -76,8 +76,8 @@ without taking keyboard focus. **Quit groket** exits the palette
 only; serve stays up.
 
 Desktop notifications fire for eval sessions groket launched (awaiting,
-complete, cancelled, failed) and when analysis finishes. Host Grok
-chats already notify on their own; groket does not repeat those.
+complete, cancelled, failed). Host Grok chats already notify on their
+own; groket does not repeat those.
 Linux uses the 64px
 tray tile; macOS and Windows use the square app icon
 (`~/.groket/hud-notify.png`). Disable with `GROKET_HUD_NOTIFY=0` or

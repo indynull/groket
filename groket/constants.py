@@ -33,11 +33,9 @@ SYSTEM_PROMPT_CACHE_MAXSIZE = 128
 LIST_RUNTIME_CACHE_MAXSIZE = 2048
 # Activity bar (cheap counters — not a traces poller).
 ACTIVITY_BAR_INTERVAL = 5.0
-# Spinner poll while *build/extract/analyze* busy — never for mere "running".
+# Spinner poll while *build/extract* busy — never for mere "running".
 # 80ms caused continuous layout thrash during every live eval.
 ACTIVITY_BAR_BUSY_INTERVAL = 0.5
-# Findings/report pending spinner (update Static text only — not whole tables).
-ANALYSIS_PENDING_SPINNER_INTERVAL = 0.25
 # Full traces-tree walk only when idle and FS events were sparse (rare).
 LIVE_POLL_FULL_WALK_INTERVAL = 60.0
 # Min gap between FS-triggered session list scans (debounce beyond FS watch).
@@ -62,11 +60,6 @@ _UPDATES_LARGE_BYTES = 5 * 1024 * 1024
 _UPDATES_HUGE_BYTES = 20 * 1024 * 1024
 # Treat updates.jsonl as "still writing" for this many seconds after last mtime.
 LIVE_UPDATES_FRESH_SECONDS = 45.0
-# Stale-analysis banner: only nag about version / source drift for this long
-# after the plugin file was last edited. Older historical caches (e.g. v11
-# results while the plugin has been stable at v13) stay painted without a
-# permanent yellow banner — operator can still force Analyze.
-ANALYSIS_STALE_HINT_WINDOW_S = 24 * 3600
 
 
 def live_browser_timeline_min_interval(updates_bytes: int | float = 0) -> float:

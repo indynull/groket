@@ -8,28 +8,20 @@ pub enum Tab {
     Turns,
     Timeline,
     Diff,
-    Findings,
     Notes,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 5] = [
         Tab::Overview,
         Tab::Turns,
         Tab::Timeline,
         Tab::Diff,
-        Tab::Findings,
         Tab::Notes,
     ];
 
     /// Subagent session with one operator turn — no Turns pane.
-    pub const CHILD: &'static [Tab] = &[
-        Tab::Overview,
-        Tab::Timeline,
-        Tab::Diff,
-        Tab::Findings,
-        Tab::Notes,
-    ];
+    pub const CHILD: &'static [Tab] = &[Tab::Overview, Tab::Timeline, Tab::Diff, Tab::Notes];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -37,7 +29,6 @@ impl Tab {
             Tab::Turns => "Turns",
             Tab::Timeline => "Timeline",
             Tab::Diff => "Diff",
-            Tab::Findings => "Findings",
             Tab::Notes => "Notes",
         }
     }
@@ -268,12 +259,10 @@ mod tests {
         assert_eq!(KindFilter::Asst.short_label(), "Assistant");
         assert_eq!(KindFilter::Errors.short_label(), "Errors");
         assert_eq!(Tab::Diff.label(), "Diff");
-        assert_eq!(Tab::Findings.label(), "Findings");
         assert_eq!(Tab::Notes.label(), "Notes");
-        assert_eq!(Tab::ALL.len(), 6);
+        assert_eq!(Tab::ALL.len(), 5);
         assert_eq!(Tab::ALL[3], Tab::Diff);
-        assert_eq!(Tab::ALL[4], Tab::Findings);
-        assert_eq!(Tab::ALL[5], Tab::Notes);
+        assert_eq!(Tab::ALL[4], Tab::Notes);
         assert_eq!(OverviewSection::Session.label(), "Session");
         assert_eq!(OverviewSection::Tasks.label(), "Tasks");
         assert_eq!(OverviewSection::Workflows.label(), "Workflows");
@@ -281,13 +270,10 @@ mod tests {
         assert_eq!(OverviewSection::Stats.other(), OverviewSection::Session);
         let walk =
             include_str!("../../.grok/skills/hud-visual-walkthrough/scripts/hud_walkthrough.py");
-        assert!(
-            walk.contains("walk.key(\"ctrl+5\")"),
-            "Findings is pane 5 (Diff is 4)"
-        );
-        assert!(walk.contains("walk.key(\"ctrl+6\")"), "Notes is pane 6");
+        assert!(walk.contains("walk.key(\"ctrl+4\")"), "Diff is pane 4");
+        assert!(walk.contains("walk.key(\"ctrl+5\")"), "Notes is pane 5");
         assert!(walk.contains("bracketleft"), "Timeline All turns is [");
-        assert!(!walk.contains("walk.key(\"ctrl+4\")"));
+        assert!(!walk.contains("walk.key(\"ctrl+6\")"));
         assert_eq!(KindFilter::Tools.wire_name(), "tools");
         assert_eq!(KindFilter::All.wire_name(), "");
         assert_eq!(KindFilter::All.label(), "All events");

@@ -131,12 +131,6 @@ const ACTIONS: &[CatalogRow] = &[
         remappable: true,
     },
     CatalogRow {
-        id: "pane.6",
-        scope: "browser",
-        default: "ctrl+6",
-        remappable: true,
-    },
-    CatalogRow {
         id: "events.prev_turn",
         scope: "browser",
         default: "h,left",
@@ -323,18 +317,6 @@ const ACTIONS: &[CatalogRow] = &[
         remappable: true,
     },
     CatalogRow {
-        id: "session.analyze",
-        scope: "home",
-        default: "a",
-        remappable: true,
-    },
-    CatalogRow {
-        id: "home.rules",
-        scope: "home",
-        default: "d",
-        remappable: true,
-    },
-    CatalogRow {
         id: "session.export",
         scope: "home",
         default: "E",
@@ -374,12 +356,6 @@ const ACTIONS: &[CatalogRow] = &[
         id: "browser.clear_filters",
         scope: "browser",
         default: "c",
-        remappable: true,
-    },
-    CatalogRow {
-        id: "browser.findings",
-        scope: "browser",
-        default: "i",
         remappable: true,
     },
     CatalogRow {
@@ -479,24 +455,6 @@ const ACTIONS: &[CatalogRow] = &[
         remappable: true,
     },
     CatalogRow {
-        id: "rules.toggle",
-        scope: "rules",
-        default: "t",
-        remappable: true,
-    },
-    CatalogRow {
-        id: "rules.enable_all",
-        scope: "rules",
-        default: "a",
-        remappable: true,
-    },
-    CatalogRow {
-        id: "rules.disable_all",
-        scope: "rules",
-        default: "A",
-        remappable: true,
-    },
-    CatalogRow {
         id: "jobs.close",
         scope: "jobs",
         default: "J",
@@ -559,7 +517,7 @@ const ACTIONS: &[CatalogRow] = &[
 ];
 
 const KNOWN_SCOPES: &[&str] = &[
-    "global", "home", "browser", "runner", "personas", "configs", "rules", "jobs", "modal",
+    "global", "home", "browser", "runner", "personas", "configs", "jobs", "modal",
 ];
 
 const RESERVED: &[&str] = &["escape", "enter", "tab", "shift+tab", "?"];

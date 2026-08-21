@@ -17,7 +17,6 @@ from rich.text import Text
 from textual.app import App
 
 from .. import event_types as et
-from ..analysis.base import Finding
 from ..models import Flag, JsonObject, JsonValue, ToolInputBag, TraceEvent
 from ..session.jobs import (
     JOB_INSPECT_LOG_CHARS,
@@ -50,7 +49,6 @@ from .styles import (
     FAILED,
     RUNNING,
     SYNTAX_THEME_DARK,
-    severity_style,
     syntax_theme_for_app,
     tool_style,
 )
@@ -1159,7 +1157,6 @@ def _subagent_detail_parts(
 def render_event_detail(
     ev: TraceEvent,
     *,
-    finding: Finding | None = None,
     flag: Flag | None = None,
     duration: float | None = None,
     paired_call: TraceEvent | None = None,
@@ -1185,16 +1182,6 @@ def render_event_detail(
         ft.append(f"[{flag.verdict.value}] {flag.description}\n", style="red")
         ft.append(t("flagged-at-when", when=flag.created_at), style="dim")
         banners.append(ft)
-    if finding:
-        sc = severity_style(finding.severity.value)
-        it = Text()
-        it.append(t("ui-finding"), style=f"{sc} bold")
-        it.append(f"  [{finding.plugin_id}] {finding.category}: {finding.title}\n", style=sc)
-        detail = finding.detail or ""
-        if truncate and len(detail) > 400:
-            detail = detail[:400]
-        it.append(f"  {detail}", style="dim")
-        banners.append(it)
     if ev.event_type in et.TOOL_TYPES:
         if ev.tool_name == "workflow":
             core = render_workflow_detail(workflow, ev=ev)

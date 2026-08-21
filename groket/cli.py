@@ -3,8 +3,8 @@
 Default: interactive TUI. Optional path (``-P`` or leading argument) selects
 work root, traces tree, or session (default ``~/.groket/work``).
 
-Commands: ``serve`` (control owner), ``hud``, ``batch``, ``rules``, ``gen``,
-``doctor``, ``editor``, ``keys``, ``export-host``.
+Commands: ``serve`` (control owner), ``hud``, ``batch``,
+``gen``, ``doctor``, ``editor``, ``keys``, ``export-host``.
 
 Shell completion: ``uv run groket --install-completion``
 """
@@ -33,7 +33,7 @@ app = typer.Typer(
         "[cyan]serve[/cyan] owns the control socket · "
         "[cyan]hud[/cyan] palette · "
         "[cyan]batch[/cyan] headless tasks · "
-        "[cyan]rules[/cyan] / [cyan]gen[/cyan] detection · "
+        "[cyan]gen[/cyan] scaffolds · "
         "[cyan]doctor[/cyan] host checks · "
         "[cyan]editor[/cyan] Emacs/Neovim pack paths · "
         "[cyan]keys[/cyan] resolved bindings."
@@ -46,10 +46,7 @@ app = typer.Typer(
 
 gen_app = typer.Typer(
     name="gen",
-    help=(
-        "Scaffold user extensions under [cyan]~/.groket/[/cyan] "
-        "(detectors, rules, analysis plugins, example tasks)."
-    ),
+    help=("Scaffold user extensions under [cyan]~/.groket/[/cyan] (example tasks)."),
     no_args_is_help=True,
 )
 app.add_typer(gen_app, name="gen")
@@ -64,17 +61,6 @@ batch_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(batch_app, name="batch")
-
-rules_app = typer.Typer(
-    name="rules",
-    help=(
-        "Validate detection rules / composites YAML "
-        "([cyan]~/.groket/rules[/cyan], example packs). "
-        "Schema: [cyan]https://indynull.github.io/groket/schemas/rules.schema.json[/cyan]."
-    ),
-    no_args_is_help=True,
-)
-app.add_typer(rules_app, name="rules")
 
 config_app = typer.Typer(
     name="config",
@@ -112,7 +98,6 @@ TOOL_COMMANDS = frozenset(
     {
         "gen",
         "batch",
-        "rules",
         "serve",
         "hud",
         "tui",
@@ -816,56 +801,6 @@ def cmd_batch_schema(
         typer.echo(f"Wrote {out}")
 
 
-@rules_app.command("validate")
-def cmd_rules_validate(
-    rules: Annotated[
-        Path,
-        typer.Argument(
-            exists=True,
-            dir_okay=False,
-            readable=True,
-            help="Rules / composites YAML file to validate.",
-        ),
-    ],
-) -> None:
-    """Validate a rules YAML file against the Pydantic / JSON Schema model."""
-    from .engine.rule_schema import load_rules_file
-
-    try:
-        doc = load_rules_file(rules)
-    except FileNotFoundError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(2) from exc
-    except Exception as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(2) from exc
-    typer.echo(
-        f"OK  {rules}  ({len(doc.rules)} rule(s), {len(doc.composites)} composite(s), "
-        f"schema_version={doc.schema_version})"
-    )
-
-
-@rules_app.command("schema")
-def cmd_rules_schema(
-    out: Annotated[
-        Path | None,
-        typer.Option(
-            "-o",
-            "--out",
-            help="Write JSON Schema to this path (default: stdout).",
-        ),
-    ] = None,
-) -> None:
-    """Emit JSON Schema for rules YAML (same as ``just schema`` / Pages publish)."""
-    from .engine.rule_schema import emit_rules_schema
-
-    text = emit_rules_schema(out)
-    if out is None:
-        typer.echo(text, nl=False)
-    else:
-        typer.echo(f"Wrote {out}")
-
-
 @config_app.command("validate")
 def cmd_config_validate(
     path: Annotated[
@@ -882,16 +817,14 @@ def cmd_config_validate(
     target = path.expanduser() if path is not None else app_config_path()
     if path is None and not target.is_file():
         cfg = AppConfig()
-        n = len(cfg.analysis.plugins)
-        typer.echo(f"OK  {target}  (theme={cfg.theme}, analysis.plugins={n})")
+        typer.echo(f"OK  {target}  (theme={cfg.theme})")
         return
     try:
         cfg = validate_config_file(target)
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
-    n = len(cfg.analysis.plugins)
-    typer.echo(f"OK  {target}  (theme={cfg.theme}, analysis.plugins={n})")
+    typer.echo(f"OK  {target}  (theme={cfg.theme})")
 
 
 @config_app.command("schema")
@@ -1028,96 +961,6 @@ def cmd_doctor(
         for line in report.lines():
             typer.echo(line)
     raise typer.Exit(0 if report.ok else 1)
-
-
-@gen_app.command("detector")
-def gen_detector(
-    name: Annotated[str, typer.Argument(help="Detector name / file stem.")],
-    force: Annotated[
-        bool,
-        typer.Option("-f", "--force", help="Overwrite if exists."),
-    ] = False,
-) -> None:
-    """Create ~/.groket/detectors/<name>.py with @detector stub."""
-    from .extensions.scaffold import slug_name, write_detector
-    from .paths import ensure_user_extension_dirs
-
-    ensure_user_extension_dirs()
-    try:
-        path = write_detector(name, force=force)
-    except FileExistsError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(f"Wrote detector module: {path}")
-    typer.echo(f"  @detector name: {slug_name(name).replace('-', '_')}")
-    typer.echo("  Pair with: uv run groket gen rule <id> --detector <name>")
-
-
-@gen_app.command("rule")
-def gen_rule(
-    rule_id: Annotated[str, typer.Argument(help="Rule id (e.g. my-custom-rule).")],
-    detector: Annotated[
-        str,
-        typer.Option(
-            "-d",
-            "--detector",
-            help="Detector name (default: from rule id).",
-        ),
-    ] = "",
-    force: Annotated[bool, typer.Option("-f", "--force")] = False,
-) -> None:
-    """Create ~/.groket/rules/<id>.yaml merged with bundled rules."""
-    from .extensions.scaffold import slug_name, write_rule
-    from .paths import ensure_user_extension_dirs
-
-    ensure_user_extension_dirs()
-    det = detector or slug_name(rule_id).replace("-", "_")
-    try:
-        path = write_rule(rule_id, detector=det, force=force)
-    except FileExistsError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(f"Wrote rule YAML: {path}")
-    typer.echo(f"  detector: {det}")
-
-
-@gen_app.command("plugin")
-def gen_plugin(
-    name: Annotated[str, typer.Argument(help="Module stem (e.g. my_session_stats).")],
-    register: Annotated[
-        bool,
-        typer.Option(
-            "-r",
-            "--register",
-            help="Append module:ClassName to ~/.groket/config.toml analysis.plugins.",
-        ),
-    ] = False,
-    force: Annotated[bool, typer.Option("-f", "--force")] = False,
-) -> None:
-    """Create ~/.groket/plugins/<name>.py analysis Analyzer class."""
-    from .extensions.scaffold import (
-        append_analysis_plugin_to_config,
-        slug_name,
-        snake_to_pascal,
-        write_analysis_plugin,
-    )
-    from .paths import ensure_user_extension_dirs
-
-    ensure_user_extension_dirs()
-    try:
-        path = write_analysis_plugin(name, force=force)
-    except FileExistsError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    stem = slug_name(name).replace("-", "_")
-    cls = snake_to_pascal(stem) + "Analyzer"
-    typer.echo(f"Wrote analysis plugin: {path}")
-    typer.echo(f"  config entry: {stem}:{cls}")
-    if register:
-        cfg = append_analysis_plugin_to_config(stem, cls)
-        typer.echo(f"  updated {cfg}")
-    else:
-        typer.echo(f'  enable with analysis.plugins: ["{stem}:{cls}"] or pass --register')
 
 
 @gen_app.command("tasks")

@@ -8,33 +8,12 @@ from groket.ui.styles import (
     SEVERITY_LABEL,
     SEVERITY_STYLE,
     TOOL_FAMILY_STYLE,
-    finding_mark,
     severity_style,
     syntax_theme_for_app,
     tool_family,
     tool_label,
     tool_style,
 )
-
-
-class TestFindingMark:
-    def test_high(self) -> None:
-        m = finding_mark("high")
-        assert "⚠" in m
-        assert "#CC241D" in m
-
-    def test_medium(self) -> None:
-        m = finding_mark("medium")
-        assert "⚠" in m
-
-    def test_low_default(self) -> None:
-        m = finding_mark("low")
-        assert "⚠" in m
-        assert "#D79921" in m
-
-    def test_none_fallback(self) -> None:
-        m = finding_mark("")
-        assert "⚠" in m
 
 
 class TestToolFamily:

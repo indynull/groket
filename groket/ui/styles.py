@@ -41,13 +41,6 @@ SEVERITY_LABEL: dict[str, str] = {
 }
 
 
-def finding_mark(severity: str) -> str:
-    """Timeline / report glyph for an automated finding (⚠ + severity color)."""
-    sev = (severity or "low").lower()
-    style = SEVERITY_STYLE.get(sev, SEVERITY_STYLE["low"])
-    return f"[{style}]⚠[/]"
-
-
 # Small palette by *role* (not a rainbow per label):
 #   cream  = human input / model stream
 #   complete green = tools / writes

@@ -1,7 +1,7 @@
 # Groket multi-harness disk view — rewrite brief
 
 This document is the sole brief for a later full-parity rewrite: groket
-becomes a catalog, timeline, analysis, and (where the product allows)
+becomes a catalog, timeline, and (where the product allows)
 launch/control tool for every listed coding-agent harness. Disk-based view
 is the first contract. Launch and mid-session control exist only when the
 product exposes an equivalent. Automedon live `parse_line` is contrast only
@@ -21,8 +21,8 @@ them. Schemas drift; adapters must tolerate extra keys.
 
 Groket is a Grok Build evaluation product. It discovers session directories,
 parses a Grok on-disk dialect into `TraceEvent` / `SessionMeta`, watches
-those files live, scores them with detectors and analysis plugins, and
-launches isolated Grok evals in Docker. Operator notes, flags, export, HUD,
+those files live, and launches isolated Grok evals in Docker. Operator
+notes, flags, export, HUD,
 and the Unix control socket all assume that same Grok directory.
 
 After the rewrite, those outcomes stay. The Grok directory layout becomes
@@ -162,29 +162,20 @@ never written into a foreign host tree unless the operator opts in.
 Units: official `grok trace --local` archive (core files
 `export_metadata.json`, `trace_config.json`, `summary.json`, `events.jsonl`,
 `chat_history.jsonl`, `prompt_context.json`, `system_prompt.txt`), eval
-`run/` volume, analysis cache, `flags.json`, notes. Export of non-Grok
+`run/` volume, `flags.json`, notes. Export of non-Grok
 sessions cannot call `grok trace --local`.
 
-### 2.11 Analysis / detectors
-
-| Input | Artifact | Module |
-|---|---|---|
-| Tools | `parse_tool_calls` → `updates.jsonl` | `parser.py`, `engine/analysis.py` |
-| Messages | `parse_chat_history` → `chat_history.jsonl` | same |
-| Findings cache | `~/.groket/cache/analysis/<session_id>/*.json` | `analysis/_cache.py`, `control_views.build_session_findings` |
-| Example detectors | Grok tool names (`read_file`, `search_replace`, `run_terminal_command`) | `examples/detection/catalog/detectors/` |
-
-### 2.12 Control plane
+### 2.11 Control plane
 
 JSON-RPC on the per-user Unix socket (`integrations/control.py`):
 `session/list`, `session/get`, `session/overview`, `session/timeline`,
-`session/turns`, `session/usage`, `session/findings`, `session/open`,
-`session/render`, plus notes/analysis notifications. Payloads built in
+`session/turns`, `session/usage`, `session/open`,
+`session/render`, plus notes notifications. Payloads built in
 `session/control_views.py` from the same parser/turns/usage/notes loaders.
 HUD and editors consume this. A rewrite keeps the method names; rows gain
 `harness`.
 
-### 2.13 Docker / batch eval traces
+### 2.12 Docker / batch eval traces
 
 | Artifact | Role | Module |
 |---|---|---|
@@ -767,8 +758,7 @@ outcome. **partial** = usable subset / needs launch-time capture.
 | Live watch | full named files | full jsonl | full jsonl + `state_5.sqlite` | full jsonl | full sqlite mtime | full Darwin jsonl mtime | full md mtime | full jsonl | full db + events.jsonl |
 | Notes / flags overlay | full | full (groket side store) | full | full | full | full | full | full | full |
 | Export `grok trace --local` | full | absent | absent | absent | absent | absent | absent | absent | absent |
-| Export groket bundle (timeline+notes+analysis) | full | full after adapter | full | full | full | full after adapter | full | full | full |
-| Detectors on tools/text | full (Grok names) | partial after name map | partial (exec/patch names) | partial | partial (`bash` etc.) | partial (`Write`/`Read`/`Shell`) | partial text-only | partial (`bash`) | partial |
+| Export groket bundle (timeline+notes) | full | full after adapter | full | full | full | full after adapter | full | full | full |
 | Docker personas/plugins entrypoint | full Grok marketplace | absent | absent | absent | absent | absent | absent | absent | absent |
 | Control `session/*` views | full | full once adapter fills timeline | full | full | full | partial | full | full | full |
 
@@ -823,12 +813,11 @@ outcome. **partial** = usable subset / needs launch-time capture.
    already uses the fallback).
 
 8. **Secrets.** OpenCode `account.access_token` / `credential.value` and
-   Copilot encrypted reasoning blobs must never enter export bundles or
-   analysis prompts.
+   Copilot encrypted reasoning blobs must never enter export bundles.
 
-9. **Tool name maps.** Detectors that hard-code `read_file` /
+9. **Tool name maps.** Timeline labels that hard-code `read_file` /
    `search_replace` / `run_terminal_command` are Grok-shaped. Parity
-   analysis needs a per-harness alias table (Claude `Read`/`Edit`/`Bash` /
+   needs a per-harness alias table (Claude `Read`/`Edit`/`Bash` /
    `Skill`, Cursor `Write`/`Read`/`Shell`/`StrReplace`, Codex `exec` +
    patch, OpenCode/Pi `bash`, …).
 
@@ -881,8 +870,8 @@ without a probed store. Kimi is the only extra with a session index.
 6. `cursor` Linux machines without `agent-transcripts` show an empty
    catalog — do not invent a layout.
 
-7. Neutral `event_kind` + tool alias table; run existing detectors on
-   aliased names. Leave Grok chrome/tag detectors Grok-only.
+7. Neutral `event_kind` + tool alias table so timeline labels match
+   each harness. Grok chrome/tag names stay Grok-only.
 
 8. Launch/control: host-local resume flags per matrix **partial** cells.
    Keep turn-gate + Docker personas as the Grok eval profile.

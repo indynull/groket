@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{KindFilter, SchemaField, SessionRow};
-use crate::wire::{FindingRow, Overview, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
+use crate::wire::{Overview, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
 
 pub const LIVE_POLL_MS: u64 = 3000;
 pub const IDLE_POLL_MS: u64 = 15_000;
@@ -47,10 +47,8 @@ pub const AGENT_ROW_H: f32 = 80.0;
 pub const AGENT_OVERSCAN: usize = 1;
 /// Cap on the open-workflow inspect scroll so the Agents clip gets Fill.
 pub const WORKFLOW_INSPECT_H: f32 = 200.0;
-/// Closed Findings / Notes expander tile + gap.
+/// Closed Notes expander tile + gap.
 pub const FINDING_ROW_H: f32 = 80.0;
-/// Extra mounted Findings / Notes cards beyond the viewport.
-pub const FINDING_OVERSCAN: usize = 1;
 /// Spotlight idle list: latest sessions by ``sort_epoch`` (not the full catalog).
 pub const SPOTLIGHT_RECENT: usize = 8;
 
@@ -174,11 +172,6 @@ pub fn session_card_height(title: &str, meta: &str, has_ctx: bool) -> f32 {
         h += 5.0;
     }
     h + LIST_CARD_GAP
-}
-
-/// Closed Findings tile, plus body lines when the expander is open.
-pub fn finding_card_height(detail: &str, open: bool) -> f32 {
-    expand_card_height(detail, open)
 }
 
 /// Closed Notes tile, plus body lines when the expander is open.
@@ -384,7 +377,7 @@ pub fn plan_tick(input: TickInput<'_>) -> TickPlan {
             plan.fetch_list = true;
         }
         if open
-            && (note.method == "notes/changed" || note.method == "analysis/changed")
+            && note.method == "notes/changed"
             && !input.notes_locked
         {
             plan.load_overview = true;
@@ -667,32 +660,6 @@ pub fn context_fraction(pct: Option<f64>, compact: &str) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Findings list order: severity rank (same as the old bucket walk).
-pub fn ordered_finding_indices(findings: &[FindingRow]) -> Vec<usize> {
-    let mut idxs: Vec<usize> = (0..findings.len()).collect();
-    idxs.sort_by_key(|&i| finding_severity_rank(&findings[i].severity));
-    idxs
-}
-
-/// Severity bucket for findings (0 = highest).
-pub fn finding_severity_rank(sev: &str) -> u8 {
-    match sev.to_ascii_lowercase().as_str() {
-        "high" | "error" | "critical" => 0,
-        "medium" | "warn" | "warning" => 1,
-        "low" | "info" => 2,
-        _ => 3,
-    }
-}
-
-pub fn finding_severity_title(rank: u8) -> &'static str {
-    match rank {
-        0 => "High",
-        1 => "Medium",
-        2 => "Low",
-        _ => "Other",
-    }
-}
-
 pub fn timeline_first_missing_offset(events: &[TimelineEvent], total: u32) -> u32 {
     if total == 0 {
         return 0;
@@ -882,10 +849,8 @@ pub fn toggle_many_choice(stored: &str, choice: &str, choices: &[String]) -> Str
 
 #[derive(Debug, Clone, Default)]
 pub struct CardMark {
-    pub findings: u32,
     pub notes: u32,
     pub errors: u32,
-    pub first_finding_event: Option<i64>,
     pub first_note_id: String,
 }
 
@@ -903,36 +868,6 @@ pub fn card_marks_from_overview(
     let mut turns: HashMap<i64, CardMark> = HashMap::new();
     let mut events: HashMap<i64, CardMark> = HashMap::new();
     let rows = &overview.turns.turns;
-
-    for f in &overview.findings.findings {
-        let evs = &f.event_indices;
-        let primary = f.primary_event_index.or_else(|| evs.first().copied());
-        for face in &f.turn_indices {
-            for key in turn_list_keys(rows, *face) {
-                let row = turns.entry(key).or_default();
-                row.findings += 1;
-                if row.first_finding_event.is_none() {
-                    row.first_finding_event = primary;
-                }
-            }
-        }
-        for ei in evs {
-            let row = events.entry(*ei).or_default();
-            row.findings += 1;
-            if row.first_finding_event.is_none() {
-                row.first_finding_event = primary;
-            }
-        }
-        if let Some(first) = primary {
-            if evs.is_empty() {
-                let row = events.entry(first).or_default();
-                row.findings += 1;
-                if row.first_finding_event.is_none() {
-                    row.first_finding_event = Some(first);
-                }
-            }
-        }
-    }
 
     for n in &overview.notes.notes {
         let nid = n.id.clone();
@@ -1065,7 +1000,7 @@ pub fn patch_list_row_from_meta(rows: &mut [SessionRow], session_id: &str, meta:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{FindingRow, SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
+    use crate::wire::{SessionMeta, TimelineEvent, TurnRow, TurnsBlock};
 
     fn ev(index: i64, kind: &str, content: &str) -> TimelineEvent {
         TimelineEvent {
@@ -1522,34 +1457,6 @@ mod tests {
     }
 
     #[test]
-    fn finding_card_grows_when_open() {
-        let closed = finding_card_height("short", false);
-        let open = finding_card_height("short", true);
-        assert!(closed >= FINDING_ROW_H);
-        assert!(open > closed);
-        let long = finding_card_height(&"line\n".repeat(20), true);
-        assert!(long > open);
-    }
-
-    #[test]
-    fn ordered_findings_sort_by_severity() {
-        let rows = vec![
-            FindingRow {
-                title: "low".into(),
-                severity: "low".into(),
-                ..FindingRow::default()
-            },
-            FindingRow {
-                title: "high".into(),
-                severity: "high".into(),
-                ..FindingRow::default()
-            },
-        ];
-        let order = ordered_finding_indices(&rows);
-        assert_eq!(order, vec![1, 0]);
-    }
-
-    #[test]
     fn diff_hunk_scroll_y_pins_the_hit_line() {
         assert_eq!(diff_hunk_scroll_y(None), 0.0);
         assert_eq!(diff_hunk_scroll_y(Some(0)), 0.0);
@@ -1947,14 +1854,6 @@ mod tests {
                 }],
                 ..TurnsBlock::default()
             },
-            findings: crate::wire::FindingsBlock {
-                findings: vec![crate::wire::FindingRow {
-                    turn_indices: vec![15],
-                    primary_event_index: Some(100),
-                    ..crate::wire::FindingRow::default()
-                }],
-                ..crate::wire::FindingsBlock::default()
-            },
             notes: crate::wire::NotesBlock {
                 notes: vec![crate::wire::NoteRow {
                     id: "n1".into(),
@@ -1967,10 +1866,8 @@ mod tests {
         };
         let (turns, _) = card_marks_from_overview(&ov);
         let mark = turns.get(&13).expect("list key 13");
-        assert_eq!(mark.findings, 1);
         assert_eq!(mark.notes, 1);
         assert_eq!(mark.errors, 2);
-        assert_eq!(mark.first_finding_event, Some(100));
         assert_eq!(mark.first_note_id, "n1");
         assert!(!turns.contains_key(&15));
     }
@@ -1985,14 +1882,6 @@ mod tests {
                     ..TurnRow::default()
                 }],
                 ..TurnsBlock::default()
-            },
-            findings: crate::wire::FindingsBlock {
-                findings: vec![crate::wire::FindingRow {
-                    turn_indices: vec![27],
-                    primary_event_index: Some(100),
-                    ..crate::wire::FindingRow::default()
-                }],
-                ..crate::wire::FindingsBlock::default()
             },
             ..Overview::default()
         };
@@ -2009,7 +1898,7 @@ mod tests {
         })
         .unwrap();
         let (turns, _events) = card_marks_from_overview(&ov);
-        assert!(turns.is_empty() || ov.findings.findings.is_empty());
+        assert!(turns.is_empty());
         let fields = notes_schema_fields(Some(&ov));
         assert!(fields.iter().any(|f| f.id == "summary"));
 

@@ -142,7 +142,7 @@ pub fn role_animation(role: MotionRole, open: bool, reduced: bool) -> Animation<
         .easing(role.easing())
 }
 
-/// Finding / note expander height.
+/// Note expander height.
 pub fn disclose_animation(open: bool, reduced: bool) -> Animation<bool> {
     icedtea::motion::expand_animation(open, reduced)
 }

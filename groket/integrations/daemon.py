@@ -284,7 +284,6 @@ def build_domain_control_server(
         open_session=open_session,
         notes_changed=notes_changed,
         work_dir=wd,
-        analysis_traces=tr,
     )
     server._catalog_cache = catalog_cache  # type: ignore[attr-defined]
     return server

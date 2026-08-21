@@ -7,13 +7,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar
 
-from ..analysis.base import Finding
 from ..bounded_cache import BoundedCache
 from ..constants import OVERVIEW_CACHE_MAXSIZE
 from ..models import (
     JsonObject,
     JsonValue,
-    Severity,
     ToolInputBag,
     TraceEvent,
     as_json_object,
@@ -251,60 +249,6 @@ class BackgroundJob:
             if (wanted and ev_id == wanted) or (call and ev_call == call):
                 return int(ev.index)
         return None
-
-    def evidence(self, events: list[TraceEvent]) -> tuple[list[int], list[str]]:
-        """Timeline indexes and tool-call ids for this job."""
-        indices: list[int] = []
-        calls: list[str] = []
-        wanted = (self.job_id or "").strip()
-        call = (self.tool_call_id or "").strip()
-        for ev in events:
-            ev_id = event_task_id(ev)
-            ev_call = ev.tool_call_id or ""
-            if (wanted and ev_id == wanted) or (call and ev_call == call):
-                indices.append(int(ev.index))
-                if ev.tool_call_id:
-                    calls.append(ev.tool_call_id)
-        return indices, calls
-
-    def finding(self, events: list[TraceEvent]) -> Finding:
-        """Paste-ready Finding for a failed or cancelled job."""
-        label = self.description or self.command or self.job_id
-        indices, calls = self.evidence(events)
-        asked = (self.command or self.description or "").strip() or label
-        why = f"Background {self.kind or 'job'} {label} ended {self.status}."
-        bits = [p for p in ((self.status or "").strip(), (self.kind or "").strip()) if p]
-        happened = " · ".join(bits)
-        where = f"Timeline {', '.join(f'#{i}' for i in indices[:8])}" if indices else f"job {label}"
-        issue = (
-            f"What: Backgrounded {asked}.\n"
-            f"Where: {where}\n"
-            f"Why: {why}\n"
-            f"Should have: Finish the background job or monitor without a failed status.\n"
-            f"Pattern: failed session run\n"
-        )
-        extras: JsonObject = {
-            "what_model_did": f"Backgrounded {asked}.",
-            "where": where,
-            "why_mistake": why,
-            "what_should_have_done": "Finish the background job or monitor without a failed status.",
-            "issue_box": issue,
-            "asked": asked,
-            "happened": happened,
-            "failed": self.status,
-        }
-        cancelled = (self.status or "").strip().lower() in {"cancelled", "interrupted"}
-        return Finding(
-            id=f"job:{self.job_id}",
-            plugin_id="basic",
-            severity=Severity.MEDIUM if cancelled else Severity.HIGH,
-            title=f"Background job {label} failed",
-            detail=why,
-            category="job",
-            tool_call_ids=calls,
-            event_indices=indices,
-            extras=extras,
-        )
 
 
 @dataclass

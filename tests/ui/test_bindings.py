@@ -19,7 +19,6 @@ from groket.ui.bindings import (
     MODAL_DISMISS,
     PERSONA_EDITOR,
     PERSONAS,
-    RULES,
     RUN_CONFIGS,
     RUNNER,
     SCREEN_CHROME,
@@ -49,7 +48,6 @@ class TestBindingTuples:
             ("PERSONA_EDITOR", PERSONA_EDITOR),
             ("FORM_SAVE", FORM_SAVE),
             ("MODAL_CANCEL_QUIT", MODAL_CANCEL_QUIT),
-            ("RULES", RULES),
             ("MODAL_DISMISS", MODAL_DISMISS),
             ("JOBS_MODAL", JOBS_MODAL),
             ("LIST_SELECT", LIST_SELECT),
@@ -74,16 +72,16 @@ class TestBindingTuples:
         assert any(b.action == "open_jobs" for b in SCREEN_CHROME)
 
     def test_browser_footer_is_session_actions(self) -> None:
-        """Session rail: flag, note, analyze, copy, export — not jobs or delete."""
+        """Session rail: flag, note, copy, export — not jobs, delete, or analyze."""
         shown = set(_shown_actions(BROWSER))
         assert "open_jobs" not in shown
         assert "delete_session" not in shown
         assert "edit_operator_note" not in shown
+        assert "analyze" not in shown
         assert "show_help" in shown
         assert "go_back" in shown
         assert "flag_event" in shown
         assert "operator_note" in shown
-        assert "analyze" in shown
         assert "copy_detail" in shown
         assert "export_bundle" in shown
 

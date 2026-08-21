@@ -169,6 +169,7 @@ def test_local_access_list_and_missing_session(tmp_path: Path) -> None:
 
     got = access.session_get(session.name)
     assert got.get("sessionId") == session.name or "path" in got
+    assert not hasattr(access, "analysis_run")
 
 
 def test_local_access_follow_up_and_done(tmp_path: Path) -> None:

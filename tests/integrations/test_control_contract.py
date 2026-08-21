@@ -65,7 +65,6 @@ REQUIRED_METHODS = (
     "session/timeline",
     "session/turns",
     "session/usage",
-    "session/findings",
     "session/diff",
     "session/open",
     "session/render",
@@ -74,18 +73,15 @@ REQUIRED_METHODS = (
     "notes/list",
     "notes/upsert",
     "notes/delete",
-    "analysis/run",
-    "analysis/status",
 )
 REQUIRED_NOTIFICATIONS = (
     "session/selected",
     "session/changed",
     "notes/changed",
-    "analysis/changed",
 )
 
 
-# Last-published 1.x surface. Independent of REQUIRED_* so deleting a
+# Unpublished 1.x surface. Independent of REQUIRED_* so deleting a
 # method and updating that list still fails until PROTOCOL_VERSION major
 # is greater than this major.
 FROZEN_MAJOR = 1
@@ -97,7 +93,6 @@ FROZEN_METHODS = (
     "session/timeline",
     "session/turns",
     "session/usage",
-    "session/findings",
     "session/diff",
     "session/open",
     "session/render",
@@ -106,14 +101,11 @@ FROZEN_METHODS = (
     "notes/list",
     "notes/upsert",
     "notes/delete",
-    "analysis/run",
-    "analysis/status",
 )
 FROZEN_NOTIFICATIONS = (
     "session/selected",
     "session/changed",
     "notes/changed",
-    "analysis/changed",
 )
 FROZEN_HANDSHAKE = (
     "protocolVersion",

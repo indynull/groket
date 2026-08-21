@@ -374,7 +374,7 @@ def sample_tool_calls() -> list[ToolCall]:
 def _isolate_all_config_dirs(tmp_path_factory, monkeypatch):
     """Every test uses a fresh temp tree for app + Grok CLI config (never ~/.groket / ~/groket).
 
-    Isolates personas, rules, detectors, analysis plugins, tasks, prefs, work dir,
+    Isolates personas, tasks, prefs, work dir,
     and ``Path.home()``-based ``~/.grok`` (models cache, installed-plugins, auth)
     so the suite cannot pollute the developer's real stores.
     """
@@ -389,9 +389,6 @@ def _isolate_all_config_dirs(tmp_path_factory, monkeypatch):
         user_home,
         app_home,
         app_home / "personas",
-        app_home / "rules",
-        app_home / "detectors",
-        app_home / "plugins",
         app_home / "tasks",
         app_home / "cache",
         work_root,
@@ -433,9 +430,6 @@ def _isolate_all_config_dirs(tmp_path_factory, monkeypatch):
 
         return _fn
 
-    monkeypatch.setattr(paths, "user_detectors_dir", _subdir("detectors"))
-    monkeypatch.setattr(paths, "user_rules_dir", _subdir("rules"))
-    monkeypatch.setattr(paths, "user_analysis_plugins_dir", _subdir("plugins"))
     monkeypatch.setattr(paths, "user_tasks_dir", _subdir("tasks"))
     cache_dir = _subdir("cache")
     monkeypatch.setattr(paths, "analysis_cache_dir", cache_dir)

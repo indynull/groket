@@ -812,18 +812,11 @@ def test_launch_tui_no_serve_does_not_spawn(tmp_path: Path) -> None:
     assert not daemon_mod.control_socket_accepts(sock)
 
 
-def test_domain_server_defers_analysis_service(
+def test_domain_server_has_no_analysis_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Serve must bind without constructing AnalysisService or loading plugins."""
+    """Serve must bind without an analysis service or worker pool."""
     daemon = import_module("groket.integrations.daemon")
-    constructed: list[str] = []
-
-    class Probe:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            constructed.append("analysis")
-
-    monkeypatch.setattr("groket.analysis.service.AnalysisService", Probe)
     work = tmp_path / "work"
     traces = work / "runs" / "traces"
     _write_session(traces, "s1")
@@ -833,8 +826,8 @@ def test_domain_server_defers_analysis_service(
         work_dir=work,
         traces_path=traces,
     )
-    assert constructed == []
-    assert server._analysis_service is None
+    assert not hasattr(server, "_analysis_service")
+    assert not hasattr(server, "_analysis_pool")
     assert server._work_dir == work
 
 

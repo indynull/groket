@@ -1,12 +1,10 @@
-//! Desktop notifications for session and analysis transitions.
+//! Desktop notifications for session transitions.
 //!
 //! Linux uses the freedesktop Notifications bus (dunst, mako, fnott, swaync,
 //! notification-daemon). macOS uses Notification Center. Windows uses toasts.
 
 use std::collections::HashMap;
 use std::thread;
-
-use serde_json::Value;
 
 use crate::brand::notify_icon_png;
 use crate::format::list_status_label;
@@ -98,105 +96,6 @@ pub fn session_notice(title: &str, sid: &str, from: &str, to: &str) -> Option<De
         },
         _ => return None,
     })
-}
-
-/// Notice for an analysis job that left the running state.
-pub fn analysis_notice(
-    title: &str,
-    sid: &str,
-    state: &str,
-    finding_count: i64,
-    error: &str,
-) -> Option<DesktopNotice> {
-    let label = display_name(title, sid);
-    match analysis_job_state(state) {
-        Some("done") => Some(DesktopNotice {
-            summary: "Analysis finished".into(),
-            body: if finding_count > 0 {
-                format!("{label} · {finding_count} findings")
-            } else {
-                format!("{label} · no findings")
-            },
-            urgency: UrgencyKind::Low,
-        }),
-        Some("error") => Some(DesktopNotice {
-            summary: "Analysis failed".into(),
-            body: if error.is_empty() {
-                label
-            } else {
-                format!("{label} · {error}")
-            },
-            urgency: UrgencyKind::Critical,
-        }),
-        _ => None,
-    }
-}
-
-/// Decode an ``analysis/changed`` payload.
-pub fn analysis_from_params(params: &Value, title: &str) -> Option<DesktopNotice> {
-    let sid = params
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if sid.is_empty() {
-        return None;
-    }
-    let state = params.get("state").and_then(Value::as_str).unwrap_or("");
-    let findings = params
-        .get("findingCount")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let error = params.get("error").and_then(Value::as_str).unwrap_or("");
-    analysis_notice(title, sid, state, findings, error)
-}
-
-/// Notice for an analysis transition, once per job (or session) and state.
-///
-/// A second ``analysis/changed`` with the same ``jobId`` and terminal state
-/// is ignored. A later job on the same session posts again.
-pub fn take_analysis_notice(
-    seen: &mut HashMap<String, String>,
-    params: &Value,
-    title: &str,
-) -> Option<DesktopNotice> {
-    let notice = analysis_from_params(params, title)?;
-    let id = analysis_seen_id(params)?;
-    let state = analysis_terminal_state(params)?;
-    if seen.get(&id).map(String::as_str) == Some(state) {
-        return None;
-    }
-    seen.insert(id, state.to_string());
-    Some(notice)
-}
-
-fn analysis_seen_id(params: &Value) -> Option<String> {
-    let job = params
-        .get("jobId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    if let Some(job) = job {
-        return Some(job.to_string());
-    }
-    let sid = params
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?;
-    Some(sid.to_string())
-}
-
-fn analysis_job_state(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "done" | "complete" | "completed" => Some("done"),
-        "error" | "failed" | "failure" => Some("error"),
-        _ => None,
-    }
-}
-
-fn analysis_terminal_state(params: &Value) -> Option<&'static str> {
-    let raw = params.get("state").and_then(Value::as_str).unwrap_or("");
-    analysis_job_state(raw)
 }
 
 /// Seen-map key so host and work copies of the same id do not fight.
@@ -507,62 +406,6 @@ mod tests {
     #[test]
     fn running_is_silent() {
         assert!(session_notice("t", "s", "pending", "running").is_none());
-    }
-
-    #[test]
-    fn analysis_done_and_error() {
-        let done = analysis_notice("Pack", "sid", "done", 3, "").unwrap();
-        assert_eq!(done.summary, "Analysis finished");
-        assert!(done.body.contains("3 findings"));
-        let err = analysis_notice("Pack", "sid", "error", 0, "boom").unwrap();
-        assert_eq!(err.summary, "Analysis failed");
-        assert!(err.body.contains("boom"));
-        assert!(analysis_notice("Pack", "sid", "running", 0, "").is_none());
-    }
-
-    #[test]
-    fn analysis_params_need_session() {
-        assert!(analysis_from_params(&serde_json::json!({"state": "done"}), "T").is_none());
-        let n = analysis_from_params(
-            &serde_json::json!({
-                "sessionId": "s1",
-                "state": "done",
-                "findingCount": 1
-            }),
-            "T",
-        )
-        .unwrap();
-        assert_eq!(n.summary, "Analysis finished");
-    }
-
-    #[test]
-    fn analysis_changed_posts_once_per_job_state() {
-        let mut seen = HashMap::new();
-        let first = serde_json::json!({
-            "sessionId": "s1",
-            "jobId": "job-a",
-            "state": "done",
-            "findingCount": 1
-        });
-        assert!(take_analysis_notice(&mut seen, &first, "T").is_some());
-        assert!(take_analysis_notice(&mut seen, &first, "T").is_none());
-        let again = serde_json::json!({
-            "sessionId": "s1",
-            "jobId": "job-b",
-            "state": "done",
-            "findingCount": 0
-        });
-        assert!(take_analysis_notice(&mut seen, &again, "T").is_some());
-    }
-
-    #[test]
-    fn analysis_changed_without_job_dedupes_on_session_state() {
-        let mut seen = HashMap::new();
-        let done = serde_json::json!({"sessionId": "s1", "state": "done"});
-        assert!(take_analysis_notice(&mut seen, &done, "T").is_some());
-        assert!(take_analysis_notice(&mut seen, &done, "T").is_none());
-        let err = serde_json::json!({"sessionId": "s1", "state": "error", "error": "boom"});
-        assert!(take_analysis_notice(&mut seen, &err, "T").is_some());
     }
 
     #[test]

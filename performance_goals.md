@@ -65,7 +65,6 @@ Launch then stacks:
 3. If serve's catalog cache is cold, the first `session/list` **waits on
    that 20–160 s walk**.
 4. TUI drains all matched rows once and paints the table on the UI thread.
-5. `AnalysisService` starts in `on_mount` (UI thread).
 
 After serve is warm, a later `session/list` is a cache hit. Quit and
 reopen while serve stays up: catalog I/O should not be the delay — import
@@ -133,9 +132,7 @@ never falls.
 3. **First table paint.** First attach no longer drains `matched` before
    the home table is shown. Remaining work is virtualizing a large local
    filter set, not a second drain on first paint.
-4. **Import / mount.** `TraceEvalApp` no longer imports `AnalysisService`
-   at module load. Plugin registration waits until Analyze / settings.
-   Remaining cost is Textual itself.
+4. **Import / mount.** Remaining cost is Textual itself.
 5. **Keep serve up.** Document and default: TUI/HUD attach to a long-lived
    `groket serve`; quitting the TUI does not stop the owner (already
    true). Launch advice should not imply restarting serve each time.

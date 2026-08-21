@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from groket.session_inflight import (
-    KIND_ANALYSIS,
     KIND_REFRESH,
     clear,
     end,
@@ -32,12 +31,12 @@ def test_try_begin_rejects_duplicate_per_kind(tmp_path: Path) -> None:
     assert try_begin(KIND_REFRESH, sd) is False
     assert is_inflight(KIND_REFRESH, sd) is True
     assert inflight_count(KIND_REFRESH) == 1
-    assert try_begin(KIND_ANALYSIS, sd) is True
-    assert inflight_count(KIND_ANALYSIS) == 1
+    assert try_begin("other", sd) is True
+    assert inflight_count("other") == 1
     assert end(KIND_REFRESH, sd) is False
     assert try_begin(KIND_REFRESH, sd) is True
     end(KIND_REFRESH, sd)
-    end(KIND_ANALYSIS, sd)
+    end("other", sd)
 
 
 def test_key_normalizes_resolve(tmp_path: Path) -> None:
@@ -75,9 +74,9 @@ def test_clear_kind_leaves_other(tmp_path: Path) -> None:
     a.mkdir()
     b.mkdir()
     try_begin(KIND_REFRESH, a)
-    try_begin(KIND_ANALYSIS, b)
+    try_begin("other", b)
     clear(KIND_REFRESH)
     assert is_inflight(KIND_REFRESH, a) is False
-    assert is_inflight(KIND_ANALYSIS, b) is True
+    assert is_inflight("other", b) is True
     clear()
-    assert inflight_count(KIND_ANALYSIS) == 0
+    assert inflight_count("other") == 0

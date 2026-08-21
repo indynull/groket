@@ -55,7 +55,6 @@ class TestYieldAppCommands:
             action_open_runner=MagicMock(),
             action_open_run_configs=MagicMock(),
             action_open_personas=MagicMock(),
-            action_open_rules=MagicMock(),
             action_refresh_everything=MagicMock(),
             action_search_sessions=MagicMock(),
             action_toggle_select=MagicMock(),
@@ -64,8 +63,6 @@ class TestYieldAppCommands:
             action_resume_session=MagicMock(),
             action_save_session_config=MagicMock(),
             action_delete_sessions=MagicMock(),
-            action_analyze=MagicMock(),
-            action_analysis_settings=MagicMock(),
         )
 
     def test_default_screen_yields_app_commands(self) -> None:
@@ -75,6 +72,7 @@ class TestYieldAppCommands:
         assert len(cmds) > 5
         titles = [c[0] for c in cmds]
         assert any("Refresh" in t or "refresh" in t.lower() for t in titles)
+        assert not any("analysis" in t.lower() for t in titles)
 
     def test_browser_screen_commands(self) -> None:
         from groket.ui.screens.browser import BrowserScreen
@@ -83,6 +81,10 @@ class TestYieldAppCommands:
         screen = BrowserScreen.__new__(BrowserScreen)
         cmds = list(yield_app_commands(app, screen))  # type: ignore[arg-type]  # stub for test
         assert len(cmds) > 5
+        titles = [c[0] for c in cmds]
+        assert any("export" in t.lower() for t in titles)
+        assert not any("analyze" in t.lower() for t in titles)
+        assert not any("analysis" in t.lower() for t in titles)
 
     def test_runner_screen_commands(self) -> None:
         from groket.ui.screens.runner import RunnerScreen
@@ -105,14 +107,6 @@ class TestYieldAppCommands:
 
         app = self._make_app()
         screen = RunConfigsScreen.__new__(RunConfigsScreen)
-        cmds = list(yield_app_commands(app, screen))  # type: ignore[arg-type]  # stub for test
-        assert len(cmds) > 5
-
-    def test_rules_screen_commands(self) -> None:
-        from groket.ui.screens.rules import RulesScreen
-
-        app = self._make_app()
-        screen = RulesScreen.__new__(RulesScreen)
         cmds = list(yield_app_commands(app, screen))  # type: ignore[arg-type]  # stub for test
         assert len(cmds) > 5
 

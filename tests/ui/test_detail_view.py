@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import make_trace_event
-from groket.analysis.base import Finding
-from groket.models import Flag, FlagVerdict, Severity
+from groket.models import Flag, FlagVerdict
 from groket.ui.widgets.detail_view import DetailView
 from textual.app import App, ComposeResult
 from textual.widgets import Static
@@ -61,7 +60,7 @@ async def test_detail_same_event_skips_scroll_home() -> None:
 
 
 @pytest.mark.asyncio
-async def test_detail_view_show_event_with_finding_and_flag() -> None:
+async def test_detail_view_show_event_with_flag() -> None:
     app = _DetailApp()
     async with app.run_test():
         dv = app.query_one("#detail", DetailView)
@@ -72,20 +71,13 @@ async def test_detail_view_show_event_with_finding_and_flag() -> None:
             raw_input={"pattern": "x"},
             tool_call_id="c1",
         )
-        finding = Finding(
-            id="f1",
-            title="test",
-            severity=Severity.HIGH,
-            plugin_id="engine",
-            detail="x",
-        )
         flag = Flag(event_index=0, verdict=FlagVerdict.BAD, description="bad")
-        dv.show_event(ev, finding=finding, flag=flag, duration=3.0)
+        dv.show_event(ev, flag=flag, duration=3.0)
         from .pilot_helpers import assert_static_contains
 
         body = dv.query_one("#detail-body", Static)
-        assert_static_contains(body, "grep", "test", "bad")
-        assert dv._current_finding is finding
+        assert_static_contains(body, "grep", "bad")
+        assert not hasattr(dv, "_current_finding")
         assert dv._current_flag is flag
         assert dv._current_duration == 3.0
 
@@ -128,7 +120,7 @@ async def test_detail_view_clear() -> None:
         assert dv._current_event is not None
         dv.clear_detail()
         assert dv._current_event is None
-        assert dv._current_finding is None
+        assert not hasattr(dv, "_current_finding")
         assert dv._current_flag is None
 
 

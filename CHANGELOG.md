@@ -7,6 +7,19 @@ is tagged.
 
 ### Feature
 
+- groket no longer ships an analyzer or a rules engine. The
+  ``groket analyzer`` command, plugin pipeline, detectors, rules YAML,
+  and the Rules screen are gone. Session export writes the trace, notes,
+  and flags. Leftover analysis-cache export units and unused findings
+  copy are gone too.
+
+### Chore
+
+- Desktop palette uses icedtea 0.13. Stats table passes a scroll id so
+  clip jumps stay on the body.
+
+### Feature
+
 - HUD notes form uses a pick list for one-of schema fields (severity)
   and filter chips for many-select. Tab / Shift+Tab walk the text
   fields while composing; Ctrl+Tab or Ctrl+1–6 still change panes.
@@ -43,12 +56,29 @@ is tagged.
   / Workflows. Summary and HUD rows jump to that bookend. Enter on a
   job bookend shows the host ``terminal/`` log (up to 50,000
   characters). A workflow child or subagent opens that session.
+- ``groket analyzer`` attaches to ``groket serve`` for the session
+  catalog and overview, then runs plugins in its own process. Those
+  reads use the same 45-second budget as the terminal app. ``/``
+  searches the session list. An open session shows plugin report
+  panes (Filter, split markdown, Issue box). ``E`` exports the session
+  bundle (trace, notes, cached plugin reports). Review packs include
+  overview workflow, background-job, and child-session rows. The
+  session browser and desktop palette have no Findings pane. Report
+  keeps flags and notes.
+  ``analysis/run``, ``analysis/status``, ``analysis/changed``, and
+  ``session/findings`` are gone. Overview no longer embeds findings.
+  Notes are the operator attach on a session.
+  Session eval and the HUD drop leftover analysis settings,
+  auto-analyze, timeline finding marks, Jobs analysis counts, and
+  ``analysis/changed`` notices. ``E`` export stays.
+- Session `?` help lists eval keys (including export). Plugin keys live
+  on `groket analyzer` help.
 - Failed workflows and background jobs become Findings with
   paste-ready What/Where/Why/Should extras.
-- Timeline Filter and Turn stack. Flags and findings paint on the row.
+- Timeline Filter and Turn stack. Flags paint on the row.
   Live append keeps the filter. HUD turn pick keeps Filter and search.
-- HUD Findings with no results shows a one-line empty state. Clicking a
-  Turns card focuses that turn. Overview footer stays on one row.
+- Clicking a Turns card focuses that turn. Overview footer stays on
+  one row.
 - Host catalog list uses a stamp-gated snapshot. ``groket export-host``
   writes that snapshot.
 - Control methods and notifications generate from
@@ -63,9 +93,8 @@ is tagged.
 
 ### Bug fix
 
-- Keyboard list jumps (`j` / `k`) pin the focused row from its height
-  sum, not the last published window scroll, so a sub-row wheel does
-  not snap the clip back to 0.
+- The session list summary is the session count. It does not say
+  pending analysis or findings totals.
 - Summary and HUD Tasks open a schedule the same way as a job: Enter
   or a second click jumps to the Timeline bookend. A row with no
   bookend is dim and stays put.

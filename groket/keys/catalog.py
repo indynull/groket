@@ -41,7 +41,6 @@ class ActionScope(str, Enum):
     RUNNER = "runner"
     PERSONAS = "personas"
     CONFIGS = "configs"
-    RULES = "rules"
     JOBS = "jobs"
     MODAL = "modal"
 
@@ -152,7 +151,13 @@ ACTIONS: tuple[KeyAction, ...] = (
     _row("session.open", ActionScope.HOME, "enter", ActionSurface.SHARED),
     _row("list.down", ActionScope.HOME, "j", ActionSurface.SHARED, overlay_scopes=_NAV),
     _row("list.up", ActionScope.HOME, "k", ActionSurface.SHARED, overlay_scopes=_NAV),
-    _row("search.focus", ActionScope.HOME, "slash", ActionSurface.SHARED),
+    _row(
+        "search.focus",
+        ActionScope.HOME,
+        "slash",
+        ActionSurface.SHARED,
+        overlay_scopes=frozenset({ActionScope.HOME}),
+    ),
     _row("edit.copy", ActionScope.BROWSER, "y", ActionSurface.SHARED),
     _row("edit.copy_chord", ActionScope.BROWSER, "ctrl+shift+c", ActionSurface.SHARED),
     _row(
@@ -172,10 +177,10 @@ ACTIONS: tuple[KeyAction, ...] = (
     _row("pane.notes", ActionScope.BROWSER, "N", ActionSurface.SHARED),
     _row("events.prev_turn", ActionScope.BROWSER, "h,left", ActionSurface.SHARED),
     _row("events.next_turn", ActionScope.BROWSER, "l,right", ActionSurface.SHARED),
-    # HUD-only (Tab / Shift+Tab / Ctrl+1–6 panes; [ ] turn scope; g).
+    # HUD-only (Tab / Shift+Tab / Ctrl+1–5 panes; [ ] turn scope; g).
     _row("pane.next", ActionScope.BROWSER, "tab", ActionSurface.HUD),
     _row("pane.prev", ActionScope.BROWSER, "shift+tab", ActionSurface.HUD),
-    *(_row(f"pane.{i}", ActionScope.BROWSER, f"ctrl+{i}", ActionSurface.HUD) for i in range(1, 7)),
+    *(_row(f"pane.{i}", ActionScope.BROWSER, f"ctrl+{i}", ActionSurface.HUD) for i in range(1, 6)),
     _row("events.all_turns", ActionScope.BROWSER, "left_square_bracket", ActionSurface.HUD),
     _row("events.scope_next", ActionScope.BROWSER, "right_square_bracket", ActionSurface.HUD),
     _row("turns.timeline", ActionScope.BROWSER, "g", ActionSurface.HUD),
@@ -200,9 +205,13 @@ ACTIONS: tuple[KeyAction, ...] = (
     _row("session.save_config", ActionScope.HOME, "ctrl+s", ActionSurface.TUI),
     _row("session.delete", ActionScope.HOME, "x,delete", ActionSurface.TUI),
     _row("home.model_filter", ActionScope.HOME, "m", ActionSurface.TUI),
-    _row("session.analyze", ActionScope.HOME, "a", ActionSurface.TUI),
-    _row("home.rules", ActionScope.HOME, "d", ActionSurface.TUI),
-    _row("session.export", ActionScope.HOME, "E", ActionSurface.TUI),
+    _row(
+        "session.export",
+        ActionScope.HOME,
+        "E",
+        ActionSurface.TUI,
+        overlay_scopes=frozenset({ActionScope.HOME, ActionScope.BROWSER}),
+    ),
     _row("home.host", ActionScope.HOME, "H", ActionSurface.TUI),
     # Session browser.
     _row("browser.view_filter", ActionScope.BROWSER, "v", ActionSurface.TUI),
@@ -210,7 +219,6 @@ ACTIONS: tuple[KeyAction, ...] = (
     _row("event.flag", ActionScope.BROWSER, "f", ActionSurface.TUI),
     _row("session.note_edit", ActionScope.BROWSER, "O", ActionSurface.TUI),
     _row("browser.clear_filters", ActionScope.BROWSER, "c", ActionSurface.TUI),
-    _row("browser.findings", ActionScope.BROWSER, "i", ActionSurface.TUI),
     _row("session.share", ActionScope.BROWSER, "s", ActionSurface.TUI),
     # Runner.
     _row("runner.launch", ActionScope.RUNNER, "ctrl+enter,ctrl+j", ActionSurface.TUI),
@@ -230,10 +238,6 @@ ACTIONS: tuple[KeyAction, ...] = (
     _row("personas.new", ActionScope.PERSONAS, "n", ActionSurface.TUI),
     _row("personas.edit", ActionScope.PERSONAS, "e", ActionSurface.TUI),
     _row("personas.delete", ActionScope.PERSONAS, "x,delete", ActionSurface.TUI),
-    # Rules.
-    _row("rules.toggle", ActionScope.RULES, "t", ActionSurface.TUI),
-    _row("rules.enable_all", ActionScope.RULES, "a", ActionSurface.TUI),
-    _row("rules.disable_all", ActionScope.RULES, "A", ActionSurface.TUI),
     # Jobs modal.
     _row("jobs.close", ActionScope.JOBS, "J", ActionSurface.TUI),
     _row("jobs.open", ActionScope.JOBS, "o", ActionSurface.TUI),

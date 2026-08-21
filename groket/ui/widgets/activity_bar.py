@@ -25,7 +25,6 @@ _STABLE_COUNT_KEYS = (
     "ending",
     "extracting",
     "awaiting",
-    "analyze",
     "sessions",
 )
 
@@ -49,7 +48,6 @@ def build_activity_line(
     ending: int = 0,
     extracting: int = 0,
     awaiting: int = 0,
-    analyze_active: int = 0,
     refresh_active: int = 0,
     sessions_loaded: int = 0,
     spinner: str = "",
@@ -98,13 +96,6 @@ def build_activity_line(
         prefix = f"{spinner} " if (use_spin and spinner) else ""
         line.append(prefix + t(msg_id, n=n), style=status_rich_style(style_key, light=light))
 
-    if analyze_active > 0:
-        _sep()
-        prefix = f"{spinner} " if spinner else ""
-        line.append(
-            prefix + t("activity-analysis", n=analyze_active),
-            style=status_rich_style("building", light=light),
-        )
     # Intentional: omit short-lived live-refresh pool counts. FS-watch scans
     # pulse inflight every tick and flashed cyan "Refresh N" beside Running.
 
@@ -186,7 +177,7 @@ def activity_counters_from_app(app: App) -> dict[str, int]:
     """Lifecycle and catalog counters for the activity bar.
 
     Keys: ``pending``, ``building``, ``running``, ``ending``, ``extracting``,
-    ``awaiting``, ``analyze``, ``refresh``, ``sessions``.
+    ``awaiting``, ``refresh``, ``sessions``.
     """
     counts: dict[str, int] = {
         "pending": 0,
@@ -195,7 +186,6 @@ def activity_counters_from_app(app: App) -> dict[str, int]:
         "ending": 0,
         "extracting": 0,
         "awaiting": 0,
-        "analyze": 0,
         "refresh": 0,
         "sessions": 0,
     }
@@ -247,12 +237,6 @@ def activity_counters_from_app(app: App) -> dict[str, int]:
         # in-flight statuses while the operator is in follow-up wait or shutdown.
         counts["running"] = 0
 
-    from ...job_pools import analysis_inflight
-
-    counts["analyze"] = max(
-        int(getattr(app, "_analysis_jobs_active", 0) or 0),
-        analysis_inflight(),
-    )
     # Never surface refresh pool pulses in the strip (see build_activity_line).
     counts["refresh"] = 0
     counts["sessions"] = len(meta_only) if hasattr(meta_only, "__len__") else 0
@@ -265,9 +249,7 @@ def activity_is_busy(counts: dict[str, int]) -> bool:
     Do **not** treat ``running`` alone as busy — live evals stay running for
     minutes and an 80–500ms activity-bar timer reflow freezes the TUI.
     """
-    return any(
-        int(counts.get(k, 0) or 0) > 0 for k in ("pending", "building", "extracting", "analyze")
-    )
+    return any(int(counts.get(k, 0) or 0) > 0 for k in ("pending", "building", "extracting"))
 
 
 class ActivityBar(Static):
@@ -348,7 +330,6 @@ class ActivityBar(Static):
                     ending=counts["ending"],
                     extracting=counts["extracting"],
                     awaiting=counts["awaiting"],
-                    analyze_active=counts["analyze"],
                     refresh_active=0,
                     sessions_loaded=counts["sessions"],
                     spinner=spin,

@@ -402,12 +402,6 @@ TabPane {
     height: 1fr;
 }
 
-#report-sections-host {
-    height: auto;
-    width: 100%;
-    layout: vertical;
-}
-
 .report-section {
     height: auto;
 }
@@ -1531,7 +1525,6 @@ ContentSwitcher {
 #diff-content,
 #diff-prompt,
 #diff-assistant,
-#findings-header,
 #report-overview-content,
 #report-flags-content,
 #report-notes-content {
@@ -1679,20 +1672,6 @@ ContentSwitcher {
     background: $background;
 }
 
-#browser-analysis-loading {
-    display: none;
-    height: 1;
-    padding: 0 1;
-    color: $text-muted;
-}
-
-#findings-panel {
-    height: 1fr;
-    layout: vertical;
-    padding: 1 1 0 1;
-    background: $background;
-}
-
 /* Tables inside cards: no double outer border (card already frames) */
 .summary-pair {
     height: auto;
@@ -1728,22 +1707,13 @@ ContentSwitcher {
 }
 
 /* Same box as unfocused: a tall focus border shifts rows under the click. */
-.panel-card DataTable:focus,
-#findings-table:focus {
+.panel-card DataTable:focus {
     border: none;
 }
 
-.panel-card DataTable:focus > .datatable--header,
-#findings-table:focus > .datatable--header {
+.panel-card DataTable:focus > .datatable--header {
     background: $accent;
     color: $text;
-}
-
-#findings-table {
-    height: 1fr;
-    min-height: 8;
-    border: none;
-    background: $surface-darken-1;
 }
 
 /* Focused browser pane tab — accent from user theme (lazygit-style active edge) */

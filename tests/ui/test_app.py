@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from groket.parser import find_sessions, load_session_meta
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from .pilot_helpers import wait_until
 
@@ -69,12 +69,10 @@ def test_trace_eval_app_constructs(tmp_path: Path):
     assert app.traces_path == traces.resolve()
 
 
-def test_populate_session_table_shows_unanalyzed_rows(tmp_path: Path):
-    """Unanalyzed sessions must still render (findings column ``--``).
+def test_populate_session_table_adds_row(tmp_path: Path):
+    """A session with meta must still render the home table.
 
-    Regression: ``finding_count`` was unset for unanalyzed rows; with a broad
-    ``except Exception`` around ``add_row`` the table looked empty. Populate
-    must not swallow programming errors — they should fail the test.
+    Populate must not swallow programming errors — they should fail the test.
     """
     from groket.ui.app import TraceEvalApp
 
@@ -86,7 +84,6 @@ def test_populate_session_table_shows_unanalyzed_rows(tmp_path: Path):
 
     app = TraceEvalApp(work_dir=work, traces_path=traces)
     app._meta_only = [(meta, "lab")]
-    app._plugin_results = {}
     app._selected = set()
     app._filter_model = ""
     app._populate_busy = False
@@ -120,7 +117,6 @@ def test_populate_session_table_shows_unanalyzed_rows(tmp_path: Path):
 
     host = _FakeApp(work_dir=work, traces_path=traces)
     host._meta_only = [(meta, "lab")]
-    host._plugin_results = {}
     host._selected = set()
     host._filter_model = ""
     host._populate_busy = False
@@ -133,16 +129,15 @@ def test_populate_session_table_shows_unanalyzed_rows(tmp_path: Path):
     host._populate_session_table_inner()
     assert len(rows_added) == 1
     cells, key = rows_added[0]
-    # sel, src, title, model, status, duration, context, events, findings
-    assert len(cells) == 9
+    # sel, src, title, model, status, duration, context, events
+    assert len(cells) == 8
     assert str(cells[6]) == "—"  # no context telemetry on this stub meta
-    assert str(cells[8]) == "--"
     assert key == str(meta.session_dir)
 
 
 @pytest.mark.asyncio
 async def test_home_table_omits_task_id_and_path_label(tmp_path: Path):
-    """Home list shows status + findings, not batch task id or path label."""
+    """Home list shows status, not batch task id or path label."""
     from groket.ui.app import TraceEvalApp
     from groket.ui.i18n import t
 
@@ -160,9 +155,26 @@ async def test_home_table_omits_task_id_and_path_label(tmp_path: Path):
         assert t("ui-session-id") not in headers
         assert t("ui-title") in headers
         assert t("ui-status") in headers
-        assert t("ui-findings-1") in headers
+        assert "Findings" not in headers
         assert t("ui-high-1") not in headers
         assert t("ui-med") not in headers
+
+
+@pytest.mark.asyncio
+async def test_home_summary_has_no_pending_analysis(tmp_path: Path) -> None:
+    from groket.ui.app import TraceEvalApp
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    _write_minimal_session(traces, "sess-sum")
+    app = TraceEvalApp(work_dir=work, traces_path=traces)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await wait_until(pilot, lambda: len(app._meta_only) >= 1, description="sessions loaded")
+        summary = app.query_one("#session-summary", Static)
+        content = summary.content
+        text = getattr(content, "plain", None) or str(content)
+        assert "pending analysis" not in text.lower()
+        assert "findings" not in text.lower()
 
 
 @pytest.mark.asyncio
