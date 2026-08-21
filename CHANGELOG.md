@@ -58,6 +58,9 @@ is tagged.
 - HUD ignores a list scroll that did not move (icedtea 0.12.1 republishes
   while parked at 0 or max). Timeline does not refetch the previous
   page on every extra top-of-list wheel.
+- Keyboard list jumps (`j` / `k`) pin the focused row from its height
+  sum, not the last published window scroll, so a sub-row wheel does
+  not snap the clip back to 0.
 
 - Summary and HUD Tasks open a schedule the same way as a job: Enter
   or a second click jumps to the Timeline bookend. A row with no
