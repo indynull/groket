@@ -10,7 +10,6 @@ import inspect
 import json
 import threading
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from groket.runs.run_manager import RunManager
