@@ -2118,10 +2118,10 @@ impl Hud {
         let sort_col = self.stats_table.sort_col;
         let sort_asc = self.stats_table.sort_asc;
         let mut rows = match self.overview.as_ref() {
-            Some(o) if !o.stats.event_types.is_empty() || !o.stats.tools.is_empty() => {
+            Some(o) => {
                 crate::format::overview_stat_rows_from_counts(&o.stats.event_types, &o.stats.tools)
             }
-            _ => crate::format::overview_stat_rows(&self.timeline),
+            None => crate::format::overview_stat_rows(&self.timeline),
         };
         if let Some(col) = sort_col {
             crate::format::sort_stat_rows(&mut rows, col, sort_asc);
@@ -8762,6 +8762,25 @@ mod tests {
         let _ = hud.update(Message::StatsSort(2));
         assert_eq!(hud.stats_table().cell(0, 1), "tool call");
         assert_eq!(hud.stats_table().cell(0, 2), "2");
+    }
+
+    #[test]
+    fn stats_table_keeps_empty_overview_counts() {
+        let mut hud = hud_with_session();
+        hud.timeline = vec![crate::wire::TimelineEvent {
+            event_type: "tool_call".into(),
+            tool_name: "read_file".into(),
+            ..crate::wire::TimelineEvent::default()
+        }];
+        hud.overview = Some(Overview::default());
+        let _ = hud.update(Message::SetOverviewSection(
+            crate::model::OverviewSection::Stats,
+        ));
+        assert!(
+            hud.stats_table().rows.is_empty(),
+            "loaded overview with empty stats must not count the Timeline page, got {:?}",
+            hud.stats_table().rows
+        );
     }
 
     #[test]

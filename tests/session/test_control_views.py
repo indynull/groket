@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -223,7 +224,9 @@ def test_build_session_overview_one_shot(tmp_path: Path) -> None:
     empty = overview_stat_counts([])
     assert empty["eventTypes"] == []
     assert empty["tools"] == []
-    assert overview_stat_counters({"stats": {"eventTypes": [], "tools": []}}) is None
+    empty_present = overview_stat_counters({"stats": {"eventTypes": [], "tools": []}})
+    assert empty_present == (Counter(), Counter())
+    assert overview_stat_counters({}) is None
 
 
 def test_overview_includes_background_jobs_and_schedules(tmp_path: Path) -> None:

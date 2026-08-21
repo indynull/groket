@@ -106,7 +106,7 @@ def overview_stat_counts(events: list[TraceEvent]) -> JsonObject:
     }
 
 
-def _stat_rows_to_counter(rows: object) -> Counter[str]:
+def _stat_rows_to_counter(rows: JsonValue) -> Counter[str]:
     out: Counter[str] = Counter()
     if not isinstance(rows, list):
         return out
@@ -128,17 +128,13 @@ def _stat_rows_to_counter(rows: object) -> Counter[str]:
 def overview_stat_counters(
     payload: JsonObject | None,
 ) -> tuple[Counter[str], Counter[str]] | None:
-    """Parse ``session/overview`` ``stats`` when both lists are present."""
+    """Parse ``session/overview`` ``stats`` when that field is present."""
     if payload is None:
         return None
     raw = payload.get("stats")
     if not isinstance(raw, dict):
         return None
-    types = _stat_rows_to_counter(raw.get("eventTypes"))
-    tools = _stat_rows_to_counter(raw.get("tools"))
-    if not types and not tools:
-        return None
-    return types, tools
+    return _stat_rows_to_counter(raw.get("eventTypes")), _stat_rows_to_counter(raw.get("tools"))
 
 
 def session_meta_mapping(
