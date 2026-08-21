@@ -63,8 +63,8 @@ is tagged.
   or a second click jumps to the Timeline bookend. A row with no
   bookend is dim and stays put.
 - HUD Turns tiles match the session list: title plus one status badge.
-  The list pane is measured with ``responsive``. Turn markdown binds
-  only the focused turn.
+  The list pane is measured with ``responsive``. Closed tiles still
+  bind every turn prompt and assistant for copy.
 - Summary tables keep their size when focused, so a click lands on the
   row under the pointer. Click highlights; Enter or a second click
   opens, same as the session list and Timeline.
