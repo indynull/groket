@@ -601,7 +601,7 @@ class SessionJobs:
             packed = cls.load(sd, events)
             jobs = [job.mapping() for job in packed.jobs]
             schedules = [task.mapping() for task in packed.schedules]
-            workflows = [workflow_mapping(run) for run in packed.workflows]
+            workflows = [workflow_mapping(run, parent_dir=sd) for run in packed.workflows]
             cls._row_cache[cache_key] = (
                 reuse_key,
                 cls.copy_rows(jobs, schedules, workflows),

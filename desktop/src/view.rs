@@ -14,7 +14,7 @@ use crate::format::{
     is_chat_message, is_tool_identity, job_command, job_description, job_event_id, job_event_label,
     job_exit_code, job_inspect_blocks, job_inspect_log, job_list_preview, job_output_path,
     job_status, list_event_detail, list_status_label, looks_like_markdown, note_fields_view,
-    origin_label, overview_fields, overview_subagent_rows, overview_task_rows,
+    origin_label, overview_fields, overview_row_status, overview_subagent_rows, overview_task_rows,
     overview_workflow_rows, path_hint_from_raw, sanitize_console_text, schedule_inspect_blocks,
     schedule_last_fire, session_duration_chip, status_tone, subagent_inspect_blocks,
     subagent_list_preview, syntax_for_tool_field, syntax_for_tool_output, timeline_body_text,
@@ -1045,7 +1045,7 @@ fn overview_run_list<'a>(
                 return Space::new().height(0).into();
             };
             let selected = focus == Some(i);
-            let status = list_status_label(&row.status, "");
+            let status = overview_row_status(row);
             let kind = format_tool_display(&row.kind);
             let ink = if row.openable { tea.text } else { tea.muted };
             let chips = row![
@@ -3787,6 +3787,20 @@ mod tests {
         assert!(kids.contains("icedtea::widget::virtual_column"));
         assert!(!kids.contains("themed_scroll"));
         assert!(!kids.contains("select_bound"));
+        assert!(kids.contains("if child.success { \"complete\" } else { \"failed\" }"));
+        assert!(kids.contains("let openable = !child.path.is_empty()"));
+        assert!(kids.contains("Message::OpenChild"));
+        let list = prod
+            .split("fn overview_run_list")
+            .nth(1)
+            .expect("overview_run_list")
+            .split("fn overview_stats")
+            .next()
+            .expect("list body");
+        assert!(
+            list.contains("overview_row_status"),
+            "Overview Workflows uses workflow_status_word via overview_row_status"
+        );
         let pane = prod
             .split("fn event_detail_pane")
             .nth(1)

@@ -1076,7 +1076,7 @@ def render_workflow_detail(run: WorkflowRun | None, *, ev: TraceEvent | None = N
             obj.append("\n")
         parts.append(obj)
         parts.append(Text("\n"))
-    happened = _subagent_status_word(run.status)
+    happened = _subagent_status_word(run.status_word())
     if run.phase:
         happened = f"{happened}  ·  {run.phase}"
     if run.elapsed_ms is not None and run.elapsed_ms > 0:

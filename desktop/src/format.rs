@@ -527,7 +527,7 @@ pub fn overview_workflow_rows(workflows: &[crate::wire::WorkflowRow]) -> Vec<Ove
         .iter()
         .map(|run| OverviewTaskRow {
             kind: "workflow".into(),
-            status: run.status.clone(),
+            status: workflow_status_word(&run.status),
             label: if run.name.is_empty() {
                 run.id.clone()
             } else {
@@ -537,6 +537,15 @@ pub fn overview_workflow_rows(workflows: &[crate::wire::WorkflowRow]) -> Vec<Ove
             openable: run.event_index.is_some(),
         })
         .collect()
+}
+
+/// Status badge for an Overview Tasks / Workflows / Subagents row.
+pub fn overview_row_status(row: &OverviewTaskRow) -> String {
+    if row.kind == "workflow" {
+        workflow_status_word(&row.status)
+    } else {
+        list_status_label(&row.status, "")
+    }
 }
 
 /// Subagent list rows for the Overview Subagents tab.
@@ -2541,6 +2550,8 @@ mod tests {
 
     #[test]
     fn workflow_status_word_keeps_failed() {
+        use crate::wire::WorkflowRow;
+
         assert_eq!(workflow_status_word("failed"), "failed");
         assert_eq!(workflow_status_word("completed"), "complete");
         assert_eq!(workflow_status_word("interrupted"), "cancelled");
@@ -2549,6 +2560,22 @@ mod tests {
             workflow_status_word("failed"),
             list_status_label("failed", "")
         );
+        let failed = overview_workflow_rows(&[WorkflowRow {
+            id: "wf_fail".into(),
+            name: "sprint-8".into(),
+            status: "failed".into(),
+            ..WorkflowRow::default()
+        }]);
+        assert_eq!(failed[0].status, "failed");
+        assert_eq!(overview_row_status(&failed[0]), "failed");
+        let stopped = overview_workflow_rows(&[WorkflowRow {
+            id: "wf_stop".into(),
+            name: "between".into(),
+            status: "interrupted".into(),
+            ..WorkflowRow::default()
+        }]);
+        assert_eq!(stopped[0].status, "cancelled");
+        assert_eq!(overview_row_status(&stopped[0]), "cancelled");
     }
 
     #[test]

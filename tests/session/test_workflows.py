@@ -334,6 +334,21 @@ def test_workflow_status_word_and_child_session_path(tmp_path: Path) -> None:
     assert workflow_status_word("failed") == "failed"
     assert workflow_status_word("completed") == "complete"
     assert workflow_status_word("interrupted") == "cancelled"
+    interrupted = WorkflowRun(
+        run_id="wf_int",
+        name="between",
+        status="interrupted",
+        phase="",
+        objective="scan",
+        agents_used=None,
+        agent_budget=None,
+        elapsed_ms=None,
+        pause_message="",
+        children=[],
+    )
+    int_plain = plain_from_renderable(render_workflow_detail(interrupted), full=True)
+    assert "cancelled" in int_plain
+    assert "interrupted" not in int_plain
     run = WorkflowRun(
         run_id="wf_x",
         name="sprint",
@@ -361,3 +376,26 @@ def test_workflow_status_word_and_child_session_path(tmp_path: Path) -> None:
     assert "failed" in plain
     assert "ok  " not in plain
     assert "fail  " not in plain
+
+
+def test_overview_rows_include_child_session_path(tmp_path: Path) -> None:
+    from groket.session.jobs import SessionJobs
+
+    sd = tmp_path / "sess"
+    sd.mkdir()
+    _write_run(
+        sd,
+        "wf_sprint",
+        name="sprint",
+        status="complete",
+        agents=[{"agent_id": "ag-1", "label": "aik", "state": "done"}],
+    )
+    child = tmp_path / "ag-1"
+    child.mkdir()
+    (child / "summary.json").write_text("{}", encoding="utf-8")
+    _jobs, _schedules, workflows = SessionJobs.overview_rows(sd, [], "wf-kids")
+    assert workflows
+    kids = workflows[0]["children"]
+    assert isinstance(kids, list)
+    assert kids[0]["id"] == "ag-1"
+    assert kids[0]["path"] == str(child)

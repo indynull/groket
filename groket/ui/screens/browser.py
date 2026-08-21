@@ -63,7 +63,6 @@ from ...session.subagents import (
     is_subagent_session_dir,
     parent_session_dir,
     read_session_kind,
-    resolve_child_session_path,
     subagent_runs_for_view,
 )
 from ...session.turns import (
@@ -2087,7 +2086,7 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
                 *self._summary_cells(
                     [
                         run.name or run.run_id,
-                        self._status_label(run.status),
+                        self._status_label(run.status_word()),
                         run.phase or "—",
                         f"{used}/{budget}",
                         dur,
@@ -2138,16 +2137,8 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         opener(run.child_path)
         self.notify(t("ui-subagent-opened"))
 
-    def _open_workflow_child(self, agent_id: str) -> None:
+    def _open_workflow_child_path(self, path: Path) -> None:
         """Open a workflow child session (same return path as a subagent bookend)."""
-        cid = (agent_id or "").strip()
-        if not cid:
-            self.notify(t("ui-subagent-missing"))
-            return
-        path = resolve_child_session_path(self.session_dir, cid)
-        if path is None:
-            self.notify(t("ui-subagent-missing"))
-            return
         opener = getattr(self.app, "open_session_path", None)
         if not callable(opener):
             return
@@ -2156,7 +2147,11 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
 
     @on(DetailView.ChildActivated)
     def _on_workflow_child_activated(self, event: DetailView.ChildActivated) -> None:
-        self._open_workflow_child(event.child.agent_id)
+        path = event.child.session_path(self.session_dir)
+        if path is None:
+            self.notify(t("ui-subagent-missing"))
+            return
+        self._open_workflow_child_path(path)
 
     def _focused_subagent_path(self) -> Path | None:
         run = self._focused_subagent_run()

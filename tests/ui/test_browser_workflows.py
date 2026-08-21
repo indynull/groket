@@ -315,3 +315,22 @@ async def test_workflow_child_without_session_stays_put(tmp_path: Path) -> None:
         kids.post_message(DataTable.RowSelected(kids, cursor_row=0, row_key=RowKey("wfchild-0")))
         await wait_until(pilot, lambda: True, description="row selected")
         assert app.opened is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_summary_uses_product_status_words(tmp_path: Path) -> None:
+    sd = _write_workflow_session(tmp_path, include_result=True)
+    _write_run(sd, "wf_sprint8", name="sprint-8", status="failed")
+    _write_run(sd, "wf_between", name="between", status="interrupted")
+    app = _Host(sd)
+    async with app.run_test(size=(140, 48)) as pilot:
+        screen = app.query_one(BrowserScreen)
+        await wait_until(pilot, lambda: bool(screen.timeline), description="timeline loaded")
+        screen._stop_live_refresh()
+        screen.action_tab_summary()
+        table = screen.query_one("#stats-workflows-table", DataTable)
+        await wait_until(pilot, lambda: table.row_count >= 2, description="workflow rows")
+        face = " ".join(str(table.get_row_at(i)) for i in range(table.row_count))
+        assert "failed" in face
+        assert "cancelled" in face
+        assert "interrupted" not in face

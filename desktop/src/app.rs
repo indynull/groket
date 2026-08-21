@@ -1619,6 +1619,7 @@ impl Hud {
                             self.timeline_next = self.timeline_next.min(self.timeline_total);
                         }
                         self.rebuild_tl_filter();
+                        self.rebuild_wf_child_heights();
                         self.bind_overview_fields();
                         self.mark_up();
                         // Turn-boundary pager: open first/last of the newly loaded filter.
@@ -9588,6 +9589,75 @@ mod tests {
         assert!(ev.content_truncated);
         assert!(crate::format::timeline_query_hit(ev, hud.timeline_query()).is_some());
         let _ = crate::view::event_detail_pane(&hud, 7);
+    }
+
+    #[test]
+    fn timeline_load_rebuilds_workflow_agent_heights() {
+        let mut hud = hud_with_session();
+        hud.overview = Some(crate::wire::Overview {
+            workflows: vec![crate::wire::WorkflowRow {
+                id: "wf1".into(),
+                name: "sprint".into(),
+                children: vec![
+                    crate::wire::WorkflowChildRow {
+                        id: "ag-1".into(),
+                        label: "aik".into(),
+                        success: true,
+                        session_id: "ag-1".into(),
+                        path: "/tmp/ag-1".into(),
+                    },
+                    crate::wire::WorkflowChildRow {
+                        id: "ag-2".into(),
+                        label: "ghost".into(),
+                        success: false,
+                        ..crate::wire::WorkflowChildRow::default()
+                    },
+                ],
+                ..crate::wire::WorkflowRow::default()
+            }],
+            ..crate::wire::Overview::default()
+        });
+        hud.timeline_open = Some(7);
+        hud.timeline.clear();
+        hud.rebuild_wf_child_heights();
+        assert!(hud.open_workflow_children().is_empty());
+        assert!(hud.wf_child_heights().is_empty());
+        load_page(
+            &mut hud,
+            0,
+            false,
+            true,
+            vec![json!({
+                "index": 7,
+                "type": "tool_call",
+                "toolName": "workflow",
+                "rawInput": {"run_id": "wf1"},
+            })],
+            1,
+            0,
+        );
+        assert_eq!(hud.open_workflow_children().len(), 2);
+        assert_eq!(hud.wf_child_heights().len(), 2);
+        assert!(!hud.open_workflow_children()[0].path.is_empty());
+        assert!(hud.open_workflow_children()[1].path.is_empty());
+    }
+
+    #[test]
+    fn workflow_child_open_child_loads_that_session() {
+        let mut hud = hud_with_session();
+        let parent = hud.overview_sid.clone();
+        let _ = hud.update(Message::OpenChild {
+            path: "/tmp/ag-1".into(),
+            sid: "ag-1".into(),
+        });
+        assert_eq!(hud.overview_pending, "ag-1");
+        assert_ne!(hud.overview_pending, parent);
+        hud.overview_pending.clear();
+        let _ = hud.update(Message::OpenChild {
+            path: String::new(),
+            sid: String::new(),
+        });
+        assert!(hud.overview_pending.is_empty());
     }
 
     #[test]
