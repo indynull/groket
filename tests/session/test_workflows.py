@@ -359,14 +359,14 @@ def test_workflow_status_word_and_child_session_path(tmp_path: Path) -> None:
         agent_budget=8,
         elapsed_ms=10,
         pause_message="boom",
-        children=[WorkflowChild("ag-1", "aik", True)],
+        children=[WorkflowChild("ag-status-path", "aik", True)],
     )
     assert run.status_word() == "failed"
     assert run.children[0].status_word() == "complete"
     parent = tmp_path / "sess"
     parent.mkdir()
     assert run.children[0].session_path(parent) is None
-    sibling = tmp_path / "ag-1"
+    sibling = tmp_path / "ag-status-path"
     sibling.mkdir()
     (sibling / "summary.json").write_text("{}", encoding="utf-8")
     assert run.children[0].session_path(parent) == sibling
