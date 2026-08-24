@@ -3930,16 +3930,14 @@ impl Hud {
         self.rerank_visible();
         self.emit_session_notices();
         self.mark_up();
-        if !quiet {
-            if self.sessions().is_empty() {
-                self.status = if self.catalog_query.trim().is_empty() {
-                    self.status_err = true;
-                    crate::log::error("no sessions from control");
-                    "No sessions from control · is groket serve running?".into()
-                } else {
-                    format!("No matches for “{}”", self.catalog_query.trim())
-                };
-            }
+        if !quiet && self.sessions().is_empty() {
+            self.status = if self.catalog_query.trim().is_empty() {
+                self.status_err = true;
+                crate::log::error("no sessions from control");
+                "No sessions from control · is groket serve running?".into()
+            } else {
+                format!("No matches for “{}”", self.catalog_query.trim())
+            };
         }
     }
 
