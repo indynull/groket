@@ -134,6 +134,39 @@ def test_populate_session_table_adds_row(tmp_path: Path):
     assert key == str(meta.session_dir)
 
 
+def test_home_summary_is_selection_only(tmp_path: Path) -> None:
+    """Home chrome lists the selection, not a session count."""
+    from groket.ui.app import TraceEvalApp
+    from groket.ui.i18n import t
+
+    work = tmp_path / "work"
+    traces = work / "runs" / "traces"
+    traces.mkdir(parents=True)
+    seen: list[str] = []
+
+    class _FakeStatic:
+        display = True
+
+        def update(self, content) -> None:
+            seen.append(str(content))
+
+    class _FakeApp(TraceEvalApp):
+        def query_one(self, selector, expect_type=None):  # type: ignore[no-untyped-def]  # test stub
+            if selector == "#session-summary":
+                return _FakeStatic()
+            raise KeyError(selector)
+
+    host = _FakeApp(work_dir=work, traces_path=traces)
+    host._selected = set()
+    host._update_summary_lazy()
+    assert seen[-1] == ""
+
+    host._selected = {"/tmp/a", "/tmp/b"}
+    host._update_summary_lazy()
+    assert t("sessions-selected-count", n=2) in seen[-1]
+    assert "sessions" not in seen[-1].replace("selected", "")
+
+
 @pytest.mark.asyncio
 async def test_home_table_omits_task_id_and_path_label(tmp_path: Path):
     """Home list shows status, not batch task id or path label."""

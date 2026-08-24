@@ -1695,7 +1695,6 @@ notify-loaded-sessions = Loaded { $n } sessions
 notify-model-filter = Model filter: { $label }
 truncate-marker = …truncated…
 truncate-for-display = …truncated for display…
-sessions-home-summary = { $total } sessions
 sessions-selected-count = { $n } selected
 
 # --- Session / jobs / personas notifies (composed) ---

@@ -1865,20 +1865,20 @@ class TraceEvalApp(App):
         if keep_search:
             with suppress(Exception):
                 self.query_one("#session-search-input", Input).focus()
-        self._update_summary_lazy(len(self._meta_only))
+        self._update_summary_lazy()
         with suppress(Exception):
             self.refresh_bindings()
 
-    def _update_summary_lazy(self, total: int) -> None:
-        from .i18n import join_ui
-
+    def _update_summary_lazy(self) -> None:
         sel_count = len(self._selected)
-        extras: list[str] = []
+        widget = self.query_one("#session-summary", Static)
         if sel_count:
-            extras.append(t("sessions-selected-count", n=sel_count))
-        core = t("sessions-home-summary", total=total)
-        summary = f"[bold]{join_ui(core, *extras, sep=' · ')}"
-        self.query_one("#session-summary", Static).update(summary)
+            widget.display = True
+            label = t("sessions-selected-count", n=sel_count)
+            widget.update(f"[bold]{label}")
+        else:
+            widget.update("")
+            widget.display = False
 
     def _restore_cursor(self, table: DataTable, row_key_value: str) -> None:
         """Move cursor back to the row with the given key after a table repopulate."""
@@ -1945,7 +1945,7 @@ class TraceEvalApp(App):
     def _refresh_selection_summary_only(self) -> None:
         """Refresh the home summary from the current list (no table rebuild)."""
         try:
-            self._update_summary_lazy(len(self._meta_only))
+            self._update_summary_lazy()
         except Exception:
             pass
 

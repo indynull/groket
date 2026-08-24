@@ -3893,9 +3893,6 @@ impl Hud {
                 self.rerank_visible();
                 self.emit_session_notices();
                 self.mark_up();
-                if !quiet {
-                    self.status = format!("{} sessions · ready", self.all_sessions.len());
-                }
                 return;
             }
         }
@@ -3942,8 +3939,6 @@ impl Hud {
                 } else {
                     format!("No matches for “{}”", self.catalog_query.trim())
                 };
-            } else {
-                self.status = format!("{} sessions · ready", self.all_sessions.len());
             }
         }
     }
@@ -8559,6 +8554,27 @@ mod tests {
         );
         assert!(hud.selected_sid().is_none());
         assert!(!hud.browse_mode());
+    }
+
+    #[test]
+    fn catalog_load_does_not_paint_session_count_in_status() {
+        let mut hud = Hud::default();
+        hud.apply_list(
+            json!({
+                "sessions": [
+                    {"sessionId": "new", "title": "New", "sortEpoch": 2.0},
+                    {"sessionId": "old", "title": "Old", "sortEpoch": 1.0},
+                ],
+                "matched": 2,
+                "total": 2,
+            }),
+            false,
+        );
+        assert!(
+            !hud.status.contains("sessions"),
+            "idle catalog count is not footer status: {}",
+            hud.status
+        );
     }
 
     #[test]
