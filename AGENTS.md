@@ -126,7 +126,7 @@ later.”
 4. **Operator docs are part of done.** README key tables / CLI sections and
    in-app help must match bindings. Leaving “only Fluent” or “only code”
    incomplete is a process failure.
-5. **Schemas and examples stay honest.** Task/rule schema fields without
+5. **Schemas and examples stay honest.** Task schema fields without
    examples or validation are incomplete; examples without CI linkage are
    incomplete (``just examples-check``).
 

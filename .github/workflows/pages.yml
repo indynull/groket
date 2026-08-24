@@ -1,6 +1,6 @@
 # Publish JSON Schema(s) to GitHub Pages (project site).
 # Repo Settings → Pages → Source: GitHub Actions.
-# URLs: …/schemas/tasks.schema.json , …/schemas/rules.schema.json , …/schemas/config.schema.json , …/schemas/control.schema.json
+# URLs: …/schemas/tasks.schema.json , …/schemas/config.schema.json , …/schemas/control.schema.json
 
 name: Pages
 
@@ -10,7 +10,6 @@ on:
     paths:
       - "schemas/**"
       - "groket/runs/task_schema.py"
-      - "groket/engine/rule_schema.py"
       - "groket/config.py"
       - "groket/integrations/control_contract.py"
       - ".github/workflows/pages.yml"
@@ -46,10 +45,7 @@ jobs:
       - name: Assemble site (schemas/ + index)
         run: |
           mkdir -p _site/schemas
-          cp schemas/tasks.schema.json _site/schemas/tasks.schema.json
-          cp schemas/rules.schema.json _site/schemas/rules.schema.json
-          cp schemas/config.schema.json _site/schemas/config.schema.json
-          cp schemas/control.schema.json _site/schemas/control.schema.json
+          cp schemas/*.schema.json _site/schemas/
           cat > _site/index.html << 'HTML'
           <!DOCTYPE html>
           <html lang="en">
@@ -70,12 +66,6 @@ jobs:
                 — batch / task list YAML
                 (<code>$id</code>:
                 <code>https://indynull.github.io/groket/schemas/tasks.schema.json</code>)
-              </li>
-              <li>
-                <a href="schemas/rules.schema.json"><code>rules.schema.json</code></a>
-                — detection rules / composites YAML
-                (<code>$id</code>:
-                <code>https://indynull.github.io/groket/schemas/rules.schema.json</code>)
               </li>
               <li>
                 <a href="schemas/config.schema.json"><code>config.schema.json</code></a>

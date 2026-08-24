@@ -7,7 +7,7 @@
 
 [![CI](https://github.com/indynull/groket/actions/workflows/ci.yml/badge.svg)](https://github.com/indynull/groket/actions/workflows/ci.yml)
 [![Codecov](https://codecov.io/gh/indynull/groket/graph/badge.svg)](https://codecov.io/gh/indynull/groket)
-[![Docs](https://img.shields.io/badge/docs-pages-0A66C2)](https://indynull.github.io/groket/)
+[![Schemas](https://img.shields.io/badge/schemas-pages-0A66C2)](https://indynull.github.io/groket/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-3776AB)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
