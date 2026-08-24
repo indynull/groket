@@ -19,7 +19,7 @@ trees (2026-08-09), not a copy of those trees in continuous integration.
 | Quiet live poll | No full catalog rescan or full table rebuild |
 | Open one session | Only that session's overview/timeline is parsed |
 
-Host `~/.grok/sessions` stays on the home list when the `H` pref is on.
+Host `~/.grok/sessions` stays on the home list. `is:host` filters it.
 
 ## What `session/list` returns
 
@@ -156,7 +156,6 @@ Do not copy `~/.grok/sessions` into CI.
 
 ## Non-goals
 
-- Hiding host sessions or dropping the `H` pref.
 - Requiring emacs/vim to drain the full catalog or send `sinceRevision`.
 - Virtualizing every browser pane (Summary/Report).
 - Timing a multi-GB host tree in continuous integration.

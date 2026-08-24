@@ -591,7 +591,6 @@ and friends.
 - Porting `parse_timeline` / `TraceEvent` / turn segmentation to Rust.
 - MessagePack, Cap’n Proto, gRPC, D-Bus.
 - Virtualizing every terminal Report/Summary pane.
-- Hiding host sessions or dropping the `H` pref.
 - Wall-clock continuous integration on live trees.
 - Making Emacs/Neovim drain the catalog or send `sinceRevision`.
 

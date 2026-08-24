@@ -43,7 +43,7 @@ state. Cite is the groket module that owns the path.
 | Eval root | `<work>/runs/traces` | `groket/session/sources.py` `work_traces_root` |
 | Host root | `~/.grok/sessions` (always loaded; `is:host` filters) | `sources.host_grok_sessions_root` |
 | Catalog row | `sessionId`, `path`, `title`, `model`, `status`, `origin` (`work`/`host`), times, context, event count | `session/catalog.py` `session_catalog_row` |
-| List meta | Host: `summary.json` + `signals.json` only. Eval: those plus turn markers / gate. | `parser.load_session_meta_list` |
+| List meta | Host: `summary.json`, `signals.json`, updates tail, cheap turn markers. Eval: those plus the turn gate. | `parser.load_host_list_meta`, `parser.load_session_meta_list` |
 
 ### 2.2 Timeline / events
 
@@ -190,7 +190,7 @@ inside the container (`assets/docker/entrypoint.sh`).
 ### 2.14 Host `~/.grok/sessions`
 
 Layout: `<root>/<url-encoded-cwd>/<session_id>/` with the files in §3.1.
-Subagent dirs are hidden. `H` toggles inclusion.
+Subagent dirs are hidden. Host sessions always load; `is:host` filters the list.
 
 ---
 

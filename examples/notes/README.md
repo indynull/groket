@@ -26,8 +26,8 @@ Existing schemas without `choices` keep working as free text.
 Notes are stored as `<session_dir>/operator_notes.toml` (fallback:
 `~/.groket/notes/<session_id>/operator_notes.toml`).
 
-Host Grok sessions (optional **Host** catalog / `H` on the sessions list) use
-the same notes flow; notes always write under
+Host Grok sessions (`~/.grok/sessions`, always loaded; `is:host` filters
+the list) use the same notes flow; notes always write under
 `~/.groket/notes/<session_id>/` so the live `~/.grok/sessions` tree is not
 modified.
 
