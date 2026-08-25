@@ -193,44 +193,24 @@ async def test_self_test_modal_rerun_button(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_self_test_modal_report_warn_count_summary(tmp_path: Path) -> None:
+async def test_self_test_modal_report_warn_count_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Report with warnings produces an OK-with-warn summary."""
+    report_warn = SelfTestReport(
+        checks=[
+            CheckResult(id="docker", name="Docker", ok=True, detail="ok"),
+            CheckResult(id="opt", name="Optional", ok=False, detail="not found", required=False),
+        ]
+    )
+    assert report_warn.ok is True
+    assert report_warn.warn_count == 1
+    monkeypatch.setattr("groket.diagnostics.run_self_test", lambda work_dir=None: report_warn)
     app = _STApp()
     async with app.run_test(size=(100, 30)) as pilot:
-        modal = SelfTestModal(work_dir=tmp_path)
-        app.push_screen(modal)
+        app.push_screen(SelfTestModal(work_dir=tmp_path))
         await wait_until(
             pilot,
-            lambda: isinstance(app.screen, SelfTestModal),
-            description="SelfTestModal mounted",
+            lambda: getattr(app, "_self_test_summary", "") == "self-test OK (1 warn)",
+            description="warn summary from stubbed self-test",
         )
-        await wait_until(
-            pilot,
-            lambda: bool(list(app.screen.query("#self-test-body"))),
-            description="body mounted",
-        )
-        # Wait for the real self-test worker to finish
-        await wait_until(
-            pilot,
-            lambda: hasattr(app, "_self_test_summary"),
-            description="self-test summary set",
-        )
-        # Cancel any remaining workers
-        modal.workers.cancel_all()
-        await pilot.pause()
-
-        # Apply our own report with warnings
-        report_warn = SelfTestReport(
-            checks=[
-                CheckResult(id="docker", name="Docker", ok=True, detail="ok"),
-                CheckResult(
-                    id="opt", name="Optional", ok=False, detail="not found", required=False
-                ),
-            ]
-        )
-        assert report_warn.ok is True
-        assert report_warn.warn_count == 1
-        modal._apply_report(report_warn)
-        await pilot.pause()
-        summary = getattr(app, "_self_test_summary", "")
-        assert summary == "self-test OK (1 warn)"
