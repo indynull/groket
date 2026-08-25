@@ -6,11 +6,13 @@ Help has room for the three-slat small mark.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Footer, Static
 
@@ -129,13 +131,14 @@ class AppChrome(Widget):
         self.query_one("#app-chrome-title", Static).update(text)
 
     def _sync_paths(self) -> None:
-        slot = self.query_one("#session-paths", Static)
-        if self.size.width < _PATHS_MIN_WIDTH:
-            slot.update("")
-            return
-        update = getattr(self.app, "_update_session_paths_banner", None)
-        if callable(update):
-            update()
+        with suppress(NoMatches):
+            slot = self.query_one("#session-paths", Static)
+            if self.size.width < _PATHS_MIN_WIDTH:
+                slot.update("")
+                return
+            update = getattr(self.app, "_update_session_paths_banner", None)
+            if callable(update):
+                update()
 
 
 class AppFooter(Footer):

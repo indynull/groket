@@ -421,6 +421,10 @@ class BrowserScreen(TabPaneNavigation, ChromeActions):
         except Exception:
             pass
         self._refresh_timeline_query_hints()
+        # Focus the list before the load worker returns so Esc is not dropped
+        # while the screen has no focused widget.
+        with suppress(Exception):
+            focus_primary_list(self.query_one("#timeline-list", TimelineTable))
         self._load_data()
 
     def on_unmount(self) -> None:
